@@ -674,18 +674,25 @@ function ReservationCard({
 
       <div className="mt-3 border-t border-black/[0.06] pt-3">
         <div className="grid gap-2">
-          <InfoLine icon={User} value={reservation.customerName || "Sin cliente"} />
-          <InfoLine
-            icon={Phone}
-            value={reservation.customerPhone || "Sin teléfono"}
-          />
-          <InfoLine
-            icon={CalendarClock}
-            value={formatDate(reservation.expiresAt)}
-            helper={getDueText(reservation)}
-            helperClass={getDueClass(reservation)}
-          />
-        </div>
+  <InfoLine icon={User} value={reservation.customerName || "Sin cliente"} />
+
+  <InfoLine
+    icon={User}
+    value={`Cédula: ${reservation.customerDocument || "Sin cédula"}`}
+  />
+
+  <InfoLine
+    icon={Phone}
+    value={reservation.customerPhone || "Sin teléfono"}
+  />
+
+  <InfoLine
+    icon={CalendarClock}
+    value={formatDate(reservation.expiresAt)}
+    helper={getDueText(reservation)}
+    helperClass={getDueClass(reservation)}
+  />
+</div>
 
         <div className="mt-3 flex items-end justify-between gap-3">
           <div>
