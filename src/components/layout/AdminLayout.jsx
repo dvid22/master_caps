@@ -7,8 +7,9 @@ import {
   LogOut,
   Menu,
   Package,
+  PanelLeftClose,
+  PanelLeftOpen,
   ShoppingBag,
-  Store,
   Users,
   X,
 } from "lucide-react";
@@ -64,10 +65,9 @@ export default function AdminLayout() {
   const { profile, role } = useAuth();
 
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
-  const visibleNavItems = navItems.filter((item) =>
-    item.roles.includes(role)
-  );
+  const visibleNavItems = navItems.filter((item) => item.roles.includes(role));
 
   function openCatalog() {
     const catalogUrl = `${window.location.origin}/catalogo/${STORE_ID}`;
@@ -98,32 +98,52 @@ export default function AdminLayout() {
   }
 
   return (
-    <main className="min-h-screen bg-brand-cream lg:grid lg:grid-cols-[280px_1fr]">
-      <aside className="hidden border-r border-black/10 bg-white lg:block">
+    <main
+      className={`min-h-screen bg-[#f7f7f8] text-black transition-all duration-300 lg:grid ${
+        sidebarCollapsed
+          ? "lg:grid-cols-[88px_1fr]"
+          : "lg:grid-cols-[244px_1fr]"
+      }`}
+    >
+      <aside className="hidden border-r border-black/[0.06] bg-white/95 lg:block">
         <div className="sticky top-0 flex h-screen flex-col">
-          <div className="border-b border-black/10 p-6">
-            <div className="flex items-center gap-3">
-              <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-brand-black text-white">
-                <Store size={24} />
-              </div>
+          <div className="px-4 pb-4 pt-5">
+            <div
+              className={`relative rounded-[24px] border border-black/[0.06] bg-white shadow-[0_18px_55px_rgba(0,0,0,0.04)] transition-all ${
+                sidebarCollapsed ? "px-3 py-4" : "px-4 py-5"
+              }`}
+            >
+              <button
+                type="button"
+                onClick={() => setSidebarCollapsed((current) => !current)}
+                className="absolute -right-3 top-5 flex h-7 w-7 items-center justify-center rounded-full border border-black/[0.08] bg-white text-black/55 shadow-sm transition hover:bg-red-50 hover:text-red-600"
+              >
+                {sidebarCollapsed ? (
+                  <PanelLeftOpen size={15} />
+                ) : (
+                  <PanelLeftClose size={15} />
+                )}
+              </button>
 
-              <div className="min-w-0">
-                <p className="text-lg font-semibold text-brand-black">
-                  Master Caps
-                </p>
+              <div className="flex flex-col items-center">
+                <img
+                  src="/logo.png"
+                  alt="Master Caps"
+                  className={`object-contain transition-all ${
+                    sidebarCollapsed ? "h-12 w-12" : "h-20 w-auto"
+                  }`}
+                />
 
-                <p className="truncate text-xs text-gray-500">
-                  {profile?.displayName || "Panel administrador"}
-                </p>
-
-                <p className="mt-0.5 text-[11px] font-semibold uppercase tracking-wide text-brand-gold">
-                  {getRoleLabel(role)}
-                </p>
+                {!sidebarCollapsed && (
+                  <div className="mt-4 inline-flex rounded-full border border-red-500/25 bg-red-50 px-4 py-1.5 text-[13px] font-normal text-red-600">
+                    {getRoleLabel(role)}
+                  </div>
+                )}
               </div>
             </div>
           </div>
 
-          <nav className="flex-1 space-y-2 p-4">
+          <nav className="flex-1 space-y-1.5 px-4 py-2">
             {visibleNavItems.map((item) => {
               const Icon = item.icon;
 
@@ -131,101 +151,133 @@ export default function AdminLayout() {
                 <NavLink
                   key={item.path}
                   to={item.path}
+                  title={sidebarCollapsed ? item.label : undefined}
                   className={({ isActive }) =>
-                    `flex items-center gap-3 rounded-2xl px-4 py-3 text-sm font-semibold transition ${
+                    `group flex items-center rounded-2xl text-[14px] font-normal transition-all ${
+                      sidebarCollapsed
+                        ? "h-11 justify-center px-0"
+                        : "gap-3 px-3.5 py-2.5"
+                    } ${
                       isActive
-                        ? "bg-brand-black text-white"
-                        : "text-brand-black hover:bg-brand-cream"
+                        ? "bg-red-600 text-white shadow-lg shadow-red-600/15"
+                        : "text-black/68 hover:bg-black/[0.035] hover:text-black"
                     }`
                   }
                 >
-                  <Icon size={18} />
-                  {item.label}
+                  {({ isActive }) => (
+                    <>
+                      <span
+                        className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-xl transition ${
+                          isActive
+                            ? "bg-white/15 text-white"
+                            : "bg-white text-black/55 ring-1 ring-black/[0.06] group-hover:text-red-600"
+                        }`}
+                      >
+                        <Icon size={17} strokeWidth={1.9} />
+                      </span>
+
+                      {!sidebarCollapsed && (
+                        <span className="truncate">{item.label}</span>
+                      )}
+                    </>
+                  )}
                 </NavLink>
               );
             })}
           </nav>
 
-          <div className="space-y-3 border-t border-black/10 p-4">
+          <div className="space-y-2 border-t border-black/[0.06] px-4 py-4">
             <button
               type="button"
               onClick={openCatalog}
-              className="flex w-full items-center justify-center gap-2 rounded-2xl border border-black/10 bg-white px-4 py-3 text-sm font-semibold text-brand-black hover:border-brand-black"
+              title={sidebarCollapsed ? "Ver catálogo" : undefined}
+              className={`flex h-11 w-full items-center justify-center gap-2 rounded-2xl border border-black/[0.08] bg-white px-4 text-[13px] font-normal text-black/76 transition hover:border-red-500/25 hover:bg-red-50 hover:text-red-600 ${
+                sidebarCollapsed ? "px-0" : ""
+              }`}
             >
-              <ExternalLink size={17} />
-              Ver catálogo
+              <ExternalLink size={16} strokeWidth={1.9} />
+              {!sidebarCollapsed && "Ver catálogo"}
             </button>
 
             <button
               type="button"
               onClick={handleLogout}
-              className="flex w-full items-center justify-center gap-2 rounded-2xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-600 hover:bg-red-100"
+              title={sidebarCollapsed ? "Cerrar sesión" : undefined}
+              className={`flex h-11 w-full items-center justify-center gap-2 rounded-2xl bg-black/[0.035] px-4 text-[13px] font-normal text-black/66 transition hover:bg-red-50 hover:text-red-600 ${
+                sidebarCollapsed ? "px-0" : ""
+              }`}
             >
-              <LogOut size={17} />
-              Cerrar sesión
+              <LogOut size={16} strokeWidth={1.9} />
+              {!sidebarCollapsed && "Cerrar sesión"}
             </button>
           </div>
         </div>
       </aside>
 
       <section className="min-w-0">
-        <header className="sticky top-0 z-40 border-b border-black/10 bg-white/90 px-4 py-3 backdrop-blur lg:hidden">
+        <header className="sticky top-0 z-40 border-b border-black/[0.06] bg-white/85 px-4 py-3 backdrop-blur-xl lg:hidden">
           <div className="flex items-center justify-between">
-            <div className="min-w-0">
-              <p className="text-sm font-semibold text-brand-black">
-                Master Caps
-              </p>
+            <div className="flex min-w-0 items-center gap-3">
+              <img
+                src="/logo.png"
+                alt="Master Caps"
+                className="h-10 w-10 rounded-xl object-contain"
+              />
 
-              <p className="truncate text-xs text-gray-500">
-                {profile?.displayName || "Panel administrador"}
-              </p>
+              <div className="min-w-0">
+                <p className="truncate text-[14px] font-normal text-black">
+                  Master Caps
+                </p>
 
-              <p className="mt-0.5 text-[11px] font-semibold uppercase tracking-wide text-brand-gold">
-                {getRoleLabel(role)}
-              </p>
+                <p className="truncate text-[12px] text-black/48">
+                  {profile?.displayName || "Panel administrador"}
+                </p>
+              </div>
             </div>
 
             <button
               type="button"
               onClick={() => setMobileOpen(true)}
-              className="rounded-2xl border border-black/10 p-3"
+              className="flex h-10 w-10 items-center justify-center rounded-2xl border border-black/[0.08] bg-white text-black transition hover:bg-black/[0.035]"
             >
-              <Menu size={20} />
+              <Menu size={19} />
             </button>
           </div>
         </header>
 
-        <Outlet />
+        <div className="min-h-screen">
+          <Outlet />
+        </div>
       </section>
 
       {mobileOpen && (
-        <div className="fixed inset-0 z-50 bg-black/50 lg:hidden">
-          <aside className="h-full w-[86%] max-w-sm bg-white shadow-2xl">
-            <div className="flex items-center justify-between border-b border-black/10 p-5">
-              <div className="min-w-0">
-                <p className="text-lg font-semibold text-brand-black">
-                  Master Caps
-                </p>
+        <div className="fixed inset-0 z-50 bg-black/35 backdrop-blur-sm lg:hidden">
+          <aside className="flex h-full w-[84%] max-w-[330px] flex-col bg-white shadow-2xl">
+            <div className="border-b border-black/[0.06] px-5 py-5">
+              <div className="flex items-start justify-between gap-4">
+                <div className="flex min-w-0 flex-1 flex-col items-center">
+                  <img
+                    src="/logo.png"
+                    alt="Master Caps"
+                    className="h-20 w-auto object-contain"
+                  />
 
-                <p className="truncate text-xs text-gray-500">
-                  {profile?.displayName || "Menú principal"}
-                </p>
+                  <div className="mt-4 inline-flex rounded-full border border-red-500/25 bg-red-50 px-4 py-1.5 text-[13px] font-normal text-red-600">
+                    {getRoleLabel(role)}
+                  </div>
+                </div>
 
-                <p className="mt-0.5 text-[11px] font-semibold uppercase tracking-wide text-brand-gold">
-                  {getRoleLabel(role)}
-                </p>
+                <button
+                  type="button"
+                  onClick={() => setMobileOpen(false)}
+                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl bg-black/[0.035] text-black transition hover:bg-red-50 hover:text-red-600"
+                >
+                  <X size={19} />
+                </button>
               </div>
-
-              <button
-                type="button"
-                onClick={() => setMobileOpen(false)}
-                className="rounded-full p-2 hover:bg-gray-100"
-              >
-                <X size={22} />
-              </button>
             </div>
 
-            <nav className="space-y-2 p-4">
+            <nav className="space-y-1.5 px-4 py-4">
               {visibleNavItems.map((item) => {
                 const Icon = item.icon;
 
@@ -235,36 +287,49 @@ export default function AdminLayout() {
                     to={item.path}
                     onClick={() => setMobileOpen(false)}
                     className={({ isActive }) =>
-                      `flex items-center gap-3 rounded-2xl px-4 py-3 text-sm font-semibold transition ${
+                      `group flex items-center gap-3 rounded-2xl px-3.5 py-2.5 text-[14px] font-normal transition-all ${
                         isActive
-                          ? "bg-brand-black text-white"
-                          : "text-brand-black hover:bg-brand-cream"
+                          ? "bg-red-600 text-white shadow-lg shadow-red-600/15"
+                          : "text-black/68 hover:bg-black/[0.035] hover:text-black"
                       }`
                     }
                   >
-                    <Icon size={18} />
-                    {item.label}
+                    {({ isActive }) => (
+                      <>
+                        <span
+                          className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-xl transition ${
+                            isActive
+                              ? "bg-white/15 text-white"
+                              : "bg-white text-black/55 ring-1 ring-black/[0.06] group-hover:text-red-600"
+                          }`}
+                        >
+                          <Icon size={17} strokeWidth={1.9} />
+                        </span>
+
+                        <span className="truncate">{item.label}</span>
+                      </>
+                    )}
                   </NavLink>
                 );
               })}
             </nav>
 
-            <div className="space-y-3 border-t border-black/10 p-4">
+            <div className="mt-auto space-y-2 border-t border-black/[0.06] px-4 py-4">
               <button
                 type="button"
                 onClick={openCatalog}
-                className="flex w-full items-center justify-center gap-2 rounded-2xl border border-black/10 bg-white px-4 py-3 text-sm font-semibold text-brand-black hover:border-brand-black"
+                className="flex h-11 w-full items-center justify-center gap-2 rounded-2xl border border-black/[0.08] bg-white px-4 text-[13px] font-normal text-black/76 transition hover:border-red-500/25 hover:bg-red-50 hover:text-red-600"
               >
-                <ExternalLink size={17} />
+                <ExternalLink size={16} />
                 Ver catálogo
               </button>
 
               <button
                 type="button"
                 onClick={handleLogout}
-                className="flex w-full items-center justify-center gap-2 rounded-2xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-600 hover:bg-red-100"
+                className="flex h-11 w-full items-center justify-center gap-2 rounded-2xl bg-black/[0.035] px-4 text-[13px] font-normal text-black/66 transition hover:bg-red-50 hover:text-red-600"
               >
-                <LogOut size={17} />
+                <LogOut size={16} />
                 Cerrar sesión
               </button>
             </div>

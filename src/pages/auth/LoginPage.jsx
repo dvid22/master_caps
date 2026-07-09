@@ -31,19 +31,19 @@ export default function LoginPage() {
 
   const slides = [
     {
-      badge: "TIENDA DE ROPA",
+      badge: "Tienda de ropa",
       title: "Tu estilo,\nnuestra pasión",
       description:
         "Descubre prendas y accesorios para cada ocasión. Calidad, diseño y confort en un solo lugar.",
     },
     {
-      badge: "MODA EXCLUSIVA",
+      badge: "Moda exclusiva",
       title: "Viste diferente,\ncompra mejor",
       description:
         "Colecciones modernas, productos seleccionados y una experiencia premium para tus clientes.",
     },
     {
-      badge: "MASTER CAPS",
+      badge: "Master Caps",
       title: "Calidad,\nestilo y confianza",
       description:
         "Administra productos, ventas e inventario desde un panel rápido, seguro y profesional.",
@@ -104,7 +104,7 @@ export default function LoginPage() {
     return (
       <main className="flex h-screen items-center justify-center bg-white px-4">
         <section className="rounded-3xl bg-white p-8 text-center shadow-sm ring-1 ring-black/5">
-          <p className="text-sm font-medium text-black">Verificando sesión...</p>
+          <p className="text-sm font-normal text-black">Verificando sesión...</p>
         </section>
       </main>
     );
@@ -135,11 +135,11 @@ export default function LoginPage() {
             />
 
             <div className="max-w-[490px] transition-all duration-500">
-              <span className="inline-flex rounded-full border border-red-500/35 bg-white/75 px-5 py-1.5 text-[10px] font-bold tracking-[0.28em] text-red-600 shadow-sm backdrop-blur">
+              <span className="inline-flex rounded-full border border-red-500/30 bg-white/75 px-5 py-1.5 text-[12px] font-medium text-red-600 shadow-sm backdrop-blur">
                 {currentSlide.badge}
               </span>
 
-              <h1 className="mt-5 whitespace-pre-line text-[38px] font-semibold leading-[1.03] tracking-[-0.045em] text-black xl:text-[44px] 2xl:text-[50px]">
+              <h1 className="mt-5 whitespace-pre-line text-[38px] font-medium leading-[1.04] tracking-[-0.045em] text-black xl:text-[44px] 2xl:text-[50px]">
                 {currentSlide.title}
               </h1>
 
@@ -148,9 +148,21 @@ export default function LoginPage() {
               </p>
 
               <div className="mt-6 space-y-3.5 xl:mt-7 xl:space-y-4">
-                <Feature icon={<Shirt size={17} />} title="Moda exclusiva" text="Colecciones únicas y modernas" />
-                <Feature icon={<Tag size={17} />} title="Mejores precios" text="Calidad premium al mejor precio" />
-                <Feature icon={<ShieldCheck size={17} />} title="Compra segura" text="Tus datos y compras siempre protegidos" />
+                <Feature
+                  icon={<Shirt size={17} />}
+                  title="Moda exclusiva"
+                  text="Colecciones únicas y modernas"
+                />
+                <Feature
+                  icon={<Tag size={17} />}
+                  title="Mejores precios"
+                  text="Calidad premium al mejor precio"
+                />
+                <Feature
+                  icon={<ShieldCheck size={17} />}
+                  title="Compra segura"
+                  text="Tus datos y compras siempre protegidos"
+                />
               </div>
             </div>
 
@@ -158,7 +170,7 @@ export default function LoginPage() {
               <button
                 type="button"
                 onClick={previousSlide}
-                className="flex h-10 w-10 items-center justify-center rounded-full border border-red-500/40 bg-white/80 text-black shadow-sm transition hover:bg-red-600 hover:text-white"
+                className="flex h-10 w-10 items-center justify-center rounded-full border border-red-500/35 bg-white/80 text-black shadow-sm transition hover:bg-red-600 hover:text-white"
               >
                 <ChevronLeft size={21} />
               </button>
@@ -181,7 +193,7 @@ export default function LoginPage() {
               <button
                 type="button"
                 onClick={nextSlide}
-                className="flex h-10 w-10 items-center justify-center rounded-full border border-red-500/40 bg-white/80 text-black shadow-sm transition hover:bg-red-600 hover:text-white"
+                className="flex h-10 w-10 items-center justify-center rounded-full border border-red-500/35 bg-white/80 text-black shadow-sm transition hover:bg-red-600 hover:text-white"
               >
                 <ChevronRight size={21} />
               </button>
@@ -207,7 +219,7 @@ export default function LoginPage() {
               </div>
 
               <div className="mt-4 text-center">
-                <h1 className="text-[25px] font-semibold tracking-[-0.04em] text-black xl:text-[28px]">
+                <h1 className="text-[25px] font-medium tracking-[-0.04em] text-black xl:text-[28px]">
                   <span className="text-red-600">Bienvenido</span> de nuevo
                 </h1>
 
@@ -218,7 +230,7 @@ export default function LoginPage() {
 
               <div className="mt-6 space-y-4">
                 <label className="block">
-                  <span className="text-[10px] font-bold uppercase tracking-[0.16em] text-black/60">
+                  <span className="text-[12px] font-medium text-black/65">
                     Correo electrónico
                   </span>
 
@@ -239,7 +251,7 @@ export default function LoginPage() {
                 </label>
 
                 <label className="block">
-                  <span className="text-[10px] font-bold uppercase tracking-[0.16em] text-black/60">
+                  <span className="text-[12px] font-medium text-black/65">
                     Contraseña
                   </span>
 
@@ -269,7 +281,7 @@ export default function LoginPage() {
               </div>
 
               <div className="mt-4 flex items-center text-[13px]">
-                <label className="flex cursor-pointer items-center gap-2 font-medium text-black/65">
+                <label className="flex cursor-pointer items-center gap-2 font-normal text-black/65">
                   <input
                     type="checkbox"
                     className="h-4 w-4 rounded border-black/20 text-red-600 focus:ring-red-600"
@@ -281,35 +293,11 @@ export default function LoginPage() {
               <button
                 type="submit"
                 disabled={logging}
-                className="mt-5 flex h-11 w-full items-center justify-center gap-3 rounded-2xl bg-red-600 px-5 text-[14px] font-semibold text-white shadow-lg shadow-red-600/20 transition hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60"
+                className="mt-5 flex h-11 w-full items-center justify-center gap-3 rounded-2xl bg-red-600 px-5 text-[14px] font-medium text-white shadow-lg shadow-red-600/20 transition hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {logging ? "Entrando..." : "Iniciar sesión"}
                 {!logging && <ArrowRight size={17} />}
               </button>
-
-              <div className="mt-5 flex items-center gap-4">
-                <div className="h-px flex-1 bg-black/10" />
-                <span className="text-[11px] font-medium text-black/40">
-                  o continúa con
-                </span>
-                <div className="h-px flex-1 bg-black/10" />
-              </div>
-
-              <div className="mt-4 grid grid-cols-2 gap-3">
-                <button
-                  type="button"
-                  className="h-10 rounded-2xl border border-black/10 bg-white text-[11px] font-semibold text-black/70 transition hover:border-red-600/30 hover:bg-red-50"
-                >
-                  Google
-                </button>
-
-                <button
-                  type="button"
-                  className="h-10 rounded-2xl border border-black/10 bg-white text-[11px] font-semibold text-black/70 transition hover:border-red-600/30 hover:bg-red-50"
-                >
-                  Facebook
-                </button>
-              </div>
             </form>
 
             <p className="mt-4 text-center text-[11px] font-normal text-black/35">
@@ -325,12 +313,12 @@ export default function LoginPage() {
 function Feature({ icon, title, text }) {
   return (
     <div className="flex items-center gap-3">
-      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-red-500/35 bg-white/80 text-red-600 shadow-sm">
+      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-red-500/30 bg-white/80 text-red-600 shadow-sm">
         {icon}
       </div>
 
       <div>
-        <h3 className="text-[13px] font-semibold text-black">{title}</h3>
+        <h3 className="text-[13px] font-medium text-black">{title}</h3>
         <p className="text-[13px] font-normal text-black/62">{text}</p>
       </div>
     </div>

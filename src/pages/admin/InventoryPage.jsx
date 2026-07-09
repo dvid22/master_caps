@@ -3,6 +3,7 @@ import {
   Camera,
   Edit3,
   ExternalLink,
+  Eye,
   Package,
   Plus,
   Search,
@@ -46,10 +47,40 @@ const emptyForm = {
 
 function normalizeSize(value) {
   const cleanValue = String(value || "").trim();
-
   if (!cleanValue) return "Talla única";
-
   return cleanValue.toUpperCase();
+}
+
+function getStockStatus(stock) {
+  const value = Number(stock || 0);
+
+  if (value <= 0) {
+    return {
+      label: "Agotado",
+      text: "Stock: 0 unidades",
+      filter: "out",
+      badgeClass: "bg-red-50 text-red-600",
+      stockClass: "text-red-600",
+    };
+  }
+
+  if (value <= 6) {
+    return {
+      label: "Stock bajo",
+      text: `Stock: ${value} unidades`,
+      filter: "low",
+      badgeClass: "bg-orange-50 text-orange-600",
+      stockClass: "text-orange-600",
+    };
+  }
+
+  return {
+    label: "En stock",
+    text: `Stock: ${value} unidades`,
+    filter: "available",
+    badgeClass: "bg-emerald-50 text-emerald-600",
+    stockClass: "text-emerald-600",
+  };
 }
 
 export default function InventoryPage() {
@@ -61,6 +92,7 @@ export default function InventoryPage() {
   const [imagePreview, setImagePreview] = useState("");
 
   const [editingProduct, setEditingProduct] = useState(null);
+  const [detailProduct, setDetailProduct] = useState(null);
   const [showForm, setShowForm] = useState(false);
 
   const [suggestedCode, setSuggestedCode] = useState("");
@@ -70,9 +102,14 @@ export default function InventoryPage() {
   const [search, setSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [sizeFilter, setSizeFilter] = useState("all");
+  const [stockFilter, setStockFilter] = useState("all");
+
+  const [page, setPage] = useState(1);
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+
+  const productsPerPage = 8;
 
   useEffect(() => {
     setLoading(true);
@@ -122,6 +159,7 @@ export default function InventoryPage() {
 
     return products.filter((product) => {
       const productSize = product.size || "Talla única";
+      const stockStatus = getStockStatus(product.stock);
 
       const matchesSearch =
         !cleanSearch ||
@@ -135,9 +173,27 @@ export default function InventoryPage() {
 
       const matchesSize = sizeFilter === "all" || productSize === sizeFilter;
 
-      return matchesSearch && matchesCategory && matchesSize;
+      const matchesStock =
+        stockFilter === "all" || stockStatus.filter === stockFilter;
+
+      return matchesSearch && matchesCategory && matchesSize && matchesStock;
     });
-  }, [products, search, categoryFilter, sizeFilter]);
+  }, [products, search, categoryFilter, sizeFilter, stockFilter]);
+
+  const totalPages = Math.max(
+    Math.ceil(filteredProducts.length / productsPerPage),
+    1
+  );
+
+  const paginatedProducts = useMemo(() => {
+    const safePage = Math.min(page, totalPages);
+    const start = (safePage - 1) * productsPerPage;
+    return filteredProducts.slice(start, start + productsPerPage);
+  }, [filteredProducts, page, totalPages]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [search, categoryFilter, sizeFilter, stockFilter]);
 
   function updateForm(field, value) {
     setForm((current) => ({
@@ -368,498 +424,720 @@ export default function InventoryPage() {
   }
 
   return (
-    <main className="min-h-screen bg-brand-cream px-4 py-6 sm:px-6">
-      <section className="mx-auto max-w-7xl">
-        <div className="flex flex-col gap-4 border-b border-black/10 pb-6 md:flex-row md:items-end md:justify-between">
+    <main className="min-h-screen bg-[#f7f7f8] px-3 py-4 sm:px-5 lg:px-6">
+      <section className="mx-auto max-w-[1540px]">
+        <header className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
           <div>
-            <p className="text-sm font-medium text-brand-gold">Master Caps</p>
-
-            <h1 className="mt-1 text-3xl font-semibold tracking-tight text-brand-black">
+            <h1 className="text-[28px] font-medium tracking-[-0.045em] text-black">
               Inventario
             </h1>
 
-            <p className="mt-2 max-w-2xl text-sm text-gray-600">
-              Crea productos, sube fotos, administra categorías dinámicas y
-              controla el stock disponible en tiempo real.
+            <p className="mt-1 text-[13px] font-normal text-black/50">
+              Gestiona todos los productos de tu tienda
             </p>
           </div>
 
-          <div className="flex flex-wrap gap-3">
+          <div className="flex flex-col gap-2 sm:flex-row">
             <button
               type="button"
               onClick={openPublicCatalog}
-              className="inline-flex items-center justify-center gap-2 rounded-2xl border border-black/10 bg-white px-5 py-3 text-sm font-semibold text-brand-black hover:border-brand-black"
+              className="inline-flex h-11 items-center justify-center gap-2 rounded-2xl border border-black/[0.08] bg-white px-5 text-[13px] font-medium text-black shadow-[0_12px_35px_rgba(0,0,0,0.04)] transition hover:border-red-500/25 hover:bg-red-50 hover:text-red-600"
             >
-              <ExternalLink size={17} />
+              <ExternalLink size={16} strokeWidth={1.9} />
               Publicar catálogo
             </button>
 
             <button
               type="button"
               onClick={openCreateForm}
-              className="inline-flex items-center justify-center gap-2 rounded-2xl bg-brand-black px-5 py-3 text-sm font-semibold text-white hover:bg-black"
+              className="inline-flex h-11 items-center justify-center gap-2 rounded-2xl bg-red-600 px-5 text-[13px] font-medium text-white shadow-lg shadow-red-600/20 transition hover:bg-red-700"
             >
-              <Plus size={18} />
+              <Plus size={17} strokeWidth={1.9} />
               Nuevo producto
             </button>
           </div>
-        </div>
+        </header>
 
-        <div className="mt-6 grid gap-4 md:grid-cols-[1fr_220px_220px]">
-          <label className="relative block">
-            <Search
-              size={18}
-              className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-gray-400"
-            />
+        <section className="mt-5 rounded-[26px] bg-white p-3 shadow-[0_16px_45px_rgba(0,0,0,0.04)] ring-1 ring-black/[0.06]">
+          <div className="grid gap-3 lg:grid-cols-[1.45fr_0.82fr_0.78fr_0.78fr]">
+            <label className="relative block">
+              <Search
+                size={16}
+                className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-black/35"
+              />
 
-            <input
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              className="h-12 w-full rounded-2xl border border-black/10 bg-white pl-11 pr-4 text-sm outline-none focus:border-brand-black"
-              placeholder="Buscar por nombre, código, categoría o talla..."
-            />
-          </label>
+              <input
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                className="h-11 w-full rounded-2xl border border-black/[0.08] bg-white pl-11 pr-4 text-[13px] font-normal text-black outline-none transition placeholder:text-black/35 focus:border-red-600 focus:ring-4 focus:ring-red-600/10"
+                placeholder="Buscar producto, código o categoría..."
+              />
+            </label>
 
-          <select
-            value={categoryFilter}
-            onChange={(event) => setCategoryFilter(event.target.value)}
-            className="h-12 rounded-2xl border border-black/10 bg-white px-4 text-sm outline-none focus:border-brand-black"
-          >
-            <option value="all">Todas las categorías</option>
+            <select
+              value={categoryFilter}
+              onChange={(event) => setCategoryFilter(event.target.value)}
+              className="h-11 rounded-2xl border border-black/[0.08] bg-white px-4 text-[13px] font-normal text-black outline-none transition focus:border-red-600 focus:ring-4 focus:ring-red-600/10"
+            >
+              <option value="all">Todas las categorías</option>
 
-            {categories.map((category) => (
-              <option key={category.id} value={category.id}>
-                {category.name}
-              </option>
-            ))}
-          </select>
+              {categories.map((category) => (
+                <option key={category.id} value={category.id}>
+                  {category.name}
+                </option>
+              ))}
+            </select>
 
-          <select
-            value={sizeFilter}
-            onChange={(event) => setSizeFilter(event.target.value)}
-            className="h-12 rounded-2xl border border-black/10 bg-white px-4 text-sm outline-none focus:border-brand-black"
-          >
-            <option value="all">Todas las tallas</option>
+            <select
+              value={sizeFilter}
+              onChange={(event) => setSizeFilter(event.target.value)}
+              className="h-11 rounded-2xl border border-black/[0.08] bg-white px-4 text-[13px] font-normal text-black outline-none transition focus:border-red-600 focus:ring-4 focus:ring-red-600/10"
+            >
+              <option value="all">Todas las tallas</option>
 
-            {availableSizes.map((size) => (
-              <option key={size} value={size}>
-                {size}
-              </option>
-            ))}
-          </select>
-        </div>
+              {availableSizes.map((size) => (
+                <option key={size} value={size}>
+                  {size}
+                </option>
+              ))}
+            </select>
 
-        <section className="mt-6">
-          {loading ? (
-            <div className="rounded-3xl bg-white p-8 text-center text-sm text-gray-500">
-              Cargando inventario en tiempo real...
-            </div>
-          ) : filteredProducts.length === 0 ? (
-            <div className="rounded-3xl bg-white p-10 text-center">
-              <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-brand-cream">
-                <Package size={26} className="text-brand-black" />
+            <select
+              value={stockFilter}
+              onChange={(event) => setStockFilter(event.target.value)}
+              className="h-11 rounded-2xl border border-black/[0.08] bg-white px-4 text-[13px] font-normal text-black outline-none transition focus:border-red-600 focus:ring-4 focus:ring-red-600/10"
+            >
+              <option value="all">Estado de stock</option>
+              <option value="available">En stock</option>
+              <option value="low">Stock bajo</option>
+              <option value="out">Agotado</option>
+            </select>
+          </div>
+
+          <section className="mt-4">
+            {loading ? (
+              <div className="rounded-[22px] bg-black/[0.025] p-8 text-center text-[13px] text-black/45">
+                Cargando inventario en tiempo real...
               </div>
+            ) : filteredProducts.length === 0 ? (
+              <div className="rounded-[22px] bg-black/[0.025] p-8 text-center">
+                <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-white text-black/50 ring-1 ring-black/[0.06]">
+                  <Package size={24} />
+                </div>
 
-              <h2 className="mt-4 text-lg font-semibold text-brand-black">
-                No hay productos todavía
-              </h2>
+                <h2 className="mt-4 text-[17px] font-medium text-black">
+                  No hay productos todavía
+                </h2>
 
-              <p className="mt-2 text-sm text-gray-500">
-                Crea el primer producto del inventario.
-              </p>
+                <p className="mt-2 text-[13px] text-black/45">
+                  Crea el primer producto del inventario.
+                </p>
 
-              <button
-                type="button"
-                onClick={openCreateForm}
-                className="mt-5 rounded-2xl bg-brand-black px-5 py-3 text-sm font-semibold text-white"
-              >
-                Crear producto
-              </button>
-            </div>
-          ) : (
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              {filteredProducts.map((product) => (
-                <article
-                  key={product.id}
-                  className="overflow-hidden rounded-3xl bg-white shadow-sm ring-1 ring-black/5"
+                <button
+                  type="button"
+                  onClick={openCreateForm}
+                  className="mt-5 rounded-2xl bg-red-600 px-5 py-3 text-[13px] font-medium text-white hover:bg-red-700"
                 >
-                  <div className="relative aspect-[4/3] bg-gray-100">
-                    {product.imageUrl ? (
-                      <img
-                        src={product.imageUrl}
-                        alt={product.name}
-                        className="h-full w-full object-cover"
-                      />
-                    ) : (
-                      <div className="flex h-full w-full items-center justify-center text-gray-400">
-                        <Camera size={34} />
-                      </div>
+                  Crear producto
+                </button>
+              </div>
+            ) : (
+              <>
+                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+                  {paginatedProducts.map((product) => (
+                    <ProductCard
+                      key={product.id}
+                      product={product}
+                      onView={() => setDetailProduct(product)}
+                      onEdit={() => handleEdit(product)}
+                      onDelete={() => handleDelete(product)}
+                    />
+                  ))}
+                </div>
+
+                <footer className="mt-4 flex flex-col gap-3 border-t border-black/[0.06] pt-4 md:flex-row md:items-center md:justify-between">
+                  <p className="text-[12px] font-normal text-black/50">
+                    Mostrando{" "}
+                    {filteredProducts.length === 0
+                      ? 0
+                      : (Math.min(page, totalPages) - 1) * productsPerPage + 1}{" "}
+                    a{" "}
+                    {Math.min(
+                      Math.min(page, totalPages) * productsPerPage,
+                      filteredProducts.length
+                    )}{" "}
+                    de {filteredProducts.length} productos
+                  </p>
+
+                  <div className="flex items-center justify-center gap-2">
+                    <button
+                      type="button"
+                      disabled={page <= 1}
+                      onClick={() => setPage((current) => current - 1)}
+                      className="flex h-9 w-9 items-center justify-center rounded-xl border border-black/[0.08] bg-white text-black/70 transition hover:bg-black/[0.035] disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      ‹
+                    </button>
+
+                    {Array.from({ length: Math.min(totalPages, 5) }).map(
+                      (_, index) => {
+                        const pageNumber = index + 1;
+
+                        return (
+                          <button
+                            key={pageNumber}
+                            type="button"
+                            onClick={() => setPage(pageNumber)}
+                            className={`flex h-9 w-9 items-center justify-center rounded-xl text-[12px] transition ${
+                              page === pageNumber
+                                ? "bg-red-600 text-white shadow-lg shadow-red-600/20"
+                                : "border border-black/[0.08] bg-white text-black/70 hover:bg-black/[0.035]"
+                            }`}
+                          >
+                            {pageNumber}
+                          </button>
+                        );
+                      }
                     )}
 
-                    <span
-                      className={`absolute right-3 top-3 rounded-full px-3 py-1 text-xs font-semibold ${
-                        Number(product.stock || 0) > 0
-                          ? "bg-green-100 text-green-700"
-                          : "bg-red-100 text-red-700"
-                      }`}
+                    {totalPages > 5 && (
+                      <span className="px-1 text-[12px] text-black/40">
+                        ...
+                      </span>
+                    )}
+
+                    {totalPages > 5 && (
+                      <button
+                        type="button"
+                        onClick={() => setPage(totalPages)}
+                        className={`flex h-9 w-9 items-center justify-center rounded-xl text-[12px] transition ${
+                          page === totalPages
+                            ? "bg-red-600 text-white shadow-lg shadow-red-600/20"
+                            : "border border-black/[0.08] bg-white text-black/70 hover:bg-black/[0.035]"
+                        }`}
+                      >
+                        {totalPages}
+                      </button>
+                    )}
+
+                    <button
+                      type="button"
+                      disabled={page >= totalPages}
+                      onClick={() => setPage((current) => current + 1)}
+                      className="flex h-9 w-9 items-center justify-center rounded-xl border border-black/[0.08] bg-white text-black/70 transition hover:bg-black/[0.035] disabled:cursor-not-allowed disabled:opacity-40"
                     >
-                      {Number(product.stock || 0) > 0
-                        ? `${product.stock} disponibles`
-                        : "Sin stock"}
-                    </span>
+                      ›
+                    </button>
                   </div>
 
-                  <div className="p-5">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <p className="text-xs font-medium uppercase tracking-wide text-brand-gold">
-                          {product.categoryName}
-                        </p>
-
-                        <h3 className="mt-1 text-lg font-semibold text-brand-black">
-                          {product.name}
-                        </h3>
-
-                        <p className="mt-1 text-xs text-gray-500">
-                          Código: {product.code}
-                        </p>
-
-                        <p className="mt-1 text-xs font-medium text-brand-black">
-                          Talla: {product.size || "Talla única"}
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
-                      <div className="rounded-2xl bg-brand-cream p-3">
-                        <p className="text-xs text-gray-500">Llegada</p>
-
-                        <p className="font-semibold text-brand-black">
-                          {formatCurrency(product.costPrice)}
-                        </p>
-                      </div>
-
-                      <div className="rounded-2xl bg-brand-cream p-3">
-                        <p className="text-xs text-gray-500">Venta</p>
-
-                        <p className="font-semibold text-brand-black">
-                          {formatCurrency(product.salePrice)}
-                        </p>
-                      </div>
-
-                      <div className="col-span-2 rounded-2xl bg-black p-3 text-white">
-                        <p className="text-xs text-white/60">Ganancia</p>
-
-                        <p className="font-semibold">
-                          {formatCurrency(product.profitMargin)} ·{" "}
-                          {Number(product.profitPercent || 0).toFixed(1)}%
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="mt-5 flex gap-2">
-                      <button
-                        type="button"
-                        onClick={() => handleEdit(product)}
-                        className="inline-flex flex-1 items-center justify-center gap-2 rounded-2xl border border-black/10 px-4 py-3 text-sm font-medium text-brand-black hover:border-brand-black"
-                      >
-                        <Edit3 size={16} />
-                        Editar
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => handleDelete(product)}
-                        className="inline-flex items-center justify-center rounded-2xl border border-red-200 px-4 py-3 text-sm font-medium text-red-600 hover:bg-red-50"
-                      >
-                        <Trash2 size={16} />
-                      </button>
-                    </div>
+                  <div className="hidden h-9 items-center rounded-xl border border-black/[0.08] bg-white px-4 text-[12px] text-black/70 md:flex">
+                    8 por página
                   </div>
-                </article>
-              ))}
-            </div>
-          )}
+                </footer>
+              </>
+            )}
+          </section>
         </section>
       </section>
 
+      {detailProduct && (
+        <ProductDetailModal
+          product={detailProduct}
+          onClose={() => setDetailProduct(null)}
+          onEdit={() => {
+            setDetailProduct(null);
+            handleEdit(detailProduct);
+          }}
+        />
+      )}
+
       {showForm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4 py-6">
-          <section className="max-h-[92vh] w-full max-w-3xl overflow-y-auto rounded-3xl bg-white shadow-2xl">
-            <div className="sticky top-0 z-10 flex items-center justify-between border-b border-black/10 bg-white px-6 py-5">
-              <div>
-                <p className="text-xs font-medium uppercase tracking-wide text-brand-gold">
-                  {editingProduct ? "Editar producto" : "Nuevo producto"}
-                </p>
-
-                <h2 className="text-xl font-semibold text-brand-black">
-                  Información de la prenda
-                </h2>
-              </div>
-
-              <button
-                type="button"
-                onClick={closeForm}
-                className="rounded-full p-2 hover:bg-gray-100"
-              >
-                <X size={22} />
-              </button>
-            </div>
-
-            <form onSubmit={handleSubmit} className="p-6">
-              <div className="grid gap-6 md:grid-cols-[240px_1fr]">
-                <div>
-                  <label className="block cursor-pointer">
-                    <input
-                      type="file"
-                      accept="image/*"
-                      onChange={handleImageChange}
-                      className="hidden"
-                    />
-
-                    <div className="flex aspect-[4/5] items-center justify-center overflow-hidden rounded-3xl border border-dashed border-black/20 bg-brand-cream">
-                      {imagePreview ? (
-                        <img
-                          src={imagePreview}
-                          alt="Vista previa"
-                          className="h-full w-full object-cover"
-                        />
-                      ) : (
-                        <div className="text-center">
-                          <Camera
-                            size={34}
-                            className="mx-auto text-gray-400"
-                          />
-
-                          <p className="mt-3 text-sm font-medium text-brand-black">
-                            Subir foto
-                          </p>
-
-                          <p className="mt-1 text-xs text-gray-500">
-                            JPG, PNG o WEBP
-                          </p>
-                        </div>
-                      )}
-                    </div>
-                  </label>
-                </div>
-
-                <div className="grid gap-4">
-                  <div className="grid gap-4 sm:grid-cols-3">
-                    <label>
-                      <span className="text-sm font-medium text-brand-black">
-                        Nombre del producto
-                      </span>
-
-                      <input
-                        value={form.name}
-                        onChange={(event) =>
-                          updateForm("name", event.target.value)
-                        }
-                        className="mt-2 h-12 w-full rounded-2xl border border-black/10 px-4 text-sm outline-none focus:border-brand-black"
-                        placeholder="Ej: Camiseta negra oversize"
-                      />
-                    </label>
-
-                    <label>
-                      <span className="text-sm font-medium text-brand-black">
-                        Código
-                      </span>
-
-                      <input
-                        value={form.code}
-                        onChange={(event) =>
-                          handleCodeChange(event.target.value)
-                        }
-                        disabled={loadingCode}
-                        className="mt-2 h-12 w-full rounded-2xl border border-black/10 px-4 text-sm outline-none focus:border-brand-black disabled:bg-gray-100"
-                        placeholder="Ej: 0001"
-                      />
-
-                      <p className="mt-1 text-xs text-gray-500">
-                        {editingProduct
-                          ? "Puedes editar el código, pero no puede repetirse."
-                          : codeTouched
-                            ? "Código personalizado. Se validará que no exista."
-                            : "Código automático sugerido. Al guardar se confirmará el consecutivo disponible."}
-                      </p>
-                    </label>
-
-                    <label>
-                      <span className="text-sm font-medium text-brand-black">
-                        Talla
-                      </span>
-
-                      <input
-                        value={form.size}
-                        onChange={(event) =>
-                          updateForm("size", event.target.value)
-                        }
-                        className="mt-2 h-12 w-full rounded-2xl border border-black/10 px-4 text-sm outline-none focus:border-brand-black"
-                        placeholder="Ej: S, XL, 32"
-                      />
-
-                      <p className="mt-1 text-xs text-gray-500">
-                        Si lo dejas vacío será Talla única.
-                      </p>
-                    </label>
-                  </div>
-
-                  <div className="grid gap-4 sm:grid-cols-2">
-                    <label>
-                      <span className="text-sm font-medium text-brand-black">
-                        Categoría existente
-                      </span>
-
-                      <select
-                        value={form.categoryId}
-                        onChange={(event) => {
-                          const selected = categories.find(
-                            (category) => category.id === event.target.value
-                          );
-
-                          updateForm("categoryId", event.target.value);
-                          updateForm("categoryName", selected?.name || "");
-                          updateForm("newCategoryName", "");
-                        }}
-                        className="mt-2 h-12 w-full rounded-2xl border border-black/10 bg-white px-4 text-sm outline-none focus:border-brand-black"
-                      >
-                        <option value="">
-                          {categories.length === 0
-                            ? "No hay categorías creadas"
-                            : "Seleccionar categoría"}
-                        </option>
-
-                        {categories.map((category) => (
-                          <option key={category.id} value={category.id}>
-                            {category.name}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-
-                    <label>
-                      <span className="text-sm font-medium text-brand-black">
-                        Crear nueva categoría
-                      </span>
-
-                      <input
-                        value={form.newCategoryName}
-                        onChange={(event) => {
-                          updateForm("newCategoryName", event.target.value);
-                          updateForm("categoryId", "");
-                          updateForm("categoryName", "");
-                        }}
-                        className="mt-2 h-12 w-full rounded-2xl border border-black/10 px-4 text-sm outline-none focus:border-brand-black"
-                        placeholder="Ej: Camisetas"
-                      />
-                    </label>
-                  </div>
-
-                  <div className="grid gap-4 sm:grid-cols-3">
-                    <label>
-                      <span className="text-sm font-medium text-brand-black">
-                        Precio llegada
-                      </span>
-
-                      <input
-                        value={form.costPrice}
-                        onChange={(event) =>
-                          updateForm("costPrice", event.target.value)
-                        }
-                        className="mt-2 h-12 w-full rounded-2xl border border-black/10 px-4 text-sm outline-none focus:border-brand-black"
-                        placeholder="30000"
-                      />
-                    </label>
-
-                    <label>
-                      <span className="text-sm font-medium text-brand-black">
-                        Precio venta
-                      </span>
-
-                      <input
-                        value={form.salePrice}
-                        onChange={(event) =>
-                          updateForm("salePrice", event.target.value)
-                        }
-                        className="mt-2 h-12 w-full rounded-2xl border border-black/10 px-4 text-sm outline-none focus:border-brand-black"
-                        placeholder="60000"
-                      />
-                    </label>
-
-                    <label>
-                      <span className="text-sm font-medium text-brand-black">
-                        Stock
-                      </span>
-
-                      <input
-                        type="number"
-                        min="0"
-                        value={form.stock}
-                        onChange={(event) =>
-                          updateForm("stock", event.target.value)
-                        }
-                        className="mt-2 h-12 w-full rounded-2xl border border-black/10 px-4 text-sm outline-none focus:border-brand-black"
-                        placeholder="1"
-                      />
-                    </label>
-                  </div>
-
-                  <div className="rounded-3xl bg-brand-cream p-4">
-                    <p className="text-sm font-medium text-brand-black">
-                      Margen calculado automáticamente
-                    </p>
-
-                    <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                      <div>
-                        <p className="text-xs text-gray-500">
-                          Ganancia por unidad
-                        </p>
-
-                        <p className="text-lg font-semibold text-brand-black">
-                          {formatCurrency(profit.profitMargin)}
-                        </p>
-                      </div>
-
-                      <div>
-                        <p className="text-xs text-gray-500">
-                          Porcentaje de ganancia
-                        </p>
-
-                        <p className="text-lg font-semibold text-brand-black">
-                          {profit.profitPercent.toFixed(1)}%
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <div className="mt-7 flex flex-col-reverse gap-3 border-t border-black/10 pt-5 sm:flex-row sm:justify-end">
-                <button
-                  type="button"
-                  onClick={closeForm}
-                  className="rounded-2xl border border-black/10 px-5 py-3 text-sm font-medium text-brand-black hover:border-brand-black"
-                >
-                  Cancelar
-                </button>
-
-                <button
-                  type="submit"
-                  disabled={saving || loadingCode}
-                  className="rounded-2xl bg-brand-black px-6 py-3 text-sm font-semibold text-white hover:bg-black disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {saving
-                    ? "Guardando..."
-                    : editingProduct
-                      ? "Actualizar producto"
-                      : "Guardar producto"}
-                </button>
-              </div>
-            </form>
-          </section>
-        </div>
+        <ProductFormModal
+          editingProduct={editingProduct}
+          closeForm={closeForm}
+          handleSubmit={handleSubmit}
+          handleImageChange={handleImageChange}
+          imagePreview={imagePreview}
+          form={form}
+          updateForm={updateForm}
+          handleCodeChange={handleCodeChange}
+          loadingCode={loadingCode}
+          categories={categories}
+          saving={saving}
+          profit={profit}
+        />
       )}
     </main>
+  );
+}
+
+function ProductCard({ product, onView, onEdit, onDelete }) {
+  const stockStatus = getStockStatus(product.stock);
+
+  return (
+    <article className="rounded-[24px] bg-white p-3 shadow-[0_14px_40px_rgba(0,0,0,0.035)] ring-1 ring-black/[0.06] transition hover:-translate-y-0.5 hover:shadow-[0_22px_60px_rgba(0,0,0,0.07)]">
+      <div className="flex gap-3">
+        <div className="flex h-[86px] w-[86px] shrink-0 items-center justify-center overflow-hidden rounded-[20px] bg-black/[0.025]">
+          {product.imageUrl ? (
+            <img
+              src={product.imageUrl}
+              alt={product.name}
+              className="h-full w-full object-cover"
+            />
+          ) : (
+            <Camera size={25} className="text-black/30" />
+          )}
+        </div>
+
+        <div className="min-w-0 flex-1">
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0">
+              <h3 className="truncate text-[14px] font-medium text-black">
+                {product.name}
+              </h3>
+
+              <p className="mt-1 text-[12px] text-black/45">
+                {product.code || "Sin código"}
+              </p>
+
+              <p className="mt-1 truncate text-[12px] text-black/50">
+                {product.categoryName || "Sin categoría"}
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={onView}
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-black/[0.06] text-black/45 transition hover:bg-black/[0.035] hover:text-black"
+              title="Ver detalles"
+            >
+              <Eye size={15} />
+            </button>
+          </div>
+
+          <p className="mt-2 inline-flex rounded-full bg-black/[0.025] px-2.5 py-1 text-[11px] text-black/60">
+            {product.size || "Talla única"}
+          </p>
+
+          <p className={`mt-2 text-[12px] font-normal ${stockStatus.stockClass}`}>
+            {stockStatus.text}
+          </p>
+        </div>
+      </div>
+
+      <div className="mt-3 border-t border-black/[0.06] pt-3">
+        <div className="flex items-end justify-between gap-3">
+          <div>
+            <p className="text-[16px] font-medium tracking-[-0.03em] text-black">
+              {formatCurrency(product.salePrice)}
+            </p>
+
+            <p className="mt-1 text-[12px] text-black/45">
+              Costo: {formatCurrency(product.costPrice)}
+            </p>
+
+            <p className="mt-1 text-[12px] text-black/45">
+              Ganancia:{" "}
+              <span className="text-emerald-600">
+                {formatCurrency(product.profitMargin)}
+              </span>
+            </p>
+          </div>
+
+          <span
+            className={`shrink-0 rounded-full px-3 py-1.5 text-[11px] font-normal ${stockStatus.badgeClass}`}
+          >
+            {stockStatus.label}
+          </span>
+        </div>
+
+        <div className="mt-3 grid grid-cols-[1fr_0.8fr_40px] gap-2">
+          <button
+            type="button"
+            onClick={onView}
+            className="inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-black/[0.08] bg-white text-[12px] font-medium text-black transition hover:border-red-500/25 hover:bg-red-50 hover:text-red-600"
+          >
+            <Eye size={14} />
+            Ver detalles
+          </button>
+
+          <button
+            type="button"
+            onClick={onEdit}
+            className="inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-black/[0.08] bg-white text-[12px] font-medium text-black transition hover:border-red-500/25 hover:bg-red-50 hover:text-red-600"
+          >
+            <Edit3 size={14} />
+            Editar
+          </button>
+
+          <button
+            type="button"
+            onClick={onDelete}
+            className="inline-flex h-9 items-center justify-center rounded-xl border border-red-100 bg-white text-red-600 transition hover:bg-red-50"
+          >
+            <Trash2 size={14} />
+          </button>
+        </div>
+      </div>
+    </article>
+  );
+}
+
+function ProductDetailModal({ product, onClose, onEdit }) {
+  const stockStatus = getStockStatus(product.stock);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 px-4 py-6 backdrop-blur-sm">
+      <section className="w-full max-w-[720px] overflow-hidden rounded-[26px] bg-white shadow-2xl">
+        <div className="flex items-center justify-between border-b border-black/[0.06] px-5 py-4">
+          <div className="min-w-0">
+            <p className="text-[12px] font-normal text-red-600">
+              Detalles del producto
+            </p>
+
+            <h2 className="mt-0.5 truncate text-[21px] font-medium tracking-[-0.035em] text-black">
+              {product.name}
+            </h2>
+          </div>
+
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-black/[0.035] text-black/60 transition hover:bg-red-50 hover:text-red-600"
+          >
+            <X size={19} />
+          </button>
+        </div>
+
+        <div className="grid gap-4 p-5 md:grid-cols-[190px_1fr]">
+          <div className="flex aspect-[4/5] max-h-[250px] items-center justify-center overflow-hidden rounded-[22px] bg-black/[0.025]">
+            {product.imageUrl ? (
+              <img
+                src={product.imageUrl}
+                alt={product.name}
+                className="h-full w-full object-cover"
+              />
+            ) : (
+              <Camera size={32} className="text-black/30" />
+            )}
+          </div>
+
+          <div className="grid gap-2 sm:grid-cols-2">
+            <DetailItem label="Código" value={product.code || "Sin código"} />
+            <DetailItem
+              label="Categoría"
+              value={product.categoryName || "Sin categoría"}
+            />
+            <DetailItem label="Talla" value={product.size || "Talla única"} />
+            <DetailItem label="Estado" value={stockStatus.label} />
+            <DetailItem
+              label="Stock"
+              value={`${Number(product.stock || 0)} unidad(es)`}
+            />
+            <DetailItem
+              label="Precio llegada"
+              value={formatCurrency(product.costPrice)}
+            />
+            <DetailItem
+              label="Precio venta"
+              value={formatCurrency(product.salePrice)}
+            />
+            <DetailItem
+              label="Ganancia"
+              value={`${formatCurrency(product.profitMargin)} · ${Number(
+                product.profitPercent || 0
+              ).toFixed(1)}%`}
+              highlight
+            />
+          </div>
+        </div>
+
+        <div className="flex justify-end gap-3 border-t border-black/[0.06] px-5 py-4">
+          <button
+            type="button"
+            onClick={onClose}
+            className="h-10 rounded-xl border border-black/[0.08] px-5 text-[13px] font-medium text-black/70 transition hover:bg-black/[0.035]"
+          >
+            Cerrar
+          </button>
+
+          <button
+            type="button"
+            onClick={onEdit}
+            className="h-10 rounded-xl bg-red-600 px-5 text-[13px] font-medium text-white shadow-lg shadow-red-600/20 transition hover:bg-red-700"
+          >
+            Editar producto
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function DetailItem({ label, value, highlight = false }) {
+  return (
+    <div
+      className={`rounded-2xl px-4 py-3 ${
+        highlight ? "bg-red-600 text-white" : "bg-black/[0.025] text-black"
+      }`}
+    >
+      <p
+        className={`text-[12px] ${
+          highlight ? "text-white/65" : "text-black/45"
+        }`}
+      >
+        {label}
+      </p>
+
+      <p className="mt-0.5 truncate text-[14px] font-medium">{value}</p>
+    </div>
+  );
+}
+
+function ProductFormModal({
+  editingProduct,
+  closeForm,
+  handleSubmit,
+  handleImageChange,
+  imagePreview,
+  form,
+  updateForm,
+  handleCodeChange,
+  loadingCode,
+  categories,
+  saving,
+  profit,
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 px-4 py-6 backdrop-blur-sm">
+      <section className="max-h-[92vh] w-full max-w-4xl overflow-y-auto rounded-[30px] bg-white shadow-2xl">
+        <div className="sticky top-0 z-10 flex items-center justify-between border-b border-black/[0.06] bg-white/90 px-6 py-5 backdrop-blur-xl">
+          <div>
+            <p className="text-[13px] font-normal text-red-600">
+              {editingProduct ? "Editar producto" : "Nuevo producto"}
+            </p>
+
+            <h2 className="mt-1 text-[22px] font-medium tracking-[-0.035em] text-black">
+              Información de la prenda
+            </h2>
+          </div>
+
+          <button
+            type="button"
+            onClick={closeForm}
+            className="flex h-10 w-10 items-center justify-center rounded-2xl bg-black/[0.035] text-black/60 transition hover:bg-red-50 hover:text-red-600"
+          >
+            <X size={20} />
+          </button>
+        </div>
+
+        <form onSubmit={handleSubmit} className="p-6">
+          <div className="grid gap-6 md:grid-cols-[250px_1fr]">
+            <label className="block cursor-pointer">
+              <input
+                type="file"
+                accept="image/*"
+                onChange={handleImageChange}
+                className="hidden"
+              />
+
+              <div className="flex aspect-[4/5] items-center justify-center overflow-hidden rounded-[26px] border border-dashed border-black/15 bg-black/[0.025]">
+                {imagePreview ? (
+                  <img
+                    src={imagePreview}
+                    alt="Vista previa"
+                    className="h-full w-full object-cover"
+                  />
+                ) : (
+                  <div className="text-center">
+                    <Camera size={32} className="mx-auto text-black/35" />
+
+                    <p className="mt-3 text-[14px] font-medium text-black">
+                      Subir foto
+                    </p>
+
+                    <p className="mt-1 text-[12px] text-black/40">
+                      JPG, PNG o WEBP
+                    </p>
+                  </div>
+                )}
+              </div>
+            </label>
+
+            <div className="grid gap-4">
+              <div className="grid gap-4 sm:grid-cols-3">
+                <InputField
+                  label="Nombre"
+                  value={form.name}
+                  onChange={(value) => updateForm("name", value)}
+                  placeholder="Ej: Gorra NY negra"
+                />
+
+                <InputField
+                  label="Código"
+                  value={form.code}
+                  onChange={handleCodeChange}
+                  disabled={loadingCode}
+                  placeholder="Ej: CAP-0001"
+                />
+
+                <InputField
+                  label="Talla"
+                  value={form.size}
+                  onChange={(value) => updateForm("size", value)}
+                  placeholder="Ej: S, XL, 32"
+                />
+              </div>
+
+              <div className="grid gap-4 sm:grid-cols-2">
+                <label>
+                  <span className="text-[13px] font-normal text-black/65">
+                    Categoría existente
+                  </span>
+
+                  <select
+                    value={form.categoryId}
+                    onChange={(event) => {
+                      const selected = categories.find(
+                        (category) => category.id === event.target.value
+                      );
+
+                      updateForm("categoryId", event.target.value);
+                      updateForm("categoryName", selected?.name || "");
+                      updateForm("newCategoryName", "");
+                    }}
+                    className="mt-2 h-11 w-full rounded-2xl border border-black/[0.08] bg-white px-4 text-[13px] outline-none transition focus:border-red-600 focus:ring-4 focus:ring-red-600/10"
+                  >
+                    <option value="">
+                      {categories.length === 0
+                        ? "No hay categorías creadas"
+                        : "Seleccionar categoría"}
+                    </option>
+
+                    {categories.map((category) => (
+                      <option key={category.id} value={category.id}>
+                        {category.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <InputField
+                  label="Crear nueva categoría"
+                  value={form.newCategoryName}
+                  onChange={(value) => {
+                    updateForm("newCategoryName", value);
+                    updateForm("categoryId", "");
+                    updateForm("categoryName", "");
+                  }}
+                  placeholder="Ej: Gorras"
+                />
+              </div>
+
+              <div className="grid gap-4 sm:grid-cols-3">
+                <InputField
+                  label="Precio llegada"
+                  value={form.costPrice}
+                  onChange={(value) => updateForm("costPrice", value)}
+                  placeholder="45000"
+                />
+
+                <InputField
+                  label="Precio venta"
+                  value={form.salePrice}
+                  onChange={(value) => updateForm("salePrice", value)}
+                  placeholder="85000"
+                />
+
+                <InputField
+                  label="Stock"
+                  type="number"
+                  min="0"
+                  value={form.stock}
+                  onChange={(value) => updateForm("stock", value)}
+                  placeholder="1"
+                />
+              </div>
+
+              <div className="rounded-[24px] bg-black/[0.025] p-4">
+                <p className="text-[14px] font-medium text-black">
+                  Margen calculado automáticamente
+                </p>
+
+                <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                  <div className="rounded-2xl bg-white p-4 ring-1 ring-black/[0.06]">
+                    <p className="text-[12px] text-black/45">
+                      Ganancia por unidad
+                    </p>
+
+                    <p className="mt-1 text-[18px] font-medium text-black">
+                      {formatCurrency(profit.profitMargin)}
+                    </p>
+                  </div>
+
+                  <div className="rounded-2xl bg-red-600 p-4 text-white">
+                    <p className="text-[12px] text-white/65">
+                      Porcentaje de ganancia
+                    </p>
+
+                    <p className="mt-1 text-[18px] font-medium">
+                      {profit.profitPercent.toFixed(1)}%
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-7 flex flex-col-reverse gap-3 border-t border-black/[0.06] pt-5 sm:flex-row sm:justify-end">
+            <button
+              type="button"
+              onClick={closeForm}
+              className="h-11 rounded-2xl border border-black/[0.08] px-5 text-[14px] font-medium text-black/70 transition hover:bg-black/[0.035]"
+            >
+              Cancelar
+            </button>
+
+            <button
+              type="submit"
+              disabled={saving || loadingCode}
+              className="h-11 rounded-2xl bg-red-600 px-6 text-[14px] font-medium text-white shadow-lg shadow-red-600/20 transition hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {saving
+                ? "Guardando..."
+                : editingProduct
+                  ? "Actualizar producto"
+                  : "Guardar producto"}
+            </button>
+          </div>
+        </form>
+      </section>
+    </div>
+  );
+}
+
+function InputField({
+  label,
+  value,
+  onChange,
+  placeholder,
+  type = "text",
+  disabled = false,
+  min,
+}) {
+  return (
+    <label>
+      <span className="text-[13px] font-normal text-black/65">{label}</span>
+
+      <input
+        type={type}
+        min={min}
+        value={value}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.value)}
+        className="mt-2 h-11 w-full rounded-2xl border border-black/[0.08] bg-white px-4 text-[13px] text-black outline-none transition placeholder:text-black/35 focus:border-red-600 focus:ring-4 focus:ring-red-600/10 disabled:bg-black/[0.025] disabled:text-black/45"
+        placeholder={placeholder}
+      />
+    </label>
   );
 }

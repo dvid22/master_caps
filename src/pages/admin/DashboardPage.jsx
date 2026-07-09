@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+  AlertTriangle,
   BadgeDollarSign,
   Boxes,
   CalendarDays,
+  CircleDollarSign,
   Package,
   ShoppingBag,
   TrendingDown,
@@ -33,14 +35,11 @@ function getMonthKey(date) {
 
 function getDefaultMonthKeys() {
   const now = new Date();
-  const currentMonth = getMonthKey(now);
-
   const previous = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-  const previousMonth = getMonthKey(previous);
 
   return {
-    previousMonth,
-    currentMonth,
+    previousMonth: getMonthKey(previous),
+    currentMonth: getMonthKey(now),
   };
 }
 
@@ -58,7 +57,6 @@ function formatMonthLabel(monthKey) {
 
 function formatDateShort(value) {
   const date = toDate(value);
-
   if (!date) return "Sin fecha";
 
   return new Intl.DateTimeFormat("es-CO", {
@@ -82,11 +80,8 @@ function calculateMetrics(sales) {
       const quantity = Number(sale.quantity || 0);
       const total = Number(sale.total || 0);
       const totalCost =
-        Number(sale.totalCost || 0) ||
-        Number(sale.costPrice || 0) * quantity;
-      const profit =
-        Number(sale.profit || 0) ||
-        total - totalCost;
+        Number(sale.totalCost || 0) || Number(sale.costPrice || 0) * quantity;
+      const profit = Number(sale.profit || 0) || total - totalCost;
 
       acc.salesCount += 1;
       acc.units += quantity;
@@ -141,11 +136,8 @@ function buildRanking(sales, getKey, getLabel) {
     const quantity = Number(sale.quantity || 0);
     const revenue = Number(sale.total || 0);
     const cost =
-      Number(sale.totalCost || 0) ||
-      Number(sale.costPrice || 0) * quantity;
-    const profit =
-      Number(sale.profit || 0) ||
-      revenue - cost;
+      Number(sale.totalCost || 0) || Number(sale.costPrice || 0) * quantity;
+    const profit = Number(sale.profit || 0) || revenue - cost;
 
     if (!map.has(key)) {
       map.set(key, {
@@ -159,7 +151,6 @@ function buildRanking(sales, getKey, getLabel) {
     }
 
     const item = map.get(key);
-
     item.salesCount += 1;
     item.units += quantity;
     item.revenue += revenue;
@@ -187,6 +178,7 @@ function buildDailySales(sales) {
       map.set(key, {
         key,
         date,
+        day: date.getDate(),
         label: formatDateShort(date),
         total: 0,
         units: 0,
@@ -194,12 +186,74 @@ function buildDailySales(sales) {
     }
 
     const item = map.get(key);
-
     item.total += total;
     item.units += quantity;
   });
 
   return Array.from(map.values()).sort((a, b) => a.date - b.date);
+}
+
+function buildInventoryAlerts(products, productRanking) {
+  const rankingMap = new Map();
+
+  productRanking.forEach((item) => {
+    rankingMap.set(item.key, item);
+  });
+
+  const alerts = [];
+
+  products.forEach((product) => {
+    const stock = Number(product.stock || 0);
+    const key = product.id || product.productId || product.name;
+    const name = product.name || product.productName || "Producto sin nombre";
+    const ranking = rankingMap.get(key);
+    const soldUnits = Number(ranking?.units || 0);
+
+    if (stock <= 0) {
+      alerts.push({
+        key,
+        level: "critical",
+        title: name,
+        message: "Producto agotado",
+        action: "Reponer",
+      });
+      return;
+    }
+
+    if (stock <= 3) {
+      alerts.push({
+        key,
+        level: "warning",
+        title: name,
+        message: `Stock bajo · quedan ${stock}`,
+        action: "Reponer",
+      });
+      return;
+    }
+
+    if (soldUnits >= 5 && stock <= 8) {
+      alerts.push({
+        key,
+        level: "success",
+        title: name,
+        message: "Alta rotación · revisar compra",
+        action: "Comprar",
+      });
+      return;
+    }
+
+    if (stock >= 20 && soldUnits === 0) {
+      alerts.push({
+        key,
+        level: "neutral",
+        title: name,
+        message: `Stock alto · ${stock} sin rotación`,
+        action: "Promocionar",
+      });
+    }
+  });
+
+  return alerts.slice(0, 4);
 }
 
 function MetricCard({
@@ -210,124 +264,364 @@ function MetricCard({
   previousValue,
   currentValue,
   currency = false,
-  dark = false,
+  color = "red",
 }) {
   const change = getPercentChange(previousValue, currentValue);
   const isPositive = change >= 0;
 
-  return (
-    <article
-      className={`rounded-3xl p-5 shadow-sm ring-1 ${
-        dark
-          ? "bg-brand-black text-white ring-black/5"
-          : "bg-white text-brand-black ring-black/5"
-      }`}
-    >
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <p className={`text-sm ${dark ? "text-white/60" : "text-gray-500"}`}>
-            {title}
-          </p>
+  const colors = {
+    red: "bg-red-50 text-red-600",
+    orange: "bg-orange-50 text-orange-500",
+    purple: "bg-violet-50 text-violet-600",
+    green: "bg-emerald-50 text-emerald-600",
+  };
 
-          <p className="mt-2 text-2xl font-semibold">
+  return (
+    <article className="rounded-[28px] bg-white p-5 shadow-[0_18px_55px_rgba(0,0,0,0.04)] ring-1 ring-black/[0.06]">
+      <div className="flex items-center gap-4">
+        <div
+          className={`flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl ${
+            colors[color] || colors.red
+          }`}
+        >
+          <Icon size={24} strokeWidth={1.8} />
+        </div>
+
+        <div className="min-w-0">
+          <p className="text-[13px] font-normal text-black/52">{title}</p>
+
+          <p className="mt-1 truncate text-[24px] font-medium tracking-[-0.04em] text-black">
             {currency ? formatCurrency(value) : value}
           </p>
 
-          {subtitle && (
-            <p
-              className={`mt-1 text-xs ${
-                dark ? "text-white/50" : "text-gray-500"
+          <div className="mt-2 flex items-center gap-1.5 text-[12px]">
+            <span
+              className={`inline-flex items-center gap-1 font-normal ${
+                isPositive ? "text-emerald-600" : "text-red-600"
               }`}
             >
-              {subtitle}
-            </p>
-          )}
-        </div>
+              {isPositive ? (
+                <TrendingUp size={13} />
+              ) : (
+                <TrendingDown size={13} />
+              )}
+              {Math.abs(change).toFixed(1)}%
+            </span>
 
-        <div
-          className={`flex h-12 w-12 items-center justify-center rounded-2xl ${
-            dark ? "bg-white/10" : "bg-brand-cream"
-          }`}
-        >
-          <Icon size={22} />
+            <span className="text-black/42">{subtitle}</span>
+          </div>
         </div>
-      </div>
-
-      <div
-        className={`mt-4 inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-semibold ${
-          isPositive
-            ? dark
-              ? "bg-green-400/15 text-green-200"
-              : "bg-green-100 text-green-700"
-            : dark
-              ? "bg-red-400/15 text-red-200"
-              : "bg-red-100 text-red-700"
-        }`}
-      >
-        {isPositive ? <TrendingUp size={14} /> : <TrendingDown size={14} />}
-        {Math.abs(change).toFixed(1)}% vs mes comparado
       </div>
     </article>
   );
 }
 
-function RankingList({ title, subtitle, items, valueType = "revenue" }) {
+function LineChart({ previousDailySales, currentDailySales }) {
   const maxValue = Math.max(
-    ...items.map((item) => Number(item[valueType] || 0)),
+    ...previousDailySales.map((item) => Number(item.total || 0)),
+    ...currentDailySales.map((item) => Number(item.total || 0)),
     1
   );
 
-  return (
-    <section className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-black/5">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h2 className="text-lg font-semibold text-brand-black">{title}</h2>
+  function buildPoints(items) {
+    if (items.length === 0) return "";
 
-          {subtitle && (
-            <p className="mt-1 text-sm text-gray-500">{subtitle}</p>
-          )}
+    const limited = items.slice(-30);
+    const maxIndex = Math.max(limited.length - 1, 1);
+
+    return limited
+      .map((item, index) => {
+        const x = (index / maxIndex) * 100;
+        const y = 100 - (Number(item.total || 0) / maxValue) * 82 - 8;
+        return `${x},${y}`;
+      })
+      .join(" ");
+  }
+
+  const currentPoints = buildPoints(currentDailySales);
+  const previousPoints = buildPoints(previousDailySales);
+
+  return (
+    <section className="rounded-[28px] bg-white p-5 shadow-[0_18px_55px_rgba(0,0,0,0.04)] ring-1 ring-black/[0.06] xl:col-span-2">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h2 className="text-[17px] font-medium tracking-[-0.02em] text-black">
+            Resumen de ventas
+          </h2>
+
+          <div className="mt-3 flex items-center gap-4 text-[12px] text-black/50">
+            <span className="flex items-center gap-2">
+              <span className="h-2 w-4 rounded-full bg-red-600" />
+              Mes principal
+            </span>
+            <span className="flex items-center gap-2">
+              <span className="h-2 w-4 rounded-full bg-black/20" />
+              Mes comparado
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-5 h-[285px]">
+        {currentDailySales.length === 0 && previousDailySales.length === 0 ? (
+          <div className="flex h-full items-center justify-center rounded-2xl bg-black/[0.025] text-[13px] text-black/45">
+            No hay datos para graficar.
+          </div>
+        ) : (
+          <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="h-full w-full">
+            {[20, 40, 60, 80].map((y) => (
+              <line
+                key={y}
+                x1="0"
+                x2="100"
+                y1={y}
+                y2={y}
+                stroke="rgba(0,0,0,.08)"
+                strokeWidth=".35"
+              />
+            ))}
+
+            {previousPoints && (
+              <polyline
+                fill="none"
+                points={previousPoints}
+                stroke="rgba(0,0,0,.28)"
+                strokeDasharray="2 2"
+                strokeWidth="1"
+              />
+            )}
+
+            {currentPoints && (
+              <>
+                <polyline
+                  fill="none"
+                  points={currentPoints}
+                  stroke="#dc2626"
+                  strokeWidth="1.35"
+                />
+                <polyline
+                  fill="rgba(220,38,38,.08)"
+                  points={`0,100 ${currentPoints} 100,100`}
+                  stroke="none"
+                />
+              </>
+            )}
+          </svg>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function CategoryChart({ items }) {
+  const colors = ["#dc2626", "#fb923c", "#8b5cf6", "#10b981", "#d4d4d8"];
+  const total = items.reduce((acc, item) => acc + Number(item.revenue || 0), 0);
+
+  let current = 0;
+
+  const gradient =
+    total > 0
+      ? items
+          .slice(0, 5)
+          .map((item, index) => {
+            const value = Number(item.revenue || 0);
+            const percent = (value / total) * 100;
+            const start = current;
+            const end = current + percent;
+            current = end;
+            return `${colors[index]} ${start}% ${end}%`;
+          })
+          .join(", ")
+      : "#f3f4f6 0% 100%";
+
+  return (
+    <section className="rounded-[28px] bg-white p-5 shadow-[0_18px_55px_rgba(0,0,0,0.04)] ring-1 ring-black/[0.06]">
+      <h2 className="text-[17px] font-medium tracking-[-0.02em] text-black">
+        Ventas por categoría
+      </h2>
+
+      <div className="mt-6 grid items-center gap-5 sm:grid-cols-[180px_1fr] xl:grid-cols-1 2xl:grid-cols-[180px_1fr]">
+        <div className="mx-auto flex h-[180px] w-[180px] items-center justify-center rounded-full"
+          style={{ background: `conic-gradient(${gradient})` }}
+        >
+          <div className="h-[88px] w-[88px] rounded-full bg-white" />
         </div>
 
-        <Trophy size={22} className="text-brand-gold" />
+        <div className="space-y-3">
+          {items.length === 0 ? (
+            <p className="rounded-2xl bg-black/[0.025] p-4 text-center text-[13px] text-black/45">
+              Sin categorías vendidas.
+            </p>
+          ) : (
+            items.slice(0, 5).map((item, index) => (
+              <div
+                key={item.key}
+                className="flex items-center justify-between gap-3 text-[13px]"
+              >
+                <div className="flex min-w-0 items-center gap-2">
+                  <span
+                    className="h-2.5 w-2.5 shrink-0 rounded-full"
+                    style={{ backgroundColor: colors[index] }}
+                  />
+                  <span className="truncate text-black/72">{item.label}</span>
+                </div>
+                <span className="shrink-0 font-normal text-black">
+                  {formatCurrency(item.revenue)}
+                </span>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function ProductRanking({ items }) {
+  return (
+    <section className="rounded-[28px] bg-white p-5 shadow-[0_18px_55px_rgba(0,0,0,0.04)] ring-1 ring-black/[0.06]">
+      <div className="flex items-center justify-between">
+        <h2 className="text-[17px] font-medium tracking-[-0.02em] text-black">
+          Productos más vendidos
+        </h2>
+        <Trophy size={18} className="text-red-600" />
       </div>
 
       <div className="mt-5 space-y-4">
         {items.length === 0 ? (
-          <p className="rounded-2xl bg-brand-cream p-4 text-center text-sm text-gray-500">
-            Sin datos para este mes.
+          <p className="rounded-2xl bg-black/[0.025] p-4 text-center text-[13px] text-black/45">
+            Sin productos vendidos.
           </p>
         ) : (
-          items.slice(0, 6).map((item, index) => {
-            const value = Number(item[valueType] || 0);
-            const width = Math.max((value / maxValue) * 100, 7);
+          items.slice(0, 3).map((item, index) => (
+            <article
+              key={item.key}
+              className="flex items-center justify-between gap-3"
+            >
+              <div className="flex min-w-0 items-center gap-3">
+                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-red-50 text-[12px] text-red-600">
+                  {index + 1}
+                </span>
 
-            return (
-              <article key={item.key}>
-                <div className="flex items-start justify-between gap-4">
-                  <div>
-                    <p className="text-sm font-semibold text-brand-black">
-                      {index + 1}. {item.label}
-                    </p>
+                <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-black/[0.035]">
+                  <Package size={18} className="text-black/55" />
+                </div>
 
-                    <p className="mt-1 text-xs text-gray-500">
-                      {item.units} unidad(es) · {item.salesCount} venta(s)
-                    </p>
-                  </div>
-
-                  <p className="text-sm font-semibold text-brand-black">
-                    {formatCurrency(value)}
+                <div className="min-w-0">
+                  <p className="truncate text-[13px] font-medium text-black">
+                    {item.label}
+                  </p>
+                  <p className="text-[12px] text-black/45">
+                    {item.units} unidades vendidas
                   </p>
                 </div>
+              </div>
 
-                <div className="mt-2 h-2 overflow-hidden rounded-full bg-brand-cream">
+              <p className="shrink-0 text-[13px] font-medium text-black">
+                {formatCurrency(item.revenue)}
+              </p>
+            </article>
+          ))
+        )}
+      </div>
+    </section>
+  );
+}
+
+function DailyBarChart({ dailySales, maxDailyTotal }) {
+  return (
+    <section className="rounded-[28px] bg-white p-5 shadow-[0_18px_55px_rgba(0,0,0,0.04)] ring-1 ring-black/[0.06]">
+      <h2 className="text-[17px] font-medium tracking-[-0.02em] text-black">
+        Ventas por día
+      </h2>
+
+      <div className="mt-6 flex h-[205px] items-end gap-3 overflow-x-auto pb-1">
+        {dailySales.length === 0 ? (
+          <div className="flex h-full w-full items-center justify-center rounded-2xl bg-black/[0.025] text-[13px] text-black/45">
+            No hay ventas registradas.
+          </div>
+        ) : (
+          dailySales.slice(-8).map((item) => {
+            const height = Math.max((item.total / maxDailyTotal) * 100, 10);
+
+            return (
+              <div
+                key={item.key}
+                className="flex min-w-[34px] flex-1 flex-col items-center justify-end gap-2"
+              >
+                <div className="flex h-[155px] w-full items-end justify-center rounded-full bg-black/[0.025] px-1">
                   <div
-                    className="h-full rounded-full bg-brand-black"
-                    style={{ width: `${width}%` }}
+                    className="w-full rounded-full bg-gradient-to-t from-red-600 to-red-300"
+                    style={{ height: `${height}%` }}
+                    title={`${item.label}: ${formatCurrency(item.total)}`}
                   />
                 </div>
-              </article>
+                <p className="text-[11px] text-black/45">{item.day}</p>
+              </div>
             );
           })
+        )}
+      </div>
+    </section>
+  );
+}
+
+function InventoryAlerts({ alerts }) {
+  const styles = {
+    critical: "bg-red-50 text-red-600",
+    warning: "bg-orange-50 text-orange-600",
+    success: "bg-emerald-50 text-emerald-600",
+    neutral: "bg-violet-50 text-violet-600",
+  };
+
+  return (
+    <section className="rounded-[28px] bg-white p-5 shadow-[0_18px_55px_rgba(0,0,0,0.04)] ring-1 ring-black/[0.06]">
+      <div className="flex items-center justify-between">
+        <h2 className="text-[17px] font-medium tracking-[-0.02em] text-black">
+          Alertas de inventario
+        </h2>
+        <AlertTriangle size={18} className="text-red-600" />
+      </div>
+
+      <div className="mt-5 space-y-3">
+        {alerts.length === 0 ? (
+          <p className="rounded-2xl bg-black/[0.025] p-4 text-center text-[13px] text-black/45">
+            No hay alertas críticas.
+          </p>
+        ) : (
+          alerts.map((alert) => (
+            <article
+              key={`${alert.key}-${alert.message}`}
+              className="flex items-center justify-between gap-3 rounded-2xl border border-black/[0.05] px-3 py-3"
+            >
+              <div className="flex min-w-0 items-center gap-3">
+                <div
+                  className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl ${
+                    styles[alert.level] || styles.neutral
+                  }`}
+                >
+                  <AlertTriangle size={17} />
+                </div>
+
+                <div className="min-w-0">
+                  <p className="truncate text-[13px] font-medium text-black">
+                    {alert.title}
+                  </p>
+                  <p className="truncate text-[12px] text-black/45">
+                    {alert.message}
+                  </p>
+                </div>
+              </div>
+
+              <span
+                className={`shrink-0 rounded-full px-3 py-1 text-[11px] ${
+                  styles[alert.level] || styles.neutral
+                }`}
+              >
+                {alert.action}
+              </span>
+            </article>
+          ))
         )}
       </div>
     </section>
@@ -376,39 +670,31 @@ export default function DashboardPage() {
     };
   }, []);
 
-  const monthASales = useMemo(() => {
-    return filterSalesByMonth(sales, monthA);
-  }, [sales, monthA]);
+  const monthASales = useMemo(() => filterSalesByMonth(sales, monthA), [
+    sales,
+    monthA,
+  ]);
 
-  const monthBSales = useMemo(() => {
-    return filterSalesByMonth(sales, monthB);
-  }, [sales, monthB]);
+  const monthBSales = useMemo(() => filterSalesByMonth(sales, monthB), [
+    sales,
+    monthB,
+  ]);
 
-  const monthAMetrics = useMemo(() => {
-    return finalizeMetrics(calculateMetrics(monthASales));
-  }, [monthASales]);
+  const monthAMetrics = useMemo(
+    () => finalizeMetrics(calculateMetrics(monthASales)),
+    [monthASales]
+  );
 
-  const monthBMetrics = useMemo(() => {
-    return finalizeMetrics(calculateMetrics(monthBSales));
-  }, [monthBSales]);
+  const monthBMetrics = useMemo(
+    () => finalizeMetrics(calculateMetrics(monthBSales)),
+    [monthBSales]
+  );
 
   const productRanking = useMemo(() => {
     return buildRanking(
       monthBSales,
       (sale) => sale.productId || sale.productName || "sin-producto",
       (sale) => sale.productName || "Producto sin nombre"
-    );
-  }, [monthBSales]);
-
-  const sellerRanking = useMemo(() => {
-    return buildRanking(
-      monthBSales,
-      (sale) =>
-        sale.sellerUid ||
-        sale.sellerEmail ||
-        sale.sellerName ||
-        "sin-vendedor",
-      (sale) => sale.sellerName || sale.sellerEmail || "Sin vendedor"
     );
   }, [monthBSales]);
 
@@ -420,415 +706,122 @@ export default function DashboardPage() {
     );
   }, [monthBSales]);
 
-  const sizeRanking = useMemo(() => {
-    return buildRanking(
-      monthBSales,
-      (sale) => sale.productSize || "Talla única",
-      (sale) => sale.productSize || "Talla única"
-    );
-  }, [monthBSales]);
+  const previousDailySales = useMemo(() => buildDailySales(monthASales), [
+    monthASales,
+  ]);
 
-  const dailySales = useMemo(() => {
-    return buildDailySales(monthBSales);
-  }, [monthBSales]);
+  const currentDailySales = useMemo(() => buildDailySales(monthBSales), [
+    monthBSales,
+  ]);
 
-  const inventoryMetrics = useMemo(() => {
-    return products.reduce(
-      (acc, product) => {
-        const stock = Number(product.stock || 0);
-        const costPrice = Number(product.costPrice || 0);
-        const salePrice = Number(product.salePrice || 0);
-
-        acc.products += 1;
-        acc.units += stock;
-        acc.cost += costPrice * stock;
-        acc.potentialRevenue += salePrice * stock;
-        acc.potentialProfit += (salePrice - costPrice) * stock;
-
-        return acc;
-      },
-      {
-        products: 0,
-        units: 0,
-        cost: 0,
-        potentialRevenue: 0,
-        potentialProfit: 0,
-      }
-    );
-  }, [products]);
-
-  const bestProduct = productRanking[0];
-  const bestSeller = sellerRanking[0];
-  const bestSize = sizeRanking[0];
+  const inventoryAlerts = useMemo(
+    () => buildInventoryAlerts(products, productRanking),
+    [products, productRanking]
+  );
 
   const maxDailyTotal = Math.max(
-    ...dailySales.map((item) => Number(item.total || 0)),
+    ...currentDailySales.map((item) => Number(item.total || 0)),
     1
   );
 
   return (
-    <main className="min-h-screen bg-brand-cream px-4 py-6 sm:px-6">
-      <section className="mx-auto max-w-7xl">
-        <div className="flex flex-col gap-4 border-b border-black/10 pb-6 xl:flex-row xl:items-end xl:justify-between">
+    <main className="min-h-screen bg-[#f7f7f8] px-4 py-5 sm:px-6 lg:px-7">
+      <section className="mx-auto max-w-[1500px]">
+        <section className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
           <div>
-            <p className="text-sm font-medium text-brand-gold">Master Caps</p>
-
-            <h1 className="mt-1 text-3xl font-semibold tracking-tight text-brand-black">
+            <h1 className="text-[30px] font-medium tracking-[-0.045em] text-black">
               Dashboard
             </h1>
-
-            <p className="mt-2 max-w-3xl text-sm text-gray-600">
-              Analiza ventas, inversión, utilidad, productos más vendidos,
-              vendedores destacados, tallas con mayor rotación y comparación
-              entre meses.
+            <p className="mt-1 text-[14px] text-black/50">
+              Resumen real de ventas, productos, categorías e inventario.
             </p>
           </div>
 
-          <div className="grid gap-3 rounded-3xl bg-white p-4 shadow-sm ring-1 ring-black/5 sm:grid-cols-2">
-            <label>
-              <span className="text-xs font-medium text-gray-500">
-                Mes comparado
-              </span>
+          <div className="grid gap-3 rounded-[22px] bg-white p-3 shadow-[0_18px_55px_rgba(0,0,0,0.04)] ring-1 ring-black/[0.06] sm:grid-cols-2">
+            <input
+              type="month"
+              value={monthA}
+              onChange={(event) => setMonthA(event.target.value)}
+              className="h-10 rounded-2xl border border-black/[0.08] px-4 text-[13px] outline-none focus:border-red-600 focus:ring-4 focus:ring-red-600/10"
+            />
 
-              <input
-                type="month"
-                value={monthA}
-                onChange={(event) => setMonthA(event.target.value)}
-                className="mt-2 h-11 rounded-2xl border border-black/10 px-4 text-sm outline-none focus:border-brand-black"
-              />
-            </label>
-
-            <label>
-              <span className="text-xs font-medium text-gray-500">
-                Mes principal
-              </span>
-
-              <input
-                type="month"
-                value={monthB}
-                onChange={(event) => setMonthB(event.target.value)}
-                className="mt-2 h-11 rounded-2xl border border-black/10 px-4 text-sm outline-none focus:border-brand-black"
-              />
-            </label>
+            <input
+              type="month"
+              value={monthB}
+              onChange={(event) => setMonthB(event.target.value)}
+              className="h-10 rounded-2xl border border-black/[0.08] px-4 text-[13px] outline-none focus:border-red-600 focus:ring-4 focus:ring-red-600/10"
+            />
           </div>
-        </div>
+        </section>
 
         {loading ? (
-          <div className="mt-6 rounded-3xl bg-white p-10 text-center text-sm text-gray-500">
+          <div className="mt-5 rounded-[28px] bg-white p-10 text-center text-[14px] text-black/45 shadow-[0_18px_55px_rgba(0,0,0,0.04)] ring-1 ring-black/[0.06]">
             Cargando analíticas en tiempo real...
           </div>
         ) : (
           <>
-            <section className="mt-6 rounded-3xl bg-brand-black p-6 text-white shadow-sm">
-              <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
-                <div>
-                  <p className="text-sm text-white/60">
-                    Comparación de meses
-                  </p>
-
-                  <h2 className="mt-1 text-2xl font-semibold">
-                    {formatMonthLabel(monthA)} vs {formatMonthLabel(monthB)}
-                  </h2>
-                </div>
-
-                <div className="rounded-2xl bg-white/10 px-4 py-3 text-sm">
-                  Mes principal: <strong>{formatMonthLabel(monthB)}</strong>
-                </div>
-              </div>
-
-              <div className="mt-6 grid gap-4 md:grid-cols-2">
-                <div className="rounded-3xl bg-white/10 p-5">
-                  <p className="text-sm text-white/60">
-                    {formatMonthLabel(monthA)}
-                  </p>
-
-                  <p className="mt-2 text-3xl font-semibold">
-                    {formatCurrency(monthAMetrics.revenue)}
-                  </p>
-
-                  <p className="mt-2 text-sm text-white/60">
-                    {monthAMetrics.salesCount} venta(s) ·{" "}
-                    {monthAMetrics.units} unidad(es)
-                  </p>
-                </div>
-
-                <div className="rounded-3xl bg-white p-5 text-brand-black">
-                  <p className="text-sm text-gray-500">
-                    {formatMonthLabel(monthB)}
-                  </p>
-
-                  <p className="mt-2 text-3xl font-semibold">
-                    {formatCurrency(monthBMetrics.revenue)}
-                  </p>
-
-                  <p className="mt-2 text-sm text-gray-500">
-                    {monthBMetrics.salesCount} venta(s) ·{" "}
-                    {monthBMetrics.units} unidad(es)
-                  </p>
-                </div>
-              </div>
-            </section>
-
-            <section className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+            <section className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
               <MetricCard
                 title="Total vendido"
                 value={monthBMetrics.revenue}
                 previousValue={monthAMetrics.revenue}
                 currentValue={monthBMetrics.revenue}
-                subtitle={formatMonthLabel(monthB)}
+                subtitle="vs mes comparado"
                 icon={BadgeDollarSign}
                 currency
-                dark
+                color="red"
               />
 
               <MetricCard
-                title="Ganancia"
-                value={monthBMetrics.profit}
-                previousValue={monthAMetrics.profit}
-                currentValue={monthBMetrics.profit}
-                subtitle={`Margen: ${monthBMetrics.margin.toFixed(1)}%`}
-                icon={TrendingUp}
-                currency
-              />
-
-              <MetricCard
-                title="Inversión / costo"
-                value={monthBMetrics.cost}
-                previousValue={monthAMetrics.cost}
-                currentValue={monthBMetrics.cost}
-                subtitle="Costo de productos vendidos"
-                icon={Boxes}
-                currency
+                title="Ventas"
+                value={`${monthBMetrics.salesCount} ventas`}
+                previousValue={monthAMetrics.salesCount}
+                currentValue={monthBMetrics.salesCount}
+                subtitle="vs mes comparado"
+                icon={ShoppingBag}
+                color="orange"
               />
 
               <MetricCard
                 title="Unidades vendidas"
-                value={monthBMetrics.units}
+                value={`${monthBMetrics.units} unidades`}
                 previousValue={monthAMetrics.units}
                 currentValue={monthBMetrics.units}
-                subtitle={`${monthBMetrics.salesCount} venta(s) registradas`}
-                icon={ShoppingBag}
+                subtitle="vs mes comparado"
+                icon={Boxes}
+                color="purple"
+              />
+
+              <MetricCard
+                title="Utilidad"
+                value={monthBMetrics.profit}
+                previousValue={monthAMetrics.profit}
+                currentValue={monthBMetrics.profit}
+                subtitle={`Margen ${monthBMetrics.margin.toFixed(1)}%`}
+                icon={CircleDollarSign}
+                currency
+                color="green"
               />
             </section>
 
-            <section className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-              <article className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-black/5">
-                <div className="flex items-start justify-between gap-4">
-                  <div>
-                    <p className="text-sm text-gray-500">
-                      Producto más vendido
-                    </p>
+            <section className="mt-5 grid gap-5 xl:grid-cols-[1.35fr_0.9fr]">
+              <LineChart
+                previousDailySales={previousDailySales}
+                currentDailySales={currentDailySales}
+              />
 
-                    <p className="mt-2 text-xl font-semibold text-brand-black">
-                      {bestProduct?.label || "Sin datos"}
-                    </p>
-
-                    <p className="mt-1 text-xs text-gray-500">
-                      {bestProduct
-                        ? `${bestProduct.units} unidad(es) · ${formatCurrency(
-                            bestProduct.revenue
-                          )}`
-                        : "No hay ventas en este mes"}
-                    </p>
-                  </div>
-
-                  <Package size={22} className="text-brand-black" />
-                </div>
-              </article>
-
-              <article className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-black/5">
-                <div className="flex items-start justify-between gap-4">
-                  <div>
-                    <p className="text-sm text-gray-500">Mejor vendedor</p>
-
-                    <p className="mt-2 text-xl font-semibold text-brand-black">
-                      {bestSeller?.label || "Sin datos"}
-                    </p>
-
-                    <p className="mt-1 text-xs text-gray-500">
-                      {bestSeller
-                        ? `${bestSeller.salesCount} venta(s) · ${formatCurrency(
-                            bestSeller.revenue
-                          )}`
-                        : "No hay ventas en este mes"}
-                    </p>
-                  </div>
-
-                  <UserCheck size={22} className="text-brand-black" />
-                </div>
-              </article>
-
-              <article className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-black/5">
-                <div className="flex items-start justify-between gap-4">
-                  <div>
-                    <p className="text-sm text-gray-500">Talla más vendida</p>
-
-                    <p className="mt-2 text-xl font-semibold text-brand-black">
-                      {bestSize?.label || "Sin datos"}
-                    </p>
-
-                    <p className="mt-1 text-xs text-gray-500">
-                      {bestSize
-                        ? `${bestSize.units} unidad(es) · ${formatCurrency(
-                            bestSize.revenue
-                          )}`
-                        : "No hay ventas en este mes"}
-                    </p>
-                  </div>
-
-                  <Package size={22} className="text-brand-black" />
-                </div>
-              </article>
-
-              <article className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-black/5">
-                <div className="flex items-start justify-between gap-4">
-                  <div>
-                    <p className="text-sm text-gray-500">Ticket promedio</p>
-
-                    <p className="mt-2 text-xl font-semibold text-brand-black">
-                      {formatCurrency(monthBMetrics.averageTicket)}
-                    </p>
-
-                    <p className="mt-1 text-xs text-gray-500">
-                      Promedio por venta
-                    </p>
-                  </div>
-
-                  <CalendarDays size={22} className="text-brand-black" />
-                </div>
-              </article>
+              <CategoryChart items={categoryRanking} />
             </section>
 
-            <section className="mt-6 grid gap-6 xl:grid-cols-[1.2fr_0.8fr]">
-              <section className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-black/5">
-                <div className="flex items-start justify-between gap-4">
-                  <div>
-                    <h2 className="text-lg font-semibold text-brand-black">
-                      Ventas por día
-                    </h2>
+            <section className="mt-5 grid gap-5 xl:grid-cols-3">
+              <ProductRanking items={productRanking} />
 
-                    <p className="mt-1 text-sm text-gray-500">
-                      Movimiento diario de {formatMonthLabel(monthB)}.
-                    </p>
-                  </div>
-                </div>
-
-                <div className="mt-6 space-y-4">
-                  {dailySales.length === 0 ? (
-                    <p className="rounded-2xl bg-brand-cream p-4 text-center text-sm text-gray-500">
-                      No hay ventas registradas en este mes.
-                    </p>
-                  ) : (
-                    dailySales.map((item) => {
-                      const width = Math.max(
-                        (item.total / maxDailyTotal) * 100,
-                        7
-                      );
-
-                      return (
-                        <article key={item.key}>
-                          <div className="mb-2 flex items-center justify-between gap-4">
-                            <p className="text-sm font-medium text-brand-black">
-                              {item.label}
-                            </p>
-
-                            <p className="text-sm font-semibold text-brand-black">
-                              {formatCurrency(item.total)}
-                            </p>
-                          </div>
-
-                          <div className="h-3 overflow-hidden rounded-full bg-brand-cream">
-                            <div
-                              className="h-full rounded-full bg-brand-black"
-                              style={{ width: `${width}%` }}
-                            />
-                          </div>
-
-                          <p className="mt-1 text-xs text-gray-500">
-                            {item.units} unidad(es)
-                          </p>
-                        </article>
-                      );
-                    })
-                  )}
-                </div>
-              </section>
-
-              <section className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-black/5">
-                <h2 className="text-lg font-semibold text-brand-black">
-                  Inventario actual
-                </h2>
-
-                <p className="mt-1 text-sm text-gray-500">
-                  Valor estimado del stock disponible.
-                </p>
-
-                <div className="mt-5 space-y-3">
-                  <div className="rounded-3xl bg-brand-cream p-4">
-                    <p className="text-xs text-gray-500">
-                      Productos registrados
-                    </p>
-
-                    <p className="mt-1 text-2xl font-semibold text-brand-black">
-                      {inventoryMetrics.products}
-                    </p>
-                  </div>
-
-                  <div className="rounded-3xl bg-brand-cream p-4">
-                    <p className="text-xs text-gray-500">
-                      Inversión en stock
-                    </p>
-
-                    <p className="mt-1 text-2xl font-semibold text-brand-black">
-                      {formatCurrency(inventoryMetrics.cost)}
-                    </p>
-                  </div>
-
-                  <div className="rounded-3xl bg-black p-4 text-white">
-                    <p className="text-xs text-white/60">
-                      Ganancia potencial
-                    </p>
-
-                    <p className="mt-1 text-2xl font-semibold">
-                      {formatCurrency(inventoryMetrics.potentialProfit)}
-                    </p>
-
-                    <p className="mt-1 text-xs text-white/50">
-                      Si se vende todo el stock actual.
-                    </p>
-                  </div>
-                </div>
-              </section>
-            </section>
-
-            <section className="mt-6 grid gap-6 xl:grid-cols-4">
-              <RankingList
-                title="Productos más vendidos"
-                subtitle={`Ranking de ${formatMonthLabel(monthB)}`}
-                items={productRanking}
-                valueType="revenue"
+              <DailyBarChart
+                dailySales={currentDailySales}
+                maxDailyTotal={maxDailyTotal}
               />
 
-              <RankingList
-                title="Vendedores con más ventas"
-                subtitle="Según ventas registradas por usuario"
-                items={sellerRanking}
-                valueType="revenue"
-              />
-
-              <RankingList
-                title="Categorías más vendidas"
-                subtitle="Ingreso por categoría"
-                items={categoryRanking}
-                valueType="revenue"
-              />
-
-              <RankingList
-                title="Tallas más vendidas"
-                subtitle="Rotación por talla"
-                items={sizeRanking}
-                valueType="revenue"
-              />
+              <InventoryAlerts alerts={inventoryAlerts} />
             </section>
           </>
         )}
