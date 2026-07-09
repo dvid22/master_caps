@@ -1,11 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import {
-  AlertTriangle,
-  BadgeDollarSign,
   CalendarClock,
   Camera,
   CheckCircle2,
   Clock,
+  Eye,
   FileClock,
   MoreVertical,
   Phone,
@@ -21,6 +20,7 @@ import {
   cancelReservation,
   completeReservationSale,
   expireOverdueReservations,
+  markReservationsAsRead,
   subscribeReservations,
 } from "../../services/reservations.service";
 
@@ -176,6 +176,17 @@ export default function ReservationsPage() {
     autoExpire();
   }, [reservations, checkingExpired]);
 
+  const unreadReservations = useMemo(() => {
+    return reservations.filter((reservation) => {
+      return (
+        reservation.status === "active" &&
+        reservation.notificationRead !== true
+      );
+    });
+  }, [reservations]);
+
+  const unreadReservationsCount = unreadReservations.length;
+
   const filteredReservations = useMemo(() => {
     const cleanSearch = search.trim().toLowerCase();
 
@@ -250,6 +261,38 @@ export default function ReservationsPage() {
     }));
   }
 
+  async function handleMarkAsRead() {
+    if (unreadReservationsCount <= 0) {
+      alert("No hay apartados nuevos por marcar como leídos.");
+      return;
+    }
+
+    const confirmRead = window.confirm(
+      `¿Deseas marcar ${unreadReservationsCount} apartado(s) como leídos?`
+    );
+
+    if (!confirmRead) return;
+
+    try {
+      setProcessing(true);
+
+      const actor = getCurrentUserActor();
+
+      await markReservationsAsRead({
+        reservationIds: unreadReservations.map((reservation) => reservation.id),
+        storeId: STORE_ID,
+        actor,
+      });
+
+      alert("Apartados marcados como leídos.");
+    } catch (error) {
+      console.error(error);
+      alert(error.message || "No se pudieron marcar como leídos.");
+    } finally {
+      setProcessing(false);
+    }
+  }
+
   async function handleCompleteSale(event) {
     event.preventDefault();
 
@@ -296,7 +339,10 @@ export default function ReservationsPage() {
 
     try {
       setProcessing(true);
-      await cancelReservation(reservation.id);
+
+      const actor = getCurrentUserActor();
+
+      await cancelReservation(reservation.id, actor);
       alert("Apartado liberado correctamente.");
     } catch (error) {
       console.error(error);
@@ -329,24 +375,53 @@ export default function ReservationsPage() {
       <section className="mx-auto max-w-[1540px]">
         <header className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
           <div>
-            <h1 className="text-[28px] font-medium tracking-[-0.045em] text-black">
-              Apartados
-            </h1>
+            <div className="flex flex-wrap items-center gap-2">
+              <h1 className="text-[28px] font-medium tracking-[-0.045em] text-black">
+                Apartados
+              </h1>
+
+              {unreadReservationsCount > 0 && (
+                <span className="inline-flex animate-pulse items-center gap-1.5 rounded-full bg-red-600 px-3 py-1 text-[12px] font-medium text-white shadow-lg shadow-red-600/20">
+                  {unreadReservationsCount} nuevo(s)
+                </span>
+              )}
+            </div>
 
             <p className="mt-1 text-[13px] font-normal text-black/50">
               Gestiona los productos apartados por tus clientes
             </p>
           </div>
 
-          <button
-            type="button"
-            onClick={handleCheckExpired}
-            disabled={processing}
-            className="inline-flex h-11 items-center justify-center gap-2 rounded-2xl border border-black/[0.08] bg-white px-5 text-[13px] font-medium text-black shadow-[0_12px_35px_rgba(0,0,0,0.04)] transition hover:border-red-500/25 hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            <RefreshCcw size={16} strokeWidth={1.9} />
-            Actualizar vencidos
-          </button>
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+            <button
+              type="button"
+              onClick={handleMarkAsRead}
+              disabled={processing || unreadReservationsCount <= 0}
+              className={`inline-flex h-11 items-center justify-center gap-2 rounded-2xl px-5 text-[13px] font-medium shadow-[0_12px_35px_rgba(0,0,0,0.04)] transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                unreadReservationsCount > 0
+                  ? "animate-pulse bg-red-600 text-white hover:bg-red-700"
+                  : "border border-black/[0.08] bg-white text-black/55"
+              }`}
+            >
+              <Eye size={16} strokeWidth={1.9} />
+              Marcar como leídos
+              {unreadReservationsCount > 0 && (
+                <span className="rounded-full bg-white/18 px-2 py-0.5 text-[11px]">
+                  {unreadReservationsCount}
+                </span>
+              )}
+            </button>
+
+            <button
+              type="button"
+              onClick={handleCheckExpired}
+              disabled={processing}
+              className="inline-flex h-11 items-center justify-center gap-2 rounded-2xl border border-black/[0.08] bg-white px-5 text-[13px] font-medium text-black shadow-[0_12px_35px_rgba(0,0,0,0.04)] transition hover:border-red-500/25 hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <RefreshCcw size={16} strokeWidth={1.9} />
+              Actualizar vencidos
+            </button>
+          </div>
         </header>
 
         <section className="mt-5 rounded-[26px] bg-white p-3 shadow-[0_16px_45px_rgba(0,0,0,0.04)] ring-1 ring-black/[0.06]">
@@ -417,6 +492,10 @@ export default function ReservationsPage() {
                       key={reservation.id}
                       reservation={reservation}
                       processing={processing}
+                      isUnread={
+                        reservation.status === "active" &&
+                        reservation.notificationRead !== true
+                      }
                       onSell={() => openSaleModal(reservation)}
                       onCancel={() => handleCancel(reservation)}
                       onCheckExpired={handleCheckExpired}
@@ -527,6 +606,7 @@ export default function ReservationsPage() {
 function ReservationCard({
   reservation,
   processing,
+  isUnread,
   onSell,
   onCancel,
   onCheckExpired,
@@ -539,7 +619,18 @@ function ReservationCard({
   const quantity = Number(reservation.quantity || 1);
 
   return (
-    <article className="rounded-[24px] bg-white p-3 shadow-[0_14px_40px_rgba(0,0,0,0.035)] ring-1 ring-black/[0.06] transition hover:-translate-y-0.5 hover:shadow-[0_22px_60px_rgba(0,0,0,0.07)]">
+    <article
+      className={`relative rounded-[24px] bg-white p-3 shadow-[0_14px_40px_rgba(0,0,0,0.035)] ring-1 transition hover:-translate-y-0.5 hover:shadow-[0_22px_60px_rgba(0,0,0,0.07)] ${
+        isUnread ? "ring-red-500/35" : "ring-black/[0.06]"
+      }`}
+    >
+      {isUnread && (
+        <div className="absolute right-3 top-3 z-10 inline-flex animate-pulse items-center gap-1.5 rounded-full bg-red-600 px-2.5 py-1 text-[11px] font-medium text-white shadow-lg shadow-red-600/20">
+          <span className="h-1.5 w-1.5 rounded-full bg-white" />
+          Nuevo
+        </div>
+      )}
+
       <div className="flex gap-3">
         <div className="flex h-[86px] w-[86px] shrink-0 items-center justify-center overflow-hidden rounded-[20px] bg-black/[0.025]">
           {reservation.productImageUrl ? (
@@ -553,7 +644,7 @@ function ReservationCard({
           )}
         </div>
 
-        <div className="min-w-0 flex-1">
+        <div className="min-w-0 flex-1 pr-16">
           <div className="flex items-start justify-between gap-2">
             <div className="min-w-0">
               <h3 className="truncate text-[14px] font-medium text-black">

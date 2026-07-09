@@ -9,6 +9,7 @@ import {
   runTransaction,
   serverTimestamp,
   where,
+  writeBatch,
 } from "firebase/firestore";
 
 import { db } from "../firebase/firebase";
@@ -133,6 +134,12 @@ export async function createReservation({
       createdAt: serverTimestamp(),
       expiresAt: Timestamp.fromDate(expiresAtDate),
 
+      notificationRead: false,
+      notificationReadAt: null,
+      notificationReadByUid: "",
+      notificationReadByName: "",
+      notificationReadByEmail: "",
+
       completedAt: null,
       expiredAt: null,
       cancelledAt: null,
@@ -155,6 +162,68 @@ export async function getReservationById(reservationId) {
     id: snapshot.id,
     ...snapshot.data(),
   };
+}
+
+export async function markReservationsAsRead({
+  reservationIds = [],
+  storeId = STORE_ID,
+  actor = null,
+} = {}) {
+  const cleanIds = reservationIds
+    .map((id) => String(id || "").trim())
+    .filter(Boolean);
+
+  const batch = writeBatch(db);
+
+  let updatesCount = 0;
+
+  if (cleanIds.length > 0) {
+    cleanIds.forEach((reservationId) => {
+      const reservationRef = doc(db, "reservations", reservationId);
+
+      batch.update(reservationRef, {
+        notificationRead: true,
+        notificationReadAt: serverTimestamp(),
+        notificationReadByUid: actor?.uid || "",
+        notificationReadByName: actor?.name || "",
+        notificationReadByEmail: actor?.email || "",
+      });
+
+      updatesCount += 1;
+    });
+  } else {
+    const reservationsRef = collection(db, "reservations");
+
+    const q = query(
+      reservationsRef,
+      where("storeId", "==", storeId),
+      where("status", "==", "active")
+    );
+
+    const snapshot = await getDocs(q);
+
+    snapshot.docs.forEach((docItem) => {
+      const reservation = docItem.data();
+
+      if (reservation.notificationRead === true) return;
+
+      batch.update(docItem.ref, {
+        notificationRead: true,
+        notificationReadAt: serverTimestamp(),
+        notificationReadByUid: actor?.uid || "",
+        notificationReadByName: actor?.name || "",
+        notificationReadByEmail: actor?.email || "",
+      });
+
+      updatesCount += 1;
+    });
+  }
+
+  if (updatesCount === 0) return 0;
+
+  await batch.commit();
+
+  return updatesCount;
 }
 
 export async function completeReservationSale({
@@ -238,6 +307,12 @@ export async function completeReservationSale({
       paymentMethod,
       notes: String(notes || "").trim(),
 
+      notificationRead: true,
+      notificationReadAt: serverTimestamp(),
+      notificationReadByUid: seller?.uid || "",
+      notificationReadByName: seller?.name || "",
+      notificationReadByEmail: seller?.email || "",
+
       completedByUid: seller?.uid || "",
       completedByName: seller?.name || "",
       completedByEmail: seller?.email || "",
@@ -249,7 +324,7 @@ export async function completeReservationSale({
   return saleId;
 }
 
-export async function cancelReservation(reservationId) {
+export async function cancelReservation(reservationId, actor = null) {
   if (!reservationId) {
     throw new Error("No se encontró el apartado.");
   }
@@ -285,11 +360,17 @@ export async function cancelReservation(reservationId) {
     transaction.update(reservationRef, {
       status: "cancelled",
       cancelledAt: serverTimestamp(),
+
+      notificationRead: true,
+      notificationReadAt: serverTimestamp(),
+      notificationReadByUid: actor?.uid || "",
+      notificationReadByName: actor?.name || "",
+      notificationReadByEmail: actor?.email || "",
     });
   });
 }
 
-export async function expireReservation(reservationId) {
+export async function expireReservation(reservationId, actor = null) {
   if (!reservationId) {
     throw new Error("No se encontró el apartado.");
   }
@@ -325,6 +406,12 @@ export async function expireReservation(reservationId) {
     transaction.update(reservationRef, {
       status: "expired",
       expiredAt: serverTimestamp(),
+
+      notificationRead: true,
+      notificationReadAt: serverTimestamp(),
+      notificationReadByUid: actor?.uid || "",
+      notificationReadByName: actor?.name || "",
+      notificationReadByEmail: actor?.email || "",
     });
   });
 }

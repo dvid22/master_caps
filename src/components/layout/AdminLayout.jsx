@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import {
   ExternalLink,
@@ -17,6 +17,7 @@ import {
 import { useAuth } from "../../context/AuthContext";
 import { STORE_ID } from "../../services/categories.service";
 import { logoutAdmin } from "../../services/auth.service";
+import { subscribeReservations } from "../../services/reservations.service";
 
 const navItems = [
   {
@@ -60,14 +61,70 @@ function getRoleLabel(role) {
   return labels[role] || "Usuario";
 }
 
+function formatBadgeCount(count) {
+  if (count > 99) return "99+";
+  return String(count);
+}
+
+function ReservationsBadge({ count, isActive = false, compact = false }) {
+  if (!count || count <= 0) return null;
+
+  if (compact) {
+    return (
+      <span
+        className={`absolute -right-1 -top-1 flex h-5 min-w-5 animate-pulse items-center justify-center rounded-full px-1.5 text-[10px] font-semibold leading-none shadow-sm ring-2 ${
+          isActive
+            ? "bg-white text-red-600 ring-red-600"
+            : "bg-red-600 text-white ring-white"
+        }`}
+      >
+        {formatBadgeCount(count)}
+      </span>
+    );
+  }
+
+  return (
+    <span
+      className={`ml-auto inline-flex h-6 min-w-6 animate-pulse items-center justify-center rounded-full px-2 text-[11px] font-semibold leading-none shadow-sm ${
+        isActive ? "bg-white text-red-600" : "bg-red-600 text-white"
+      }`}
+    >
+      {formatBadgeCount(count)}
+    </span>
+  );
+}
+
 export default function AdminLayout() {
   const navigate = useNavigate();
   const { profile, role } = useAuth();
 
   const [mobileOpen, setMobileOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [reservations, setReservations] = useState([]);
 
   const visibleNavItems = navItems.filter((item) => item.roles.includes(role));
+
+  const unreadReservationsCount = reservations.filter((reservation) => {
+    return (
+      reservation.status === "active" && reservation.notificationRead !== true
+    );
+  }).length;
+
+  useEffect(() => {
+    const unsubscribeReservations = subscribeReservations(
+      (reservationsData) => {
+        setReservations(reservationsData);
+      },
+      (error) => {
+        console.error("No se pudieron escuchar los apartados:", error);
+      },
+      STORE_ID
+    );
+
+    return () => {
+      unsubscribeReservations();
+    };
+  }, []);
 
   function openCatalog() {
     const catalogUrl = `${window.location.origin}/catalogo/${STORE_ID}`;
@@ -146,6 +203,7 @@ export default function AdminLayout() {
           <nav className="flex-1 space-y-1.5 px-4 py-2">
             {visibleNavItems.map((item) => {
               const Icon = item.icon;
+              const isReservationsItem = item.label === "Apartados";
 
               return (
                 <NavLink
@@ -153,7 +211,7 @@ export default function AdminLayout() {
                   to={item.path}
                   title={sidebarCollapsed ? item.label : undefined}
                   className={({ isActive }) =>
-                    `group flex items-center rounded-2xl text-[14px] font-normal transition-all ${
+                    `group relative flex items-center rounded-2xl text-[14px] font-normal transition-all ${
                       sidebarCollapsed
                         ? "h-11 justify-center px-0"
                         : "gap-3 px-3.5 py-2.5"
@@ -176,8 +234,27 @@ export default function AdminLayout() {
                         <Icon size={17} strokeWidth={1.9} />
                       </span>
 
+                      {sidebarCollapsed && isReservationsItem && (
+                        <ReservationsBadge
+                          count={unreadReservationsCount}
+                          isActive={isActive}
+                          compact
+                        />
+                      )}
+
                       {!sidebarCollapsed && (
-                        <span className="truncate">{item.label}</span>
+                        <>
+                          <span className="min-w-0 flex-1 truncate">
+                            {item.label}
+                          </span>
+
+                          {isReservationsItem && (
+                            <ReservationsBadge
+                              count={unreadReservationsCount}
+                              isActive={isActive}
+                            />
+                          )}
+                        </>
                       )}
                     </>
                   )}
@@ -238,9 +315,14 @@ export default function AdminLayout() {
             <button
               type="button"
               onClick={() => setMobileOpen(true)}
-              className="flex h-10 w-10 items-center justify-center rounded-2xl border border-black/[0.08] bg-white text-black transition hover:bg-black/[0.035]"
+              className="relative flex h-10 w-10 items-center justify-center rounded-2xl border border-black/[0.08] bg-white text-black transition hover:bg-black/[0.035]"
             >
               <Menu size={19} />
+
+              <ReservationsBadge
+                count={unreadReservationsCount}
+                compact
+              />
             </button>
           </div>
         </header>
@@ -280,6 +362,7 @@ export default function AdminLayout() {
             <nav className="space-y-1.5 px-4 py-4">
               {visibleNavItems.map((item) => {
                 const Icon = item.icon;
+                const isReservationsItem = item.label === "Apartados";
 
                 return (
                   <NavLink
@@ -306,7 +389,16 @@ export default function AdminLayout() {
                           <Icon size={17} strokeWidth={1.9} />
                         </span>
 
-                        <span className="truncate">{item.label}</span>
+                        <span className="min-w-0 flex-1 truncate">
+                          {item.label}
+                        </span>
+
+                        {isReservationsItem && (
+                          <ReservationsBadge
+                            count={unreadReservationsCount}
+                            isActive={isActive}
+                          />
+                        )}
                       </>
                     )}
                   </NavLink>
