@@ -25,6 +25,7 @@ import {
 import { STORE_ID } from "../../services/categories.service";
 import { formatCurrency } from "../../utils/money";
 import { getCurrentUserActor } from "../../services/auth.service";
+
 const emptySaleForm = {
   paymentMethod: "efectivo",
   notes: "",
@@ -50,6 +51,13 @@ function getDaysLeft(value) {
   const diff = date.getTime() - now.getTime();
 
   return Math.ceil(diff / (1000 * 60 * 60 * 24));
+}
+
+function getReservationTotal(reservation) {
+  return (
+    Number(reservation?.unitPrice || 0) *
+    Number(reservation?.quantity || 1)
+  );
 }
 
 function getStatusLabel(status) {
@@ -136,15 +144,29 @@ export default function ReservationsPage() {
 
     return reservations.filter((reservation) => {
       const daysLeft = getDaysLeft(reservation.expiresAt);
+      const productSize = reservation.productSize || "Talla única";
 
       const matchesSearch =
         !cleanSearch ||
-        String(reservation.productName || "").toLowerCase().includes(cleanSearch) ||
-        String(reservation.productCode || "").toLowerCase().includes(cleanSearch) ||
-        String(reservation.categoryName || "").toLowerCase().includes(cleanSearch) ||
-        String(reservation.customerName || "").toLowerCase().includes(cleanSearch) ||
-        String(reservation.customerDocument || "").toLowerCase().includes(cleanSearch) ||
-        String(reservation.customerPhone || "").toLowerCase().includes(cleanSearch);
+        String(reservation.productName || "")
+          .toLowerCase()
+          .includes(cleanSearch) ||
+        String(reservation.productCode || "")
+          .toLowerCase()
+          .includes(cleanSearch) ||
+        String(productSize || "").toLowerCase().includes(cleanSearch) ||
+        String(reservation.categoryName || "")
+          .toLowerCase()
+          .includes(cleanSearch) ||
+        String(reservation.customerName || "")
+          .toLowerCase()
+          .includes(cleanSearch) ||
+        String(reservation.customerDocument || "")
+          .toLowerCase()
+          .includes(cleanSearch) ||
+        String(reservation.customerPhone || "")
+          .toLowerCase()
+          .includes(cleanSearch);
 
       const matchesStatus =
         statusFilter === "all" || reservation.status === statusFilter;
@@ -174,7 +196,7 @@ export default function ReservationsPage() {
     return reservations.reduce(
       (acc, reservation) => {
         const status = reservation.status || "unknown";
-        const total = Number(reservation.unitPrice || 0) * Number(reservation.quantity || 1);
+        const total = getReservationTotal(reservation);
 
         acc.total += 1;
         acc[status] = (acc[status] || 0) + 1;
@@ -224,20 +246,24 @@ export default function ReservationsPage() {
     if (!selectedReservation) return;
 
     const confirmSale = window.confirm(
-      `¿Confirmas la venta del apartado de "${selectedReservation.productName}"?`
+      `¿Confirmas la venta del apartado de "${selectedReservation.productName}" por ${formatCurrency(
+        getReservationTotal(selectedReservation)
+      )}?`
     );
 
     if (!confirmSale) return;
 
     try {
       setProcessing(true);
-const seller = getCurrentUserActor();
+
+      const seller = getCurrentUserActor();
+
       await completeReservationSale({
-  reservationId: selectedReservation.id,
-  paymentMethod: saleForm.paymentMethod,
-  notes: saleForm.notes,
-  seller,
-});
+        reservationId: selectedReservation.id,
+        paymentMethod: saleForm.paymentMethod,
+        notes: saleForm.notes,
+        seller,
+      });
 
       closeSaleModal();
       alert("Apartado vendido correctamente.");
@@ -250,8 +276,10 @@ const seller = getCurrentUserActor();
   }
 
   async function handleCancel(reservation) {
+    const quantity = Number(reservation.quantity || 1);
+
     const confirmCancel = window.confirm(
-      `¿Seguro que deseas liberar "${reservation.productName}"? La unidad volverá al inventario.`
+      `¿Seguro que deseas liberar "${reservation.productName}"? Volverán ${quantity} unidad(es) al inventario.`
     );
 
     if (!confirmCancel) return;
@@ -292,9 +320,11 @@ const seller = getCurrentUserActor();
         <div className="flex flex-col gap-4 border-b border-black/10 pb-6 md:flex-row md:items-end md:justify-between">
           <div>
             <p className="text-sm font-medium text-brand-gold">Master Caps</p>
+
             <h1 className="mt-1 text-3xl font-semibold tracking-tight text-brand-black">
               Apartados
             </h1>
+
             <p className="mt-2 max-w-2xl text-sm text-gray-600">
               Controla las prendas apartadas desde el catálogo público, vende el
               apartado o libera la prenda cuando venza.
@@ -315,6 +345,7 @@ const seller = getCurrentUserActor();
         <section className="mt-6 grid gap-4 md:grid-cols-4">
           <div className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-black/5">
             <p className="text-sm text-gray-500">Apartados activos</p>
+
             <p className="mt-2 text-2xl font-semibold text-brand-black">
               {totals.active || 0}
             </p>
@@ -322,6 +353,7 @@ const seller = getCurrentUserActor();
 
           <div className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-black/5">
             <p className="text-sm text-gray-500">Valor activo</p>
+
             <p className="mt-2 text-2xl font-semibold text-brand-black">
               {formatCurrency(totals.activeValue)}
             </p>
@@ -329,6 +361,7 @@ const seller = getCurrentUserActor();
 
           <div className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-black/5">
             <p className="text-sm text-gray-500">Vendidos desde apartado</p>
+
             <p className="mt-2 text-2xl font-semibold text-brand-black">
               {totals.completed || 0}
             </p>
@@ -336,6 +369,7 @@ const seller = getCurrentUserActor();
 
           <div className="rounded-3xl bg-black p-5 text-white shadow-sm">
             <p className="text-sm text-white/60">Valor vendido</p>
+
             <p className="mt-2 text-2xl font-semibold">
               {formatCurrency(totals.completedValue)}
             </p>
@@ -353,7 +387,7 @@ const seller = getCurrentUserActor();
               value={search}
               onChange={(event) => setSearch(event.target.value)}
               className="h-12 w-full rounded-2xl border border-black/10 bg-white pl-11 pr-4 text-sm outline-none focus:border-brand-black"
-              placeholder="Buscar por cliente, cédula, producto, código..."
+              placeholder="Buscar por cliente, cédula, producto, código o talla..."
             />
           </label>
 
@@ -405,9 +439,9 @@ const seller = getCurrentUserActor();
                 const daysLeft = getDaysLeft(reservation.expiresAt);
                 const isActive = reservation.status === "active";
                 const isOverdue = isActive && daysLeft !== null && daysLeft < 0;
-                const total =
-                  Number(reservation.unitPrice || 0) *
-                  Number(reservation.quantity || 1);
+                const total = getReservationTotal(reservation);
+                const productSize = reservation.productSize || "Talla única";
+                const quantity = Number(reservation.quantity || 1);
 
                 return (
                   <article
@@ -442,6 +476,10 @@ const seller = getCurrentUserActor();
 
                             <p className="mt-1 text-xs text-gray-500">
                               Código: {reservation.productCode}
+                            </p>
+
+                            <p className="mt-1 text-xs font-medium text-brand-black">
+                              Talla: {productSize} · Cantidad: {quantity}
                             </p>
                           </div>
 
@@ -516,7 +554,8 @@ const seller = getCurrentUserActor();
                               </p>
 
                               <p className="mt-1 text-xs opacity-80">
-                                Fecha límite: {formatDate(reservation.expiresAt)}
+                                Fecha límite:{" "}
+                                {formatDate(reservation.expiresAt)}
                               </p>
                             </div>
                           </div>
@@ -524,9 +563,17 @@ const seller = getCurrentUserActor();
 
                         <div className="mt-4 flex items-end justify-between gap-4">
                           <div>
-                            <p className="text-xs text-gray-500">Valor</p>
+                            <p className="text-xs text-gray-500">
+                              Valor total
+                            </p>
+
                             <p className="text-xl font-semibold text-brand-black">
                               {formatCurrency(total)}
+                            </p>
+
+                            <p className="mt-1 text-xs text-gray-500">
+                              {quantity} x{" "}
+                              {formatCurrency(reservation.unitPrice)}
                             </p>
                           </div>
 
@@ -622,8 +669,17 @@ const seller = getCurrentUserActor();
                   {selectedReservation.customerDocument}
                 </p>
 
+                <p className="mt-1 text-sm text-gray-500">
+                  Talla: {selectedReservation.productSize || "Talla única"} ·
+                  Cantidad: {selectedReservation.quantity || 1}
+                </p>
+
+                <p className="mt-1 text-sm text-gray-500">
+                  Unitario: {formatCurrency(selectedReservation.unitPrice)}
+                </p>
+
                 <p className="mt-3 text-2xl font-semibold text-brand-black">
-                  {formatCurrency(selectedReservation.unitPrice)}
+                  {formatCurrency(getReservationTotal(selectedReservation))}
                 </p>
               </div>
 

@@ -23,6 +23,7 @@ import {
 
 import { formatCurrency, toNumber } from "../../utils/money";
 import { getCurrentUserActor } from "../../services/auth.service";
+
 const emptySaleForm = {
   quantity: "1",
   customerName: "",
@@ -41,6 +42,7 @@ export default function SalesPage() {
   const [search, setSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [stockFilter, setStockFilter] = useState("available");
+  const [sizeFilter, setSizeFilter] = useState("all");
   const [minPrice, setMinPrice] = useState("");
   const [maxPrice, setMaxPrice] = useState("");
 
@@ -121,6 +123,14 @@ export default function SalesPage() {
     }
   }, [selectedProduct, saleForm.quantity]);
 
+  const availableSizes = useMemo(() => {
+    const sizes = products
+      .map((product) => product.size || "Talla única")
+      .filter(Boolean);
+
+    return [...new Set(sizes)].sort((a, b) => a.localeCompare(b));
+  }, [products]);
+
   const filteredProducts = useMemo(() => {
     const cleanSearch = search.trim().toLowerCase();
     const cleanMinPrice = toNumber(minPrice);
@@ -129,12 +139,14 @@ export default function SalesPage() {
     return products.filter((product) => {
       const salePrice = Number(product.salePrice || 0);
       const stock = Number(product.stock || 0);
+      const productSize = product.size || "Talla única";
 
       const matchesSearch =
         !cleanSearch ||
         String(product.name || "").toLowerCase().includes(cleanSearch) ||
         String(product.code || "").toLowerCase().includes(cleanSearch) ||
-        String(product.categoryName || "").toLowerCase().includes(cleanSearch);
+        String(product.categoryName || "").toLowerCase().includes(cleanSearch) ||
+        String(productSize || "").toLowerCase().includes(cleanSearch);
 
       const matchesCategory =
         categoryFilter === "all" || product.categoryId === categoryFilter;
@@ -144,6 +156,9 @@ export default function SalesPage() {
         (stockFilter === "available" && stock > 0) ||
         (stockFilter === "empty" && stock <= 0);
 
+      const matchesSize =
+        sizeFilter === "all" || productSize === sizeFilter;
+
       const matchesMinPrice = !cleanMinPrice || salePrice >= cleanMinPrice;
       const matchesMaxPrice = !cleanMaxPrice || salePrice <= cleanMaxPrice;
 
@@ -151,11 +166,20 @@ export default function SalesPage() {
         matchesSearch &&
         matchesCategory &&
         matchesStock &&
+        matchesSize &&
         matchesMinPrice &&
         matchesMaxPrice
       );
     });
-  }, [products, search, categoryFilter, stockFilter, minPrice, maxPrice]);
+  }, [
+    products,
+    search,
+    categoryFilter,
+    stockFilter,
+    sizeFilter,
+    minPrice,
+    maxPrice,
+  ]);
 
   const salePreview = useMemo(() => {
     if (!selectedProduct) {
@@ -259,16 +283,18 @@ export default function SalesPage() {
 
     try {
       setSelling(true);
-const seller = getCurrentUserActor();
+
+      const seller = getCurrentUserActor();
+
       await createDirectSale({
-  productId: selectedProduct.id,
-  quantity,
-  customerName: saleForm.customerName,
-  paymentMethod: saleForm.paymentMethod,
-  notes: saleForm.notes,
-  storeId: STORE_ID,
-  seller,
-});
+        productId: selectedProduct.id,
+        quantity,
+        customerName: saleForm.customerName,
+        paymentMethod: saleForm.paymentMethod,
+        notes: saleForm.notes,
+        storeId: STORE_ID,
+        seller,
+      });
 
       clearSelectedProduct();
 
@@ -287,9 +313,11 @@ const seller = getCurrentUserActor();
         <div className="flex flex-col gap-4 border-b border-black/10 pb-6 md:flex-row md:items-end md:justify-between">
           <div>
             <p className="text-sm font-medium text-brand-gold">Master Caps</p>
+
             <h1 className="mt-1 text-3xl font-semibold tracking-tight text-brand-black">
               Ventas
             </h1>
+
             <p className="mt-2 max-w-2xl text-sm text-gray-600">
               Selecciona productos del inventario, registra ventas y descuenta
               stock automáticamente en tiempo real.
@@ -300,6 +328,7 @@ const seller = getCurrentUserActor();
         <section className="mt-6 grid gap-4 md:grid-cols-4">
           <div className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-black/5">
             <p className="text-sm text-gray-500">Ventas registradas</p>
+
             <p className="mt-2 text-2xl font-semibold text-brand-black">
               {totals.salesCount}
             </p>
@@ -307,6 +336,7 @@ const seller = getCurrentUserActor();
 
           <div className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-black/5">
             <p className="text-sm text-gray-500">Unidades vendidas</p>
+
             <p className="mt-2 text-2xl font-semibold text-brand-black">
               {totals.units}
             </p>
@@ -314,6 +344,7 @@ const seller = getCurrentUserActor();
 
           <div className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-black/5">
             <p className="text-sm text-gray-500">Total vendido</p>
+
             <p className="mt-2 text-2xl font-semibold text-brand-black">
               {formatCurrency(totals.total)}
             </p>
@@ -321,6 +352,7 @@ const seller = getCurrentUserActor();
 
           <div className="rounded-3xl bg-black p-5 text-white shadow-sm">
             <p className="text-sm text-white/60">Ganancia estimada</p>
+
             <p className="mt-2 text-2xl font-semibold">
               {formatCurrency(totals.profit)}
             </p>
@@ -329,17 +361,18 @@ const seller = getCurrentUserActor();
 
         <section className="mt-6 grid gap-6 lg:grid-cols-[1fr_380px]">
           <div>
-            <div className="grid gap-3 rounded-3xl bg-white p-4 shadow-sm ring-1 ring-black/5 md:grid-cols-[1fr_180px_160px_130px_130px]">
+            <div className="grid gap-3 rounded-3xl bg-white p-4 shadow-sm ring-1 ring-black/5 md:grid-cols-[1fr_150px_130px_130px_120px_120px]">
               <label className="relative block">
                 <Search
                   size={18}
                   className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-gray-400"
                 />
+
                 <input
                   value={search}
                   onChange={(event) => setSearch(event.target.value)}
                   className="h-12 w-full rounded-2xl border border-black/10 bg-white pl-11 pr-4 text-sm outline-none focus:border-brand-black"
-                  placeholder="Buscar producto..."
+                  placeholder="Buscar producto, código o talla..."
                 />
               </label>
 
@@ -366,6 +399,19 @@ const seller = getCurrentUserActor();
                 <option value="all">Todos</option>
               </select>
 
+              <select
+                value={sizeFilter}
+                onChange={(event) => setSizeFilter(event.target.value)}
+                className="h-12 rounded-2xl border border-black/10 bg-white px-4 text-sm outline-none focus:border-brand-black"
+              >
+                <option value="all">Tallas</option>
+                {availableSizes.map((size) => (
+                  <option key={size} value={size}>
+                    {size}
+                  </option>
+                ))}
+              </select>
+
               <input
                 value={minPrice}
                 onChange={(event) => setMinPrice(event.target.value)}
@@ -388,13 +434,12 @@ const seller = getCurrentUserActor();
                 </div>
               ) : filteredProducts.length === 0 ? (
                 <div className="rounded-3xl bg-white p-10 text-center">
-                  <ShoppingBag
-                    size={34}
-                    className="mx-auto text-gray-400"
-                  />
+                  <ShoppingBag size={34} className="mx-auto text-gray-400" />
+
                   <h2 className="mt-4 text-lg font-semibold text-brand-black">
                     No hay productos para vender
                   </h2>
+
                   <p className="mt-2 text-sm text-gray-500">
                     Revisa los filtros o crea productos en inventario.
                   </p>
@@ -404,6 +449,7 @@ const seller = getCurrentUserActor();
                   {filteredProducts.map((product) => {
                     const stock = Number(product.stock || 0);
                     const isSelected = selectedProduct?.id === product.id;
+                    const productSize = product.size || "Talla única";
 
                     return (
                       <article
@@ -451,11 +497,16 @@ const seller = getCurrentUserActor();
                             Código: {product.code}
                           </p>
 
+                          <p className="mt-1 text-xs font-medium text-brand-black">
+                            Talla: {productSize}
+                          </p>
+
                           <div className="mt-4 flex items-end justify-between gap-3">
                             <div>
                               <p className="text-xs text-gray-500">
                                 Precio venta
                               </p>
+
                               <p className="text-xl font-semibold text-brand-black">
                                 {formatCurrency(product.salePrice)}
                               </p>
@@ -486,6 +537,7 @@ const seller = getCurrentUserActor();
                   <p className="text-xs font-medium uppercase tracking-wide text-brand-gold">
                     Nueva venta
                   </p>
+
                   <h2 className="text-lg font-semibold text-brand-black">
                     Producto seleccionado
                   </h2>
@@ -504,13 +556,12 @@ const seller = getCurrentUserActor();
 
               {!selectedProduct ? (
                 <div className="p-8 text-center">
-                  <PackageCheck
-                    size={34}
-                    className="mx-auto text-gray-400"
-                  />
+                  <PackageCheck size={34} className="mx-auto text-gray-400" />
+
                   <p className="mt-4 text-sm font-medium text-brand-black">
                     Selecciona un producto
                   </p>
+
                   <p className="mt-1 text-sm text-gray-500">
                     Haz clic en vender sobre una prenda disponible.
                   </p>
@@ -536,12 +587,19 @@ const seller = getCurrentUserActor();
                       <p className="text-xs font-medium uppercase tracking-wide text-brand-gold">
                         {selectedProduct.categoryName}
                       </p>
+
                       <h3 className="mt-1 font-semibold text-brand-black">
                         {selectedProduct.name}
                       </h3>
+
                       <p className="mt-1 text-xs text-gray-500">
                         Código: {selectedProduct.code}
                       </p>
+
+                      <p className="mt-1 text-xs font-medium text-brand-black">
+                        Talla: {selectedProduct.size || "Talla única"}
+                      </p>
+
                       <p className="mt-2 text-sm font-semibold text-brand-black">
                         {formatCurrency(selectedProduct.salePrice)}
                       </p>
@@ -557,7 +615,8 @@ const seller = getCurrentUserActor();
                       <button
                         type="button"
                         onClick={decreaseQuantity}
-                        className="flex h-11 w-11 items-center justify-center rounded-2xl border border-black/10 hover:border-brand-black"
+                        disabled={Number(saleForm.quantity || 0) <= 1}
+                        className="flex h-11 w-11 items-center justify-center rounded-2xl border border-black/10 hover:border-brand-black disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         <Minus size={17} />
                       </button>
@@ -576,7 +635,11 @@ const seller = getCurrentUserActor();
                       <button
                         type="button"
                         onClick={increaseQuantity}
-                        className="flex h-11 w-11 items-center justify-center rounded-2xl border border-black/10 hover:border-brand-black"
+                        disabled={
+                          Number(saleForm.quantity || 0) >=
+                          Number(selectedProduct.stock || 0)
+                        }
+                        className="flex h-11 w-11 items-center justify-center rounded-2xl border border-black/10 hover:border-brand-black disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         <Plus size={17} />
                       </button>
@@ -592,6 +655,7 @@ const seller = getCurrentUserActor();
                       <span className="text-sm font-medium text-brand-black">
                         Cliente / referencia opcional
                       </span>
+
                       <input
                         value={saleForm.customerName}
                         onChange={(event) =>
@@ -606,6 +670,7 @@ const seller = getCurrentUserActor();
                       <span className="text-sm font-medium text-brand-black">
                         Método de pago
                       </span>
+
                       <select
                         value={saleForm.paymentMethod}
                         onChange={(event) =>
@@ -626,6 +691,7 @@ const seller = getCurrentUserActor();
                       <span className="text-sm font-medium text-brand-black">
                         Observaciones
                       </span>
+
                       <textarea
                         value={saleForm.notes}
                         onChange={(event) =>
@@ -640,6 +706,7 @@ const seller = getCurrentUserActor();
                   <div className="mt-5 rounded-3xl bg-brand-cream p-4">
                     <div className="flex items-center gap-2">
                       <BadgeDollarSign size={20} className="text-brand-black" />
+
                       <p className="text-sm font-semibold text-brand-black">
                         Resumen de venta
                       </p>
@@ -648,6 +715,7 @@ const seller = getCurrentUserActor();
                     <div className="mt-4 space-y-2 text-sm">
                       <div className="flex justify-between gap-4">
                         <span className="text-gray-500">Precio unitario</span>
+
                         <strong className="text-brand-black">
                           {formatCurrency(salePreview.unitPrice)}
                         </strong>
@@ -655,6 +723,7 @@ const seller = getCurrentUserActor();
 
                       <div className="flex justify-between gap-4">
                         <span className="text-gray-500">Cantidad</span>
+
                         <strong className="text-brand-black">
                           {salePreview.quantity}
                         </strong>
@@ -662,6 +731,7 @@ const seller = getCurrentUserActor();
 
                       <div className="flex justify-between gap-4 border-t border-black/10 pt-3">
                         <span className="text-gray-500">Total</span>
+
                         <strong className="text-lg text-brand-black">
                           {formatCurrency(salePreview.total)}
                         </strong>
@@ -671,6 +741,7 @@ const seller = getCurrentUserActor();
                         <span className="text-gray-500">
                           Ganancia estimada
                         </span>
+
                         <strong className="text-green-700">
                           {formatCurrency(salePreview.profit)}
                         </strong>
@@ -713,8 +784,17 @@ const seller = getCurrentUserActor();
                             <p className="text-sm font-semibold text-brand-black">
                               {sale.productName}
                             </p>
+
                             <p className="mt-1 text-xs text-gray-500">
-                              {sale.productCode} · {sale.categoryName}
+                              {sale.productCode} · {sale.categoryName} · Talla:{" "}
+                              {sale.productSize || "Talla única"}
+                            </p>
+
+                            <p className="mt-1 text-xs text-gray-500">
+                              Vendedor:{" "}
+                              {sale.sellerName ||
+                                sale.sellerEmail ||
+                                "Sin vendedor"}
                             </p>
                           </div>
 
@@ -728,6 +808,7 @@ const seller = getCurrentUserActor();
                             <p className="text-xs text-gray-500">
                               Cantidad: {sale.quantity}
                             </p>
+
                             <p className="text-xs text-gray-500">
                               Pago: {sale.paymentMethod || "N/A"}
                             </p>

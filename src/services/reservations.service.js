@@ -29,7 +29,6 @@ function mapReservationsSnapshot(snapshot) {
 
 export function subscribeReservations(callback, onError, storeId = STORE_ID) {
   const reservationsRef = collection(db, "reservations");
-
   const q = query(reservationsRef, where("storeId", "==", storeId));
 
   return onSnapshot(
@@ -46,6 +45,7 @@ export function subscribeReservations(callback, onError, storeId = STORE_ID) {
 
 export async function createReservation({
   productId,
+  quantity = 1,
   customerName,
   customerDocument,
   customerPhone = "",
@@ -55,9 +55,14 @@ export async function createReservation({
   const cleanName = String(customerName || "").trim();
   const cleanDocument = String(customerDocument || "").trim();
   const cleanPhone = String(customerPhone || "").trim();
+  const cleanQuantity = Number(quantity || 1);
 
   if (!cleanProductId) {
     throw new Error("No se encontró el producto a apartar.");
+  }
+
+  if (!Number.isFinite(cleanQuantity) || cleanQuantity <= 0) {
+    throw new Error("La cantidad debe ser mayor a cero.");
   }
 
   if (!cleanName) {
@@ -90,7 +95,13 @@ export async function createReservation({
       throw new Error("Esta prenda ya no está disponible.");
     }
 
-    const newStock = currentStock - 1;
+    if (cleanQuantity > currentStock) {
+      throw new Error(
+        `No puedes apartar ${cleanQuantity} unidad(es). Solo hay ${currentStock} disponible(s).`
+      );
+    }
+
+    const newStock = currentStock - cleanQuantity;
 
     transaction.update(productRef, {
       stock: newStock,
@@ -104,12 +115,13 @@ export async function createReservation({
       productId: cleanProductId,
       productName: product.name || "",
       productCode: product.code || "",
+      productSize: product.size || "Talla única",
       productImageUrl: product.imageUrl || "",
       categoryId: product.categoryId || "",
       categoryName: product.categoryName || "",
       unitPrice: Number(product.salePrice || 0),
       costPrice: Number(product.costPrice || 0),
-      quantity: 1,
+      quantity: cleanQuantity,
 
       customerName: cleanName,
       customerDocument: cleanDocument,
@@ -192,24 +204,30 @@ export async function completeReservationSale({
       productId: reservation.productId || "",
       productName: reservation.productName || "",
       productCode: reservation.productCode || "",
+      productSize: reservation.productSize || "Talla única",
       categoryId: reservation.categoryId || "",
       categoryName: reservation.categoryName || "",
+
       quantity,
       unitPrice,
       costPrice,
       total,
       totalCost,
       profit,
+
       customerName: reservation.customerName || "",
       customerDocument: reservation.customerDocument || "",
       customerPhone: reservation.customerPhone || "",
+
       paymentMethod,
       notes: String(notes || "").trim(),
       source: "reservation",
       reservationId,
+
       sellerUid: seller?.uid || "",
-sellerName: seller?.name || "",
-sellerEmail: seller?.email || "",
+      sellerName: seller?.name || "",
+      sellerEmail: seller?.email || "",
+
       createdAt: serverTimestamp(),
     });
 
@@ -219,9 +237,10 @@ sellerEmail: seller?.email || "",
       saleId: saleRef.id,
       paymentMethod,
       notes: String(notes || "").trim(),
+
       completedByUid: seller?.uid || "",
-completedByName: seller?.name || "",
-completedByEmail: seller?.email || "",
+      completedByName: seller?.name || "",
+      completedByEmail: seller?.email || "",
     });
 
     return saleRef.id;

@@ -20,6 +20,7 @@ export default function CatalogPage() {
 
   const [search, setSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("all");
+  const [sizeFilter, setSizeFilter] = useState("all");
 
   const [loading, setLoading] = useState(true);
 
@@ -54,11 +55,21 @@ export default function CatalogPage() {
     };
   }, [storeId]);
 
+  const availableSizes = useMemo(() => {
+    const sizes = products
+      .filter((product) => Number(product.stock || 0) > 0)
+      .map((product) => product.size || "Talla única")
+      .filter(Boolean);
+
+    return [...new Set(sizes)].sort((a, b) => a.localeCompare(b));
+  }, [products]);
+
   const visibleProducts = useMemo(() => {
     const cleanSearch = search.trim().toLowerCase();
 
     return products.filter((product) => {
       const stock = Number(product.stock || 0);
+      const productSize = product.size || "Talla única";
 
       const matchesStock = stock > 0;
 
@@ -66,14 +77,18 @@ export default function CatalogPage() {
         !cleanSearch ||
         String(product.name || "").toLowerCase().includes(cleanSearch) ||
         String(product.code || "").toLowerCase().includes(cleanSearch) ||
-        String(product.categoryName || "").toLowerCase().includes(cleanSearch);
+        String(product.categoryName || "").toLowerCase().includes(cleanSearch) ||
+        String(productSize || "").toLowerCase().includes(cleanSearch);
 
       const matchesCategory =
         categoryFilter === "all" || product.categoryId === categoryFilter;
 
-      return matchesStock && matchesSearch && matchesCategory;
+      const matchesSize =
+        sizeFilter === "all" || productSize === sizeFilter;
+
+      return matchesStock && matchesSearch && matchesCategory && matchesSize;
     });
-  }, [products, search, categoryFilter]);
+  }, [products, search, categoryFilter, sizeFilter]);
 
   return (
     <main className="min-h-screen bg-brand-cream">
@@ -110,7 +125,7 @@ export default function CatalogPage() {
       </section>
 
       <section className="mx-auto max-w-7xl px-4 py-6 sm:px-6">
-        <div className="grid gap-4 rounded-3xl bg-white p-4 shadow-sm ring-1 ring-black/5 md:grid-cols-[1fr_260px]">
+        <div className="grid gap-4 rounded-3xl bg-white p-4 shadow-sm ring-1 ring-black/5 md:grid-cols-[1fr_220px_220px]">
           <label className="relative block">
             <Search
               size={18}
@@ -121,7 +136,7 @@ export default function CatalogPage() {
               value={search}
               onChange={(event) => setSearch(event.target.value)}
               className="h-12 w-full rounded-2xl border border-black/10 bg-white pl-11 pr-4 text-sm outline-none focus:border-brand-black"
-              placeholder="Buscar por nombre, código o categoría..."
+              placeholder="Buscar por nombre, código, categoría o talla..."
             />
           </label>
 
@@ -137,6 +152,19 @@ export default function CatalogPage() {
               </option>
             ))}
           </select>
+
+          <select
+            value={sizeFilter}
+            onChange={(event) => setSizeFilter(event.target.value)}
+            className="h-12 rounded-2xl border border-black/10 bg-white px-4 text-sm outline-none focus:border-brand-black"
+          >
+            <option value="all">Todas las tallas</option>
+            {availableSizes.map((size) => (
+              <option key={size} value={size}>
+                {size}
+              </option>
+            ))}
+          </select>
         </div>
 
         <section className="mt-6">
@@ -147,9 +175,11 @@ export default function CatalogPage() {
           ) : visibleProducts.length === 0 ? (
             <div className="rounded-3xl bg-white p-10 text-center">
               <PackageSearch size={38} className="mx-auto text-gray-400" />
+
               <h2 className="mt-4 text-xl font-semibold text-brand-black">
                 No hay prendas disponibles
               </h2>
+
               <p className="mt-2 text-sm text-gray-500">
                 En este momento no hay productos con stock disponible.
               </p>
@@ -158,6 +188,7 @@ export default function CatalogPage() {
             <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
               {visibleProducts.map((product) => {
                 const stock = Number(product.stock || 0);
+                const productSize = product.size || "Talla única";
 
                 return (
                   <article
@@ -193,6 +224,10 @@ export default function CatalogPage() {
 
                       <p className="mt-1 text-xs text-gray-500">
                         Código: {product.code}
+                      </p>
+
+                      <p className="mt-1 text-xs font-medium text-brand-black">
+                        Talla: {productSize}
                       </p>
 
                       <div className="mt-4 flex items-end justify-between gap-3">
