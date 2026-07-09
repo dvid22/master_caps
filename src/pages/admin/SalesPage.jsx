@@ -22,7 +22,7 @@ import {
 } from "../../services/sales.service";
 
 import { formatCurrency, toNumber } from "../../utils/money";
-
+import { getCurrentUserActor } from "../../services/auth.service";
 const emptySaleForm = {
   quantity: "1",
   customerName: "",
@@ -259,15 +259,16 @@ export default function SalesPage() {
 
     try {
       setSelling(true);
-
+const seller = getCurrentUserActor();
       await createDirectSale({
-        productId: selectedProduct.id,
-        quantity,
-        customerName: saleForm.customerName,
-        paymentMethod: saleForm.paymentMethod,
-        notes: saleForm.notes,
-        storeId: STORE_ID,
-      });
+  productId: selectedProduct.id,
+  quantity,
+  customerName: saleForm.customerName,
+  paymentMethod: saleForm.paymentMethod,
+  notes: saleForm.notes,
+  storeId: STORE_ID,
+  seller,
+});
 
       clearSelectedProduct();
 

@@ -149,6 +149,7 @@ export async function completeReservationSale({
   reservationId,
   paymentMethod = "efectivo",
   notes = "",
+  seller = null,
 }) {
   if (!reservationId) {
     throw new Error("No se encontró el apartado.");
@@ -206,6 +207,9 @@ export async function completeReservationSale({
       notes: String(notes || "").trim(),
       source: "reservation",
       reservationId,
+      sellerUid: seller?.uid || "",
+sellerName: seller?.name || "",
+sellerEmail: seller?.email || "",
       createdAt: serverTimestamp(),
     });
 
@@ -215,6 +219,9 @@ export async function completeReservationSale({
       saleId: saleRef.id,
       paymentMethod,
       notes: String(notes || "").trim(),
+      completedByUid: seller?.uid || "",
+completedByName: seller?.name || "",
+completedByEmail: seller?.email || "",
     });
 
     return saleRef.id;

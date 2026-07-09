@@ -58,6 +58,7 @@ export async function createDirectSale({
   paymentMethod = "efectivo",
   notes = "",
   storeId = STORE_ID,
+  seller = null,
 }) {
   if (!productId) {
     throw new Error("Debes seleccionar un producto.");
@@ -124,7 +125,11 @@ export async function createDirectSale({
       notes: String(notes || "").trim(),
       source: "direct",
       reservationId: null,
+      sellerUid: seller?.uid || "",
+sellerName: seller?.name || "",
+sellerEmail: seller?.email || "",
       createdAt: serverTimestamp(),
+      
     });
 
     return saleRef.id;

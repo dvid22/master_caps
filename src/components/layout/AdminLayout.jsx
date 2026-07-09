@@ -9,6 +9,8 @@ import {
   ShoppingBag,
   Store,
   X,
+  Users,
+  LayoutDashboard,
 } from "lucide-react";
 
 import { STORE_ID } from "../../services/categories.service";
@@ -30,6 +32,16 @@ const navItems = [
     path: "/admin/apartados",
     icon: FileClock,
   },
+  {
+  label: "Usuarios",
+  path: "/admin/usuarios",
+  icon: Users,
+},
+{
+  label: "Dashboard",
+  path: "/admin/dashboard",
+  icon: LayoutDashboard,
+},
 ];
 
 export default function AdminLayout() {

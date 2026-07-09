@@ -96,7 +96,12 @@ export async function getProducts(storeId = STORE_ID) {
   return mapProductsSnapshot(snapshot);
 }
 
-export async function createProduct(productData, imageFile, storeId = STORE_ID) {
+export async function createProduct(
+  productData,
+  imageFile,
+  storeId = STORE_ID,
+  actor = null
+) {
   const imagePayload = await uploadProductImage(imageFile, storeId);
 
   const productsRef = collection(db, "products");
@@ -107,6 +112,15 @@ export async function createProduct(productData, imageFile, storeId = STORE_ID) 
     imageUrl: imagePayload?.imageUrl || "",
     imagePath: imagePayload?.imagePath || "",
     status: "available",
+
+    createdByUid: actor?.uid || "",
+    createdByName: actor?.name || "",
+    createdByEmail: actor?.email || "",
+
+    updatedByUid: actor?.uid || "",
+    updatedByName: actor?.name || "",
+    updatedByEmail: actor?.email || "",
+
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   });
@@ -118,7 +132,8 @@ export async function updateProduct(
   productId,
   productData,
   imageFile,
-  oldImagePath
+  oldImagePath,
+  actor = null
 ) {
   const productRef = doc(db, "products", productId);
 
@@ -143,6 +158,11 @@ export async function updateProduct(
           imagePath: imagePayload.imagePath,
         }
       : {}),
+
+    updatedByUid: actor?.uid || "",
+    updatedByName: actor?.name || "",
+    updatedByEmail: actor?.email || "",
+
     updatedAt: serverTimestamp(),
   });
 }

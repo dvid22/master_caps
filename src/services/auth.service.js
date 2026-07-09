@@ -10,6 +10,24 @@ export function subscribeAuth(callback) {
   return onAuthStateChanged(auth, callback);
 }
 
+export function getCurrentUserActor() {
+  const user = auth.currentUser;
+
+  if (!user) {
+    return {
+      uid: "",
+      name: "Sin usuario",
+      email: "",
+    };
+  }
+
+  return {
+    uid: user.uid,
+    name: user.displayName || user.email || "Usuario",
+    email: user.email || "",
+  };
+}
+
 export async function loginAdmin(email, password) {
   const cleanEmail = String(email || "").trim();
 

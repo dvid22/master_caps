@@ -28,7 +28,7 @@ import {
   formatCurrency,
   toNumber,
 } from "../../utils/money";
-
+import { getCurrentUserActor } from "../../services/auth.service";
 const emptyForm = {
   name: "",
   code: "",
@@ -248,17 +248,18 @@ export default function InventoryPage() {
         profitPercent: profit.profitPercent,
         stock,
       };
-
-      if (editingProduct) {
-        await updateProduct(
-          editingProduct.id,
-          productPayload,
-          imageFile,
-          editingProduct.imagePath
-        );
-      } else {
-        await createProduct(productPayload, imageFile, STORE_ID);
-      }
+const actor = getCurrentUserActor();
+     if (editingProduct) {
+  await updateProduct(
+    editingProduct.id,
+    productPayload,
+    imageFile,
+    editingProduct.imagePath,
+    actor
+  );
+} else {
+  await createProduct(productPayload, imageFile, STORE_ID, actor);
+}
 
       closeForm();
     } catch (error) {

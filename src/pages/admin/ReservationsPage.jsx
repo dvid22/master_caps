@@ -24,7 +24,7 @@ import {
 
 import { STORE_ID } from "../../services/categories.service";
 import { formatCurrency } from "../../utils/money";
-
+import { getCurrentUserActor } from "../../services/auth.service";
 const emptySaleForm = {
   paymentMethod: "efectivo",
   notes: "",
@@ -231,12 +231,13 @@ export default function ReservationsPage() {
 
     try {
       setProcessing(true);
-
+const seller = getCurrentUserActor();
       await completeReservationSale({
-        reservationId: selectedReservation.id,
-        paymentMethod: saleForm.paymentMethod,
-        notes: saleForm.notes,
-      });
+  reservationId: selectedReservation.id,
+  paymentMethod: saleForm.paymentMethod,
+  notes: saleForm.notes,
+  seller,
+});
 
       closeSaleModal();
       alert("Apartado vendido correctamente.");

@@ -10,6 +10,7 @@ import SalesPage from "./pages/admin/SalesPage";
 import ReservationsPage from "./pages/admin/ReservationsPage";
 import CatalogPage from "./pages/public/CatalogPage";
 import ReserveProductPage from "./pages/public/ReserveProductPage";
+import UsersPage from "./pages/admin/UsersPage";
 
 export default function App() {
   return (
@@ -31,6 +32,7 @@ export default function App() {
         <Route path="inventario" element={<InventoryPage />} />
         <Route path="ventas" element={<SalesPage />} />
         <Route path="apartados" element={<ReservationsPage />} />
+        <Route path="usuarios" element={<UsersPage />} />
       </Route>
 
       <Route path="/catalogo/:storeId" element={<CatalogPage />} />
