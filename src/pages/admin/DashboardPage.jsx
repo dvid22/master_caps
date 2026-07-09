@@ -234,7 +234,11 @@ function MetricCard({
           </p>
 
           {subtitle && (
-            <p className={`mt-1 text-xs ${dark ? "text-white/50" : "text-gray-500"}`}>
+            <p
+              className={`mt-1 text-xs ${
+                dark ? "text-white/50" : "text-gray-500"
+              }`}
+            >
               {subtitle}
             </p>
           )}
@@ -277,14 +281,10 @@ function RankingList({ title, subtitle, items, valueType = "revenue" }) {
     <section className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-black/5">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h2 className="text-lg font-semibold text-brand-black">
-            {title}
-          </h2>
+          <h2 className="text-lg font-semibold text-brand-black">{title}</h2>
 
           {subtitle && (
-            <p className="mt-1 text-sm text-gray-500">
-              {subtitle}
-            </p>
+            <p className="mt-1 text-sm text-gray-500">{subtitle}</p>
           )}
         </div>
 
@@ -403,7 +403,11 @@ export default function DashboardPage() {
   const sellerRanking = useMemo(() => {
     return buildRanking(
       monthBSales,
-      (sale) => sale.sellerUid || sale.sellerEmail || sale.sellerName || "sin-vendedor",
+      (sale) =>
+        sale.sellerUid ||
+        sale.sellerEmail ||
+        sale.sellerName ||
+        "sin-vendedor",
       (sale) => sale.sellerName || sale.sellerEmail || "Sin vendedor"
     );
   }, [monthBSales]);
@@ -413,6 +417,14 @@ export default function DashboardPage() {
       monthBSales,
       (sale) => sale.categoryId || sale.categoryName || "sin-categoria",
       (sale) => sale.categoryName || "Sin categoría"
+    );
+  }, [monthBSales]);
+
+  const sizeRanking = useMemo(() => {
+    return buildRanking(
+      monthBSales,
+      (sale) => sale.productSize || "Talla única",
+      (sale) => sale.productSize || "Talla única"
     );
   }, [monthBSales]);
 
@@ -447,6 +459,7 @@ export default function DashboardPage() {
 
   const bestProduct = productRanking[0];
   const bestSeller = sellerRanking[0];
+  const bestSize = sizeRanking[0];
 
   const maxDailyTotal = Math.max(
     ...dailySales.map((item) => Number(item.total || 0)),
@@ -466,7 +479,8 @@ export default function DashboardPage() {
 
             <p className="mt-2 max-w-3xl text-sm text-gray-600">
               Analiza ventas, inversión, utilidad, productos más vendidos,
-              vendedores destacados y comparación entre meses.
+              vendedores destacados, tallas con mayor rotación y comparación
+              entre meses.
             </p>
           </div>
 
@@ -518,8 +532,7 @@ export default function DashboardPage() {
                 </div>
 
                 <div className="rounded-2xl bg-white/10 px-4 py-3 text-sm">
-                  Mes principal:{" "}
-                  <strong>{formatMonthLabel(monthB)}</strong>
+                  Mes principal: <strong>{formatMonthLabel(monthB)}</strong>
                 </div>
               </div>
 
@@ -534,7 +547,8 @@ export default function DashboardPage() {
                   </p>
 
                   <p className="mt-2 text-sm text-white/60">
-                    {monthAMetrics.salesCount} venta(s) · {monthAMetrics.units} unidad(es)
+                    {monthAMetrics.salesCount} venta(s) ·{" "}
+                    {monthAMetrics.units} unidad(es)
                   </p>
                 </div>
 
@@ -548,7 +562,8 @@ export default function DashboardPage() {
                   </p>
 
                   <p className="mt-2 text-sm text-gray-500">
-                    {monthBMetrics.salesCount} venta(s) · {monthBMetrics.units} unidad(es)
+                    {monthBMetrics.salesCount} venta(s) ·{" "}
+                    {monthBMetrics.units} unidad(es)
                   </p>
                 </div>
               </div>
@@ -610,7 +625,9 @@ export default function DashboardPage() {
 
                     <p className="mt-1 text-xs text-gray-500">
                       {bestProduct
-                        ? `${bestProduct.units} unidad(es) · ${formatCurrency(bestProduct.revenue)}`
+                        ? `${bestProduct.units} unidad(es) · ${formatCurrency(
+                            bestProduct.revenue
+                          )}`
                         : "No hay ventas en este mes"}
                     </p>
                   </div>
@@ -622,9 +639,7 @@ export default function DashboardPage() {
               <article className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-black/5">
                 <div className="flex items-start justify-between gap-4">
                   <div>
-                    <p className="text-sm text-gray-500">
-                      Mejor vendedor
-                    </p>
+                    <p className="text-sm text-gray-500">Mejor vendedor</p>
 
                     <p className="mt-2 text-xl font-semibold text-brand-black">
                       {bestSeller?.label || "Sin datos"}
@@ -632,7 +647,9 @@ export default function DashboardPage() {
 
                     <p className="mt-1 text-xs text-gray-500">
                       {bestSeller
-                        ? `${bestSeller.salesCount} venta(s) · ${formatCurrency(bestSeller.revenue)}`
+                        ? `${bestSeller.salesCount} venta(s) · ${formatCurrency(
+                            bestSeller.revenue
+                          )}`
                         : "No hay ventas en este mes"}
                     </p>
                   </div>
@@ -644,9 +661,29 @@ export default function DashboardPage() {
               <article className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-black/5">
                 <div className="flex items-start justify-between gap-4">
                   <div>
-                    <p className="text-sm text-gray-500">
-                      Ticket promedio
+                    <p className="text-sm text-gray-500">Talla más vendida</p>
+
+                    <p className="mt-2 text-xl font-semibold text-brand-black">
+                      {bestSize?.label || "Sin datos"}
                     </p>
+
+                    <p className="mt-1 text-xs text-gray-500">
+                      {bestSize
+                        ? `${bestSize.units} unidad(es) · ${formatCurrency(
+                            bestSize.revenue
+                          )}`
+                        : "No hay ventas en este mes"}
+                    </p>
+                  </div>
+
+                  <Package size={22} className="text-brand-black" />
+                </div>
+              </article>
+
+              <article className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-black/5">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <p className="text-sm text-gray-500">Ticket promedio</p>
 
                     <p className="mt-2 text-xl font-semibold text-brand-black">
                       {formatCurrency(monthBMetrics.averageTicket)}
@@ -658,26 +695,6 @@ export default function DashboardPage() {
                   </div>
 
                   <CalendarDays size={22} className="text-brand-black" />
-                </div>
-              </article>
-
-              <article className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-black/5">
-                <div className="flex items-start justify-between gap-4">
-                  <div>
-                    <p className="text-sm text-gray-500">
-                      Stock actual
-                    </p>
-
-                    <p className="mt-2 text-xl font-semibold text-brand-black">
-                      {inventoryMetrics.units} unidad(es)
-                    </p>
-
-                    <p className="mt-1 text-xs text-gray-500">
-                      Inversión: {formatCurrency(inventoryMetrics.cost)}
-                    </p>
-                  </div>
-
-                  <Boxes size={22} className="text-brand-black" />
                 </div>
               </article>
             </section>
@@ -703,7 +720,10 @@ export default function DashboardPage() {
                     </p>
                   ) : (
                     dailySales.map((item) => {
-                      const width = Math.max((item.total / maxDailyTotal) * 100, 7);
+                      const width = Math.max(
+                        (item.total / maxDailyTotal) * 100,
+                        7
+                      );
 
                       return (
                         <article key={item.key}>
@@ -781,7 +801,7 @@ export default function DashboardPage() {
               </section>
             </section>
 
-            <section className="mt-6 grid gap-6 xl:grid-cols-3">
+            <section className="mt-6 grid gap-6 xl:grid-cols-4">
               <RankingList
                 title="Productos más vendidos"
                 subtitle={`Ranking de ${formatMonthLabel(monthB)}`}
@@ -800,6 +820,13 @@ export default function DashboardPage() {
                 title="Categorías más vendidas"
                 subtitle="Ingreso por categoría"
                 items={categoryRanking}
+                valueType="revenue"
+              />
+
+              <RankingList
+                title="Tallas más vendidas"
+                subtitle="Rotación por talla"
+                items={sizeRanking}
                 valueType="revenue"
               />
             </section>

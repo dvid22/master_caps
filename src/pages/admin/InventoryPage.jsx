@@ -19,6 +19,7 @@ import {
 import {
   createProduct,
   deleteProduct,
+  getNextProductCodePreview,
   subscribeProducts,
   updateProduct,
 } from "../../services/products.service";
@@ -28,10 +29,13 @@ import {
   formatCurrency,
   toNumber,
 } from "../../utils/money";
+
 import { getCurrentUserActor } from "../../services/auth.service";
+
 const emptyForm = {
   name: "",
   code: "",
+  size: "",
   categoryId: "",
   categoryName: "",
   newCategoryName: "",
@@ -39,6 +43,14 @@ const emptyForm = {
   salePrice: "",
   stock: "1",
 };
+
+function normalizeSize(value) {
+  const cleanValue = String(value || "").trim();
+
+  if (!cleanValue) return "Talla única";
+
+  return cleanValue.toUpperCase();
+}
 
 export default function InventoryPage() {
   const [products, setProducts] = useState([]);
@@ -51,8 +63,13 @@ export default function InventoryPage() {
   const [editingProduct, setEditingProduct] = useState(null);
   const [showForm, setShowForm] = useState(false);
 
+  const [suggestedCode, setSuggestedCode] = useState("");
+  const [codeTouched, setCodeTouched] = useState(false);
+  const [loadingCode, setLoadingCode] = useState(false);
+
   const [search, setSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("all");
+  const [sizeFilter, setSizeFilter] = useState("all");
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -92,22 +109,35 @@ export default function InventoryPage() {
     return calculateProfit(form.costPrice, form.salePrice);
   }, [form.costPrice, form.salePrice]);
 
+  const availableSizes = useMemo(() => {
+    const sizes = products
+      .map((product) => product.size || "Talla única")
+      .filter(Boolean);
+
+    return [...new Set(sizes)].sort((a, b) => a.localeCompare(b));
+  }, [products]);
+
   const filteredProducts = useMemo(() => {
     const cleanSearch = search.trim().toLowerCase();
 
     return products.filter((product) => {
+      const productSize = product.size || "Talla única";
+
       const matchesSearch =
         !cleanSearch ||
         String(product.name || "").toLowerCase().includes(cleanSearch) ||
         String(product.code || "").toLowerCase().includes(cleanSearch) ||
-        String(product.categoryName || "").toLowerCase().includes(cleanSearch);
+        String(product.categoryName || "").toLowerCase().includes(cleanSearch) ||
+        String(productSize || "").toLowerCase().includes(cleanSearch);
 
       const matchesCategory =
         categoryFilter === "all" || product.categoryId === categoryFilter;
 
-      return matchesSearch && matchesCategory;
+      const matchesSize = sizeFilter === "all" || productSize === sizeFilter;
+
+      return matchesSearch && matchesCategory && matchesSize;
     });
-  }, [products, search, categoryFilter]);
+  }, [products, search, categoryFilter, sizeFilter]);
 
   function updateForm(field, value) {
     setForm((current) => ({
@@ -121,11 +151,51 @@ export default function InventoryPage() {
     setImageFile(null);
     setImagePreview("");
     setEditingProduct(null);
+    setSuggestedCode("");
+    setCodeTouched(false);
+    setLoadingCode(false);
   }
 
-  function openCreateForm() {
+  async function loadSuggestedCode() {
+    try {
+      setLoadingCode(true);
+
+      const nextCode = await getNextProductCodePreview(STORE_ID);
+
+      setSuggestedCode(nextCode);
+      setCodeTouched(false);
+
+      setForm((current) => ({
+        ...current,
+        code: nextCode,
+      }));
+    } catch (error) {
+      console.error(error);
+
+      setSuggestedCode("");
+      setCodeTouched(false);
+
+      setForm((current) => ({
+        ...current,
+        code: "",
+      }));
+
+      alert("No se pudo calcular el siguiente código automático.");
+    } finally {
+      setLoadingCode(false);
+    }
+  }
+
+  async function openCreateForm() {
     resetForm();
     setShowForm(true);
+
+    setForm({
+      ...emptyForm,
+      code: "Calculando...",
+    });
+
+    await loadSuggestedCode();
   }
 
   function closeForm() {
@@ -159,10 +229,13 @@ export default function InventoryPage() {
 
   function handleEdit(product) {
     setEditingProduct(product);
+    setSuggestedCode("");
+    setCodeTouched(true);
 
     setForm({
       name: product.name || "",
       code: product.code || "",
+      size: product.size === "Talla única" ? "" : product.size || "",
       categoryId: product.categoryId || "",
       categoryName: product.categoryName || "",
       newCategoryName: "",
@@ -176,22 +249,28 @@ export default function InventoryPage() {
     setShowForm(true);
   }
 
+  function handleCodeChange(value) {
+    setCodeTouched(true);
+    updateForm("code", value);
+  }
+
   async function handleSubmit(event) {
     event.preventDefault();
 
     const name = form.name.trim();
-    const code = form.code.trim();
+
+    const code =
+      !editingProduct && !codeTouched && form.code === suggestedCode
+        ? ""
+        : form.code.trim();
+
+    const size = normalizeSize(form.size);
     const costPrice = toNumber(form.costPrice);
     const salePrice = toNumber(form.salePrice);
     const stock = Number(form.stock || 0);
 
     if (!name) {
       alert("Escribe el nombre del producto.");
-      return;
-    }
-
-    if (!code) {
-      alert("Escribe un código para buscar el producto.");
       return;
     }
 
@@ -240,6 +319,7 @@ export default function InventoryPage() {
         storeId: STORE_ID,
         name,
         code,
+        size,
         categoryId: selectedCategory.id,
         categoryName: selectedCategory.name,
         costPrice,
@@ -248,23 +328,25 @@ export default function InventoryPage() {
         profitPercent: profit.profitPercent,
         stock,
       };
-const actor = getCurrentUserActor();
-     if (editingProduct) {
-  await updateProduct(
-    editingProduct.id,
-    productPayload,
-    imageFile,
-    editingProduct.imagePath,
-    actor
-  );
-} else {
-  await createProduct(productPayload, imageFile, STORE_ID, actor);
-}
+
+      const actor = getCurrentUserActor();
+
+      if (editingProduct) {
+        await updateProduct(
+          editingProduct.id,
+          productPayload,
+          imageFile,
+          editingProduct.imagePath,
+          actor
+        );
+      } else {
+        await createProduct(productPayload, imageFile, STORE_ID, actor);
+      }
 
       closeForm();
     } catch (error) {
       console.error(error);
-      alert("No se pudo guardar el producto.");
+      alert(error.message || "No se pudo guardar el producto.");
     } finally {
       setSaving(false);
     }
@@ -281,7 +363,7 @@ const actor = getCurrentUserActor();
       await deleteProduct(product.id, product.imagePath);
     } catch (error) {
       console.error(error);
-      alert("No se pudo eliminar el producto.");
+      alert(error.message || "No se pudo eliminar el producto.");
     }
   }
 
@@ -291,9 +373,11 @@ const actor = getCurrentUserActor();
         <div className="flex flex-col gap-4 border-b border-black/10 pb-6 md:flex-row md:items-end md:justify-between">
           <div>
             <p className="text-sm font-medium text-brand-gold">Master Caps</p>
+
             <h1 className="mt-1 text-3xl font-semibold tracking-tight text-brand-black">
               Inventario
             </h1>
+
             <p className="mt-2 max-w-2xl text-sm text-gray-600">
               Crea productos, sube fotos, administra categorías dinámicas y
               controla el stock disponible en tiempo real.
@@ -321,17 +405,18 @@ const actor = getCurrentUserActor();
           </div>
         </div>
 
-        <div className="mt-6 grid gap-4 md:grid-cols-[1fr_260px]">
+        <div className="mt-6 grid gap-4 md:grid-cols-[1fr_220px_220px]">
           <label className="relative block">
             <Search
               size={18}
               className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-gray-400"
             />
+
             <input
               value={search}
               onChange={(event) => setSearch(event.target.value)}
               className="h-12 w-full rounded-2xl border border-black/10 bg-white pl-11 pr-4 text-sm outline-none focus:border-brand-black"
-              placeholder="Buscar por nombre, código o categoría..."
+              placeholder="Buscar por nombre, código, categoría o talla..."
             />
           </label>
 
@@ -341,9 +426,24 @@ const actor = getCurrentUserActor();
             className="h-12 rounded-2xl border border-black/10 bg-white px-4 text-sm outline-none focus:border-brand-black"
           >
             <option value="all">Todas las categorías</option>
+
             {categories.map((category) => (
               <option key={category.id} value={category.id}>
                 {category.name}
+              </option>
+            ))}
+          </select>
+
+          <select
+            value={sizeFilter}
+            onChange={(event) => setSizeFilter(event.target.value)}
+            className="h-12 rounded-2xl border border-black/10 bg-white px-4 text-sm outline-none focus:border-brand-black"
+          >
+            <option value="all">Todas las tallas</option>
+
+            {availableSizes.map((size) => (
+              <option key={size} value={size}>
+                {size}
               </option>
             ))}
           </select>
@@ -359,12 +459,15 @@ const actor = getCurrentUserActor();
               <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-brand-cream">
                 <Package size={26} className="text-brand-black" />
               </div>
+
               <h2 className="mt-4 text-lg font-semibold text-brand-black">
                 No hay productos todavía
               </h2>
+
               <p className="mt-2 text-sm text-gray-500">
                 Crea el primer producto del inventario.
               </p>
+
               <button
                 type="button"
                 onClick={openCreateForm}
@@ -412,11 +515,17 @@ const actor = getCurrentUserActor();
                         <p className="text-xs font-medium uppercase tracking-wide text-brand-gold">
                           {product.categoryName}
                         </p>
+
                         <h3 className="mt-1 text-lg font-semibold text-brand-black">
                           {product.name}
                         </h3>
+
                         <p className="mt-1 text-xs text-gray-500">
                           Código: {product.code}
+                        </p>
+
+                        <p className="mt-1 text-xs font-medium text-brand-black">
+                          Talla: {product.size || "Talla única"}
                         </p>
                       </div>
                     </div>
@@ -424,6 +533,7 @@ const actor = getCurrentUserActor();
                     <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
                       <div className="rounded-2xl bg-brand-cream p-3">
                         <p className="text-xs text-gray-500">Llegada</p>
+
                         <p className="font-semibold text-brand-black">
                           {formatCurrency(product.costPrice)}
                         </p>
@@ -431,6 +541,7 @@ const actor = getCurrentUserActor();
 
                       <div className="rounded-2xl bg-brand-cream p-3">
                         <p className="text-xs text-gray-500">Venta</p>
+
                         <p className="font-semibold text-brand-black">
                           {formatCurrency(product.salePrice)}
                         </p>
@@ -438,6 +549,7 @@ const actor = getCurrentUserActor();
 
                       <div className="col-span-2 rounded-2xl bg-black p-3 text-white">
                         <p className="text-xs text-white/60">Ganancia</p>
+
                         <p className="font-semibold">
                           {formatCurrency(product.profitMargin)} ·{" "}
                           {Number(product.profitPercent || 0).toFixed(1)}%
@@ -479,6 +591,7 @@ const actor = getCurrentUserActor();
                 <p className="text-xs font-medium uppercase tracking-wide text-brand-gold">
                   {editingProduct ? "Editar producto" : "Nuevo producto"}
                 </p>
+
                 <h2 className="text-xl font-semibold text-brand-black">
                   Información de la prenda
                 </h2>
@@ -517,9 +630,11 @@ const actor = getCurrentUserActor();
                             size={34}
                             className="mx-auto text-gray-400"
                           />
+
                           <p className="mt-3 text-sm font-medium text-brand-black">
                             Subir foto
                           </p>
+
                           <p className="mt-1 text-xs text-gray-500">
                             JPG, PNG o WEBP
                           </p>
@@ -530,11 +645,12 @@ const actor = getCurrentUserActor();
                 </div>
 
                 <div className="grid gap-4">
-                  <div className="grid gap-4 sm:grid-cols-2">
+                  <div className="grid gap-4 sm:grid-cols-3">
                     <label>
                       <span className="text-sm font-medium text-brand-black">
                         Nombre del producto
                       </span>
+
                       <input
                         value={form.name}
                         onChange={(event) =>
@@ -549,14 +665,43 @@ const actor = getCurrentUserActor();
                       <span className="text-sm font-medium text-brand-black">
                         Código
                       </span>
+
                       <input
                         value={form.code}
                         onChange={(event) =>
-                          updateForm("code", event.target.value)
+                          handleCodeChange(event.target.value)
+                        }
+                        disabled={loadingCode}
+                        className="mt-2 h-12 w-full rounded-2xl border border-black/10 px-4 text-sm outline-none focus:border-brand-black disabled:bg-gray-100"
+                        placeholder="Ej: 0001"
+                      />
+
+                      <p className="mt-1 text-xs text-gray-500">
+                        {editingProduct
+                          ? "Puedes editar el código, pero no puede repetirse."
+                          : codeTouched
+                            ? "Código personalizado. Se validará que no exista."
+                            : "Código automático sugerido. Al guardar se confirmará el consecutivo disponible."}
+                      </p>
+                    </label>
+
+                    <label>
+                      <span className="text-sm font-medium text-brand-black">
+                        Talla
+                      </span>
+
+                      <input
+                        value={form.size}
+                        onChange={(event) =>
+                          updateForm("size", event.target.value)
                         }
                         className="mt-2 h-12 w-full rounded-2xl border border-black/10 px-4 text-sm outline-none focus:border-brand-black"
-                        placeholder="Ej: CAM-001"
+                        placeholder="Ej: S, XL, 32"
                       />
+
+                      <p className="mt-1 text-xs text-gray-500">
+                        Si lo dejas vacío será Talla única.
+                      </p>
                     </label>
                   </div>
 
@@ -565,6 +710,7 @@ const actor = getCurrentUserActor();
                       <span className="text-sm font-medium text-brand-black">
                         Categoría existente
                       </span>
+
                       <select
                         value={form.categoryId}
                         onChange={(event) => {
@@ -596,6 +742,7 @@ const actor = getCurrentUserActor();
                       <span className="text-sm font-medium text-brand-black">
                         Crear nueva categoría
                       </span>
+
                       <input
                         value={form.newCategoryName}
                         onChange={(event) => {
@@ -614,6 +761,7 @@ const actor = getCurrentUserActor();
                       <span className="text-sm font-medium text-brand-black">
                         Precio llegada
                       </span>
+
                       <input
                         value={form.costPrice}
                         onChange={(event) =>
@@ -628,6 +776,7 @@ const actor = getCurrentUserActor();
                       <span className="text-sm font-medium text-brand-black">
                         Precio venta
                       </span>
+
                       <input
                         value={form.salePrice}
                         onChange={(event) =>
@@ -642,6 +791,7 @@ const actor = getCurrentUserActor();
                       <span className="text-sm font-medium text-brand-black">
                         Stock
                       </span>
+
                       <input
                         type="number"
                         min="0"
@@ -665,6 +815,7 @@ const actor = getCurrentUserActor();
                         <p className="text-xs text-gray-500">
                           Ganancia por unidad
                         </p>
+
                         <p className="text-lg font-semibold text-brand-black">
                           {formatCurrency(profit.profitMargin)}
                         </p>
@@ -674,6 +825,7 @@ const actor = getCurrentUserActor();
                         <p className="text-xs text-gray-500">
                           Porcentaje de ganancia
                         </p>
+
                         <p className="text-lg font-semibold text-brand-black">
                           {profit.profitPercent.toFixed(1)}%
                         </p>
@@ -694,7 +846,7 @@ const actor = getCurrentUserActor();
 
                 <button
                   type="submit"
-                  disabled={saving}
+                  disabled={saving || loadingCode}
                   className="rounded-2xl bg-brand-black px-6 py-3 text-sm font-semibold text-white hover:bg-black disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   {saving

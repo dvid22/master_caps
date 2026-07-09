@@ -6,7 +6,9 @@ import {
   Camera,
   CheckCircle2,
   IdCard,
+  Minus,
   Phone,
+  Plus,
   User,
 } from "lucide-react";
 
@@ -26,6 +28,8 @@ export default function ReserveProductPage() {
 
   const [products, setProducts] = useState([]);
   const [form, setForm] = useState(emptyForm);
+  const [quantity, setQuantity] = useState("1");
+  const [reservedQuantity, setReservedQuantity] = useState(1);
 
   const [loading, setLoading] = useState(true);
   const [reserving, setReserving] = useState(false);
@@ -57,12 +61,77 @@ export default function ReserveProductPage() {
 
   const availableStock = Number(product?.stock || 0);
   const isAvailable = availableStock > 0;
+  const productSize = product?.size || "Talla única";
+
+  const cleanQuantity = useMemo(() => {
+    const number = Number(quantity || 1);
+
+    if (!Number.isFinite(number) || number <= 0) return 1;
+
+    return number;
+  }, [quantity]);
+
+  const totalReservation = useMemo(() => {
+    return Number(product?.salePrice || 0) * cleanQuantity;
+  }, [product?.salePrice, cleanQuantity]);
+
+  useEffect(() => {
+    if (!product || success) return;
+
+    if (availableStock <= 0) {
+      setQuantity("1");
+      return;
+    }
+
+    setQuantity((current) => {
+      const currentNumber = Number(current || 1);
+
+      if (!Number.isFinite(currentNumber) || currentNumber <= 0) {
+        return "1";
+      }
+
+      if (currentNumber > availableStock) {
+        return String(availableStock);
+      }
+
+      return current;
+    });
+  }, [product, availableStock, success]);
 
   function updateForm(field, value) {
     setForm((current) => ({
       ...current,
       [field]: value,
     }));
+  }
+
+  function increaseQuantity() {
+    if (!isAvailable) return;
+
+    const current = Number(quantity || 1);
+    const next = Math.min(current + 1, availableStock);
+
+    setQuantity(String(next || 1));
+  }
+
+  function decreaseQuantity() {
+    const current = Number(quantity || 1);
+    const next = Math.max(current - 1, 1);
+
+    setQuantity(String(next));
+  }
+
+  function handleQuantityChange(value) {
+    const number = Number(value || 1);
+
+    if (!Number.isFinite(number)) {
+      setQuantity("1");
+      return;
+    }
+
+    const safeQuantity = Math.min(Math.max(number, 1), availableStock || 1);
+
+    setQuantity(String(safeQuantity));
   }
 
   async function handleSubmit(event) {
@@ -75,6 +144,18 @@ export default function ReserveProductPage() {
 
     if (!isAvailable) {
       alert("Esta prenda ya no está disponible.");
+      return;
+    }
+
+    const finalQuantity = Number(quantity || 1);
+
+    if (!Number.isFinite(finalQuantity) || finalQuantity <= 0) {
+      alert("La cantidad debe ser mayor a cero.");
+      return;
+    }
+
+    if (finalQuantity > availableStock) {
+      alert(`Solo hay ${availableStock} unidad(es) disponibles.`);
       return;
     }
 
@@ -97,12 +178,14 @@ export default function ReserveProductPage() {
 
       await createReservation({
         productId: product.id,
+        quantity: finalQuantity,
         customerName,
         customerDocument,
         customerPhone,
         storeId,
       });
 
+      setReservedQuantity(finalQuantity);
       setSuccess(true);
       setForm(emptyForm);
     } catch (error) {
@@ -130,6 +213,7 @@ export default function ReserveProductPage() {
           <h1 className="text-2xl font-semibold text-brand-black">
             Producto no encontrado
           </h1>
+
           <p className="mt-2 text-sm text-gray-500">
             La prenda que intentas apartar no existe o fue eliminada.
           </p>
@@ -166,14 +250,23 @@ export default function ReserveProductPage() {
             <p className="text-xs font-medium uppercase tracking-wide text-brand-gold">
               Producto
             </p>
+
             <p className="mt-1 font-semibold text-brand-black">
               {product.name}
             </p>
+
             <p className="mt-1 text-sm text-gray-500">
-              Código: {product.code}
+              Código: {product.code} · Talla: {productSize}
             </p>
+
+            <p className="mt-1 text-sm text-gray-500">
+              Cantidad apartada: {reservedQuantity}
+            </p>
+
             <p className="mt-2 text-lg font-semibold text-brand-black">
-              {formatCurrency(product.salePrice)}
+              {formatCurrency(
+                Number(product.salePrice || 0) * Number(reservedQuantity || 1)
+              )}
             </p>
           </div>
 
@@ -199,8 +292,8 @@ export default function ReserveProductPage() {
   }
 
   return (
-    <main className="min-h-screen bg-brand-cream px-4 py-6 sm:px-6">
-      <section className="mx-auto max-w-5xl">
+    <main className="min-h-screen overflow-x-hidden bg-brand-cream px-4 py-6 sm:px-6">
+      <section className="mx-auto w-full max-w-7xl">
         <Link
           to={`/catalogo/${storeId}`}
           className="inline-flex items-center gap-2 rounded-2xl border border-black/10 bg-white px-4 py-3 text-sm font-medium text-brand-black hover:border-brand-black"
@@ -209,9 +302,9 @@ export default function ReserveProductPage() {
           Volver al catálogo
         </Link>
 
-        <section className="mt-6 grid overflow-hidden rounded-3xl bg-white shadow-sm ring-1 ring-black/5 lg:grid-cols-[1fr_420px]">
-          <div className="bg-gray-100">
-            <div className="aspect-[4/5] lg:h-full lg:min-h-[620px]">
+        <section className="mt-6 grid w-full overflow-hidden rounded-3xl bg-white shadow-sm ring-1 ring-black/5 lg:grid-cols-[minmax(0,1fr)_minmax(380px,460px)]">
+          <div className="min-w-0 bg-gray-100">
+            <div className="aspect-[4/5] lg:h-full lg:min-h-[640px]">
               {product.imageUrl ? (
                 <img
                   src={product.imageUrl}
@@ -226,17 +319,21 @@ export default function ReserveProductPage() {
             </div>
           </div>
 
-          <div className="p-6 sm:p-8">
-            <p className="text-xs font-medium uppercase tracking-wide text-brand-gold">
+          <div className="min-w-0 p-6 sm:p-8">
+            <p className="break-words text-xs font-medium uppercase tracking-wide text-brand-gold">
               {product.categoryName}
             </p>
 
-            <h1 className="mt-2 text-3xl font-semibold tracking-tight text-brand-black">
+            <h1 className="mt-2 break-words text-3xl font-semibold tracking-tight text-brand-black">
               {product.name}
             </h1>
 
-            <p className="mt-2 text-sm text-gray-500">
+            <p className="mt-2 break-words text-sm text-gray-500">
               Código: {product.code}
+            </p>
+
+            <p className="mt-1 break-words text-sm font-medium text-brand-black">
+              Talla: {productSize}
             </p>
 
             <p className="mt-5 text-3xl font-semibold text-brand-black">
@@ -250,24 +347,26 @@ export default function ReserveProductPage() {
                   : "bg-red-50 text-red-700"
               }`}
             >
-              <p className="text-sm font-semibold">
+              <p className="break-words text-sm font-semibold">
                 {isAvailable
-                  ? `${availableStock} unidades disponibles`
+                  ? `${availableStock} unidad(es) disponible(s)`
                   : "Esta prenda ya no está disponible"}
               </p>
             </div>
 
             <div className="mt-5 rounded-3xl bg-brand-cream p-4">
-              <div className="flex items-start gap-3">
+              <div className="flex min-w-0 items-start gap-3">
                 <CalendarClock
                   size={22}
-                  className="mt-0.5 text-brand-black"
+                  className="mt-0.5 shrink-0 text-brand-black"
                 />
-                <div>
+
+                <div className="min-w-0">
                   <p className="text-sm font-semibold text-brand-black">
                     Apartado por 7 días
                   </p>
-                  <p className="mt-1 text-sm leading-6 text-gray-600">
+
+                  <p className="mt-1 break-words text-sm leading-6 text-gray-600">
                     Registra tus datos para separar esta prenda. Si no se retira
                     durante la semana, volverá a estar disponible.
                   </p>
@@ -276,6 +375,56 @@ export default function ReserveProductPage() {
             </div>
 
             <form onSubmit={handleSubmit} className="mt-6 space-y-4">
+              <div>
+                <label className="text-sm font-medium text-brand-black">
+                  Cantidad a apartar
+                </label>
+
+                <div className="mt-2 grid grid-cols-[44px_minmax(0,1fr)_44px] items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={decreaseQuantity}
+                    disabled={!isAvailable || cleanQuantity <= 1}
+                    className="flex h-11 w-11 items-center justify-center rounded-2xl border border-black/10 hover:border-brand-black disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <Minus size={17} />
+                  </button>
+
+                  <input
+                    type="number"
+                    min="1"
+                    max={availableStock}
+                    value={quantity}
+                    onChange={(event) =>
+                      handleQuantityChange(event.target.value)
+                    }
+                    disabled={!isAvailable}
+                    className="h-11 min-w-0 rounded-2xl border border-black/10 px-4 text-center text-sm outline-none focus:border-brand-black disabled:bg-gray-100"
+                  />
+
+                  <button
+                    type="button"
+                    onClick={increaseQuantity}
+                    disabled={!isAvailable || cleanQuantity >= availableStock}
+                    className="flex h-11 w-11 items-center justify-center rounded-2xl border border-black/10 hover:border-brand-black disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <Plus size={17} />
+                  </button>
+                </div>
+
+                <div className="mt-3 rounded-3xl bg-brand-cream p-4">
+                  <p className="text-xs text-gray-500">Total apartado</p>
+
+                  <p className="mt-1 text-2xl font-semibold text-brand-black">
+                    {formatCurrency(totalReservation)}
+                  </p>
+
+                  <p className="mt-1 text-xs text-gray-500">
+                    Stock disponible: {availableStock}
+                  </p>
+                </div>
+              </div>
+
               <label className="block">
                 <span className="text-sm font-medium text-brand-black">
                   Nombre completo

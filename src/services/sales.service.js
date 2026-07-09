@@ -27,7 +27,6 @@ function mapSalesSnapshot(snapshot) {
 
 export function subscribeSales(callback, onError, storeId = STORE_ID) {
   const salesRef = collection(db, "sales");
-
   const q = query(salesRef, where("storeId", "==", storeId));
 
   return onSnapshot(
@@ -44,7 +43,6 @@ export function subscribeSales(callback, onError, storeId = STORE_ID) {
 
 export async function getSales(storeId = STORE_ID) {
   const salesRef = collection(db, "sales");
-
   const q = query(salesRef, where("storeId", "==", storeId));
   const snapshot = await getDocs(q);
 
@@ -79,8 +77,11 @@ export async function createDirectSale({
     }
 
     const product = productSnap.data();
-
     const currentStock = Number(product.stock || 0);
+
+    if (product.storeId !== storeId) {
+      throw new Error("Este producto no pertenece a esta tienda.");
+    }
 
     if (currentStock <= 0) {
       throw new Error("Este producto no tiene stock disponible.");
@@ -88,7 +89,7 @@ export async function createDirectSale({
 
     if (cleanQuantity > currentStock) {
       throw new Error(
-        `No puedes vender ${cleanQuantity} unidades. Solo hay ${currentStock} disponibles.`
+        `No puedes vender ${cleanQuantity} unidad(es). Solo hay ${currentStock} disponible(s).`
       );
     }
 
@@ -97,7 +98,6 @@ export async function createDirectSale({
     const total = unitPrice * cleanQuantity;
     const totalCost = costPrice * cleanQuantity;
     const profit = total - totalCost;
-
     const newStock = currentStock - cleanQuantity;
 
     transaction.update(productRef, {
@@ -112,24 +112,29 @@ export async function createDirectSale({
       productId,
       productName: product.name || "",
       productCode: product.code || "",
+      productSize: product.size || "Talla única",
       categoryId: product.categoryId || "",
       categoryName: product.categoryName || "",
+
       quantity: cleanQuantity,
       unitPrice,
       costPrice,
       total,
       totalCost,
       profit,
+
       customerName: String(customerName || "").trim(),
       paymentMethod,
       notes: String(notes || "").trim(),
+
       source: "direct",
       reservationId: null,
+
       sellerUid: seller?.uid || "",
-sellerName: seller?.name || "",
-sellerEmail: seller?.email || "",
+      sellerName: seller?.name || "",
+      sellerEmail: seller?.email || "",
+
       createdAt: serverTimestamp(),
-      
     });
 
     return saleRef.id;
