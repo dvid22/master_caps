@@ -41,11 +41,17 @@ function getRoleLabel(role) {
 
 function getRoleClass(role) {
   const classes = {
-    admin: "bg-black text-white",
-    seller: "bg-blue-100 text-blue-700",
+    admin: "bg-red-600 text-white",
+    seller: "bg-red-50 text-red-600",
   };
 
-  return classes[role] || "bg-gray-100 text-gray-700";
+  return classes[role] || "bg-black/[0.04] text-black/55";
+}
+
+function getStatusClass(active) {
+  return active
+    ? "bg-emerald-50 text-emerald-600"
+    : "bg-red-50 text-red-600";
 }
 
 export default function UsersPage() {
@@ -242,367 +248,383 @@ export default function UsersPage() {
   }
 
   return (
-    <main className="min-h-screen bg-brand-cream px-4 py-6 sm:px-6">
-      <section className="mx-auto max-w-7xl">
-        <div className="flex flex-col gap-4 border-b border-black/10 pb-6 md:flex-row md:items-end md:justify-between">
+    <main className="min-h-screen bg-[#f7f7f8] px-3 py-4 sm:px-5 lg:px-6">
+      <section className="mx-auto max-w-[1540px]">
+        <header className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
           <div>
-            <p className="text-sm font-medium text-brand-gold">Master Caps</p>
-
-            <h1 className="mt-1 text-3xl font-semibold tracking-tight text-brand-black">
+            <h1 className="text-[28px] font-medium tracking-[-0.045em] text-black">
               Usuarios
             </h1>
 
-            <p className="mt-2 max-w-2xl text-sm text-gray-600">
-              Crea administradores y vendedores. Cada producto y venta quedará
-              asociado al usuario que hizo la acción.
+            <p className="mt-1 text-[13px] font-normal text-black/50">
+              Administra vendedores y accesos del panel
             </p>
           </div>
 
           <button
             type="button"
             onClick={openCreateForm}
-            className="inline-flex items-center justify-center gap-2 rounded-2xl bg-brand-black px-5 py-3 text-sm font-semibold text-white hover:bg-black"
+            className="inline-flex h-11 items-center justify-center gap-2 rounded-2xl bg-red-600 px-5 text-[13px] font-medium text-white shadow-lg shadow-red-600/20 transition hover:bg-red-700"
           >
-            <Plus size={18} />
+            <Plus size={17} strokeWidth={1.9} />
             Nuevo usuario
           </button>
-        </div>
+        </header>
 
-        <section className="mt-6 grid gap-4 md:grid-cols-4">
-          <div className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-black/5">
-            <p className="text-sm text-gray-500">Usuarios activos</p>
-            <p className="mt-2 text-2xl font-semibold text-brand-black">
-              {totals.active}
-            </p>
-          </div>
-
-          <div className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-black/5">
-            <p className="text-sm text-gray-500">Vendedores</p>
-            <p className="mt-2 text-2xl font-semibold text-brand-black">
-              {totals.sellers}
-            </p>
-          </div>
-
-          <div className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-black/5">
-            <p className="text-sm text-gray-500">Administradores</p>
-            <p className="mt-2 text-2xl font-semibold text-brand-black">
-              {totals.admins}
-            </p>
-          </div>
-
-          <div className="rounded-3xl bg-black p-5 text-white shadow-sm">
-            <p className="text-sm text-white/60">Total registrados</p>
-            <p className="mt-2 text-2xl font-semibold">
-              {totals.total}
-            </p>
-          </div>
+        <section className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <MetricCard title="Usuarios activos" value={totals.active} />
+          <MetricCard title="Vendedores" value={totals.sellers} />
+          <MetricCard title="Administradores" value={totals.admins} />
+          <MetricCard title="Total registrados" value={totals.total} featured />
         </section>
 
-        <section className="mt-6 grid gap-3 rounded-3xl bg-white p-4 shadow-sm ring-1 ring-black/5 md:grid-cols-[1fr_180px_180px]">
-          <label className="relative block">
-            <Search
-              size={18}
-              className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-gray-400"
-            />
+        <section className="mt-5 rounded-[26px] bg-white p-3 shadow-[0_16px_45px_rgba(0,0,0,0.04)] ring-1 ring-black/[0.06]">
+          <div className="grid gap-3 lg:grid-cols-[1.45fr_0.82fr_0.82fr]">
+            <label className="relative block">
+              <Search
+                size={16}
+                className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-black/35"
+              />
 
-            <input
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              className="h-12 w-full rounded-2xl border border-black/10 bg-white pl-11 pr-4 text-sm outline-none focus:border-brand-black"
-              placeholder="Buscar por nombre, correo o rol..."
-            />
-          </label>
+              <input
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                className="h-11 w-full rounded-2xl border border-black/[0.08] bg-white pl-11 pr-4 text-[13px] font-normal text-black outline-none transition placeholder:text-black/35 focus:border-red-600 focus:ring-4 focus:ring-red-600/10"
+                placeholder="Buscar por nombre, correo o rol..."
+              />
+            </label>
 
-          <select
-            value={roleFilter}
-            onChange={(event) => setRoleFilter(event.target.value)}
-            className="h-12 rounded-2xl border border-black/10 bg-white px-4 text-sm outline-none focus:border-brand-black"
-          >
-            <option value="all">Todos los roles</option>
-            <option value="admin">Administradores</option>
-            <option value="seller">Vendedores</option>
-          </select>
+            <select
+              value={roleFilter}
+              onChange={(event) => setRoleFilter(event.target.value)}
+              className="h-11 rounded-2xl border border-black/[0.08] bg-white px-4 text-[13px] font-normal text-black outline-none transition focus:border-red-600 focus:ring-4 focus:ring-red-600/10"
+            >
+              <option value="all">Todos los roles</option>
+              <option value="admin">Administradores</option>
+              <option value="seller">Vendedores</option>
+            </select>
 
-          <select
-            value={statusFilter}
-            onChange={(event) => setStatusFilter(event.target.value)}
-            className="h-12 rounded-2xl border border-black/10 bg-white px-4 text-sm outline-none focus:border-brand-black"
-          >
-            <option value="active">Activos</option>
-            <option value="inactive">Inactivos</option>
-            <option value="all">Todos</option>
-          </select>
-        </section>
+            <select
+              value={statusFilter}
+              onChange={(event) => setStatusFilter(event.target.value)}
+              className="h-11 rounded-2xl border border-black/[0.08] bg-white px-4 text-[13px] font-normal text-black outline-none transition focus:border-red-600 focus:ring-4 focus:ring-red-600/10"
+            >
+              <option value="active">Activos</option>
+              <option value="inactive">Inactivos</option>
+              <option value="all">Todos</option>
+            </select>
+          </div>
 
-        <section className="mt-6">
-          {loading ? (
-            <div className="rounded-3xl bg-white p-10 text-center text-sm text-gray-500">
-              Cargando usuarios en tiempo real...
-            </div>
-          ) : filteredUsers.length === 0 ? (
-            <div className="rounded-3xl bg-white p-10 text-center">
-              <UserCog size={38} className="mx-auto text-gray-400" />
+          <section className="mt-4">
+            {loading ? (
+              <div className="rounded-[22px] bg-black/[0.025] p-8 text-center text-[13px] text-black/45">
+                Cargando usuarios en tiempo real...
+              </div>
+            ) : filteredUsers.length === 0 ? (
+              <div className="rounded-[22px] bg-black/[0.025] p-8 text-center">
+                <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-white text-black/50 ring-1 ring-black/[0.06]">
+                  <UserCog size={24} />
+                </div>
 
-              <h2 className="mt-4 text-xl font-semibold text-brand-black">
-                No hay usuarios
-              </h2>
+                <h2 className="mt-4 text-[17px] font-medium text-black">
+                  No hay usuarios
+                </h2>
 
-              <p className="mt-2 text-sm text-gray-500">
-                Crea el primer vendedor o administrador.
-              </p>
+                <p className="mt-2 text-[13px] text-black/45">
+                  Crea el primer vendedor o administrador.
+                </p>
 
-              <button
-                type="button"
-                onClick={openCreateForm}
-                className="mt-5 rounded-2xl bg-brand-black px-5 py-3 text-sm font-semibold text-white"
-              >
-                Crear usuario
-              </button>
-            </div>
-          ) : (
-            <div className="grid gap-4 lg:grid-cols-2">
-              {filteredUsers.map((userItem) => (
-                <article
-                  key={userItem.id}
-                  className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-black/5"
+                <button
+                  type="button"
+                  onClick={openCreateForm}
+                  className="mt-5 rounded-2xl bg-red-600 px-5 py-3 text-[13px] font-medium text-white hover:bg-red-700"
                 >
-                  <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-                    <div className="flex items-start gap-4">
-                      <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-brand-cream text-brand-black">
-                        <User size={24} />
-                      </div>
-
-                      <div>
-                        <div className="flex flex-wrap items-center gap-2">
-                          <h3 className="text-lg font-semibold text-brand-black">
-                            {userItem.displayName}
-                          </h3>
-
-                          <span
-                            className={`rounded-full px-3 py-1 text-xs font-semibold ${getRoleClass(
-                              userItem.role
-                            )}`}
-                          >
-                            {getRoleLabel(userItem.role)}
-                          </span>
-
-                          <span
-                            className={`rounded-full px-3 py-1 text-xs font-semibold ${
-                              userItem.active
-                                ? "bg-green-100 text-green-700"
-                                : "bg-red-100 text-red-700"
-                            }`}
-                          >
-                            {userItem.active ? "Activo" : "Inactivo"}
-                          </span>
-                        </div>
-
-                        <div className="mt-2 flex items-center gap-2 text-sm text-gray-500">
-                          <Mail size={15} />
-                          {userItem.email}
-                        </div>
-
-                        <div className="mt-2 flex items-center gap-2 text-xs text-gray-500">
-                          <Store size={14} />
-                          Tienda: {userItem.storeId}
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="flex gap-2 sm:flex-col">
-                      <button
-                        type="button"
-                        onClick={() => openEditForm(userItem)}
-                        className="inline-flex items-center justify-center gap-2 rounded-2xl border border-black/10 px-4 py-3 text-sm font-semibold text-brand-black hover:border-brand-black"
-                      >
-                        <UserCog size={16} />
-                        Editar
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => handleToggleActive(userItem)}
-                        className={`inline-flex items-center justify-center gap-2 rounded-2xl px-4 py-3 text-sm font-semibold ${
-                          userItem.active
-                            ? "border border-red-200 text-red-600 hover:bg-red-50"
-                            : "border border-green-200 text-green-700 hover:bg-green-50"
-                        }`}
-                      >
-                        {userItem.active ? (
-                          <>
-                            <UserX size={16} />
-                            Desactivar
-                          </>
-                        ) : (
-                          <>
-                            <UserCheck size={16} />
-                            Activar
-                          </>
-                        )}
-                      </button>
-                    </div>
-                  </div>
-                </article>
-              ))}
-            </div>
-          )}
+                  Crear usuario
+                </button>
+              </div>
+            ) : (
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+                {filteredUsers.map((userItem) => (
+                  <UserCard
+                    key={userItem.id}
+                    userItem={userItem}
+                    onEdit={() => openEditForm(userItem)}
+                    onToggle={() => handleToggleActive(userItem)}
+                  />
+                ))}
+              </div>
+            )}
+          </section>
         </section>
       </section>
 
       {showForm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4 py-6">
-          <section className="w-full max-w-xl rounded-3xl bg-white shadow-2xl">
-            <div className="flex items-center justify-between border-b border-black/10 px-6 py-5">
-              <div>
-                <p className="text-xs font-medium uppercase tracking-wide text-brand-gold">
-                  {editingUser ? "Editar usuario" : "Nuevo usuario"}
-                </p>
-
-                <h2 className="text-xl font-semibold text-brand-black">
-                  {editingUser ? "Actualizar perfil" : "Crear acceso"}
-                </h2>
-              </div>
-
-              <button
-                type="button"
-                onClick={closeForm}
-                className="rounded-full p-2 hover:bg-gray-100"
-              >
-                <X size={22} />
-              </button>
-            </div>
-
-            <form onSubmit={handleSubmit} className="p-6">
-              <div className="grid gap-4">
-                <label>
-                  <span className="text-sm font-medium text-brand-black">
-                    Nombre completo
-                  </span>
-
-                  <input
-                    value={form.displayName}
-                    onChange={(event) =>
-                      updateForm("displayName", event.target.value)
-                    }
-                    className="mt-2 h-12 w-full rounded-2xl border border-black/10 px-4 text-sm outline-none focus:border-brand-black"
-                    placeholder="Ej: Juan Pérez"
-                  />
-                </label>
-
-                <label>
-                  <span className="text-sm font-medium text-brand-black">
-                    Correo electrónico
-                  </span>
-
-                  <input
-                    type="email"
-                    value={form.email}
-                    disabled={Boolean(editingUser)}
-                    onChange={(event) =>
-                      updateForm("email", event.target.value)
-                    }
-                    className="mt-2 h-12 w-full rounded-2xl border border-black/10 px-4 text-sm outline-none focus:border-brand-black disabled:bg-gray-100 disabled:text-gray-500"
-                    placeholder="usuario@mastercaps.com"
-                  />
-
-                  {editingUser && (
-                    <p className="mt-1 text-xs text-gray-500">
-                      El correo no se edita desde este panel.
-                    </p>
-                  )}
-                </label>
-
-                {!editingUser && (
-                  <label>
-                    <span className="text-sm font-medium text-brand-black">
-                      Contraseña temporal
-                    </span>
-
-                    <input
-                      type="password"
-                      value={form.password}
-                      onChange={(event) =>
-                        updateForm("password", event.target.value)
-                      }
-                      className="mt-2 h-12 w-full rounded-2xl border border-black/10 px-4 text-sm outline-none focus:border-brand-black"
-                      placeholder="Mínimo 6 caracteres"
-                    />
-                  </label>
-                )}
-
-                <label>
-                  <span className="text-sm font-medium text-brand-black">
-                    Rol
-                  </span>
-
-                  <select
-                    value={form.role}
-                    onChange={(event) =>
-                      updateForm("role", event.target.value)
-                    }
-                    className="mt-2 h-12 w-full rounded-2xl border border-black/10 bg-white px-4 text-sm outline-none focus:border-brand-black"
-                  >
-                    <option value="seller">Vendedor</option>
-                    <option value="admin">Administrador</option>
-                  </select>
-                </label>
-
-                <div className="rounded-3xl bg-brand-cream p-4">
-                  <div className="flex items-start gap-3">
-                    {form.role === "admin" ? (
-                      <Shield
-                        size={22}
-                        className="mt-0.5 text-brand-black"
-                      />
-                    ) : (
-                      <CheckCircle2
-                        size={22}
-                        className="mt-0.5 text-brand-black"
-                      />
-                    )}
-
-                    <div>
-                      <p className="text-sm font-semibold text-brand-black">
-                        {form.role === "admin"
-                          ? "Administrador"
-                          : "Vendedor"}
-                      </p>
-
-                      <p className="mt-1 text-sm leading-6 text-gray-600">
-                        {form.role === "admin"
-                          ? "Podrá entrar al panel y gestionar la operación completa."
-                          : "Podrá registrar ventas y quedará asociado a las acciones que realice."}
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
-                <button
-                  type="button"
-                  onClick={closeForm}
-                  className="rounded-2xl border border-black/10 px-5 py-3 text-sm font-semibold text-brand-black hover:border-brand-black"
-                >
-                  Cancelar
-                </button>
-
-                <button
-                  type="submit"
-                  disabled={saving}
-                  className="rounded-2xl bg-brand-black px-6 py-3 text-sm font-semibold text-white hover:bg-black disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {saving
-                    ? "Guardando..."
-                    : editingUser
-                      ? "Actualizar usuario"
-                      : "Crear usuario"}
-                </button>
-              </div>
-            </form>
-          </section>
-        </div>
+        <UserFormModal
+          editingUser={editingUser}
+          form={form}
+          saving={saving}
+          closeForm={closeForm}
+          handleSubmit={handleSubmit}
+          updateForm={updateForm}
+        />
       )}
     </main>
+  );
+}
+
+function MetricCard({ title, value, featured = false }) {
+  return (
+    <article
+      className={`rounded-[24px] p-4 shadow-[0_14px_40px_rgba(0,0,0,0.035)] ring-1 ${
+        featured
+          ? "bg-red-600 text-white ring-red-600"
+          : "bg-white text-black ring-black/[0.06]"
+      }`}
+    >
+      <p
+        className={`text-[12px] font-normal ${
+          featured ? "text-white/70" : "text-black/45"
+        }`}
+      >
+        {title}
+      </p>
+
+      <p className="mt-1 text-[24px] font-medium tracking-[-0.04em]">
+        {value}
+      </p>
+    </article>
+  );
+}
+
+function UserCard({ userItem, onEdit, onToggle }) {
+  return (
+    <article className="rounded-[24px] bg-white p-3 shadow-[0_14px_40px_rgba(0,0,0,0.035)] ring-1 ring-black/[0.06] transition hover:-translate-y-0.5 hover:shadow-[0_22px_60px_rgba(0,0,0,0.07)]">
+      <div className="flex items-start gap-3">
+        <div className="flex h-[58px] w-[58px] shrink-0 items-center justify-center rounded-[20px] bg-black/[0.025] text-black/55">
+          <User size={25} strokeWidth={1.8} />
+        </div>
+
+        <div className="min-w-0 flex-1">
+          <h3 className="truncate text-[15px] font-medium text-black">
+            {userItem.displayName}
+          </h3>
+
+          <div className="mt-1 flex min-w-0 items-center gap-1.5 text-[12px] text-black/45">
+            <Mail size={13} className="shrink-0" />
+            <span className="truncate">{userItem.email}</span>
+          </div>
+
+          <div className="mt-1 flex min-w-0 items-center gap-1.5 text-[12px] text-black/45">
+            <Store size={13} className="shrink-0" />
+            <span className="truncate">Tienda: {userItem.storeId}</span>
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-3 flex flex-wrap gap-2 border-t border-black/[0.06] pt-3">
+        <span
+          className={`rounded-full px-3 py-1.5 text-[11px] font-normal ${getRoleClass(
+            userItem.role
+          )}`}
+        >
+          {getRoleLabel(userItem.role)}
+        </span>
+
+        <span
+          className={`rounded-full px-3 py-1.5 text-[11px] font-normal ${getStatusClass(
+            userItem.active
+          )}`}
+        >
+          {userItem.active ? "Activo" : "Inactivo"}
+        </span>
+      </div>
+
+      <div className="mt-3 grid grid-cols-[1fr_1.05fr] gap-2">
+        <button
+          type="button"
+          onClick={onEdit}
+          className="inline-flex h-10 items-center justify-center gap-2 rounded-2xl border border-black/[0.08] bg-white text-[13px] font-medium text-black transition hover:border-red-500/25 hover:bg-red-50 hover:text-red-600"
+        >
+          <UserCog size={15} />
+          Editar
+        </button>
+
+        <button
+          type="button"
+          onClick={onToggle}
+          className={`inline-flex h-10 items-center justify-center gap-2 rounded-2xl border text-[13px] font-medium transition ${
+            userItem.active
+              ? "border-red-100 bg-white text-red-600 hover:bg-red-50"
+              : "border-emerald-100 bg-white text-emerald-600 hover:bg-emerald-50"
+          }`}
+        >
+          {userItem.active ? (
+            <>
+              <UserX size={15} />
+              Desactivar
+            </>
+          ) : (
+            <>
+              <UserCheck size={15} />
+              Activar
+            </>
+          )}
+        </button>
+      </div>
+    </article>
+  );
+}
+
+function UserFormModal({
+  editingUser,
+  form,
+  saving,
+  closeForm,
+  handleSubmit,
+  updateForm,
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 px-4 py-6 backdrop-blur-sm">
+      <section className="w-full max-w-[520px] overflow-hidden rounded-[28px] bg-white shadow-2xl">
+        <div className="flex items-start justify-between border-b border-black/[0.06] px-5 py-4">
+          <div>
+            <h2 className="text-[18px] font-medium tracking-[-0.025em] text-red-600">
+              {editingUser ? "Editar usuario" : "Nuevo usuario"}
+            </h2>
+
+            <p className="mt-1 text-[12px] text-black/45">
+              {editingUser ? "Actualiza los datos del perfil" : "Crea un nuevo acceso al panel"}
+            </p>
+          </div>
+
+          <button
+            type="button"
+            onClick={closeForm}
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-black/60 transition hover:bg-red-50 hover:text-red-600"
+          >
+            <X size={19} />
+          </button>
+        </div>
+
+        <form onSubmit={handleSubmit} className="p-5">
+          <div className="grid gap-3">
+            <InputField
+              label="Nombre completo"
+              value={form.displayName}
+              onChange={(value) => updateForm("displayName", value)}
+              placeholder="Ej: Juan Pérez"
+            />
+
+            <InputField
+              label="Correo electrónico"
+              type="email"
+              value={form.email}
+              disabled={Boolean(editingUser)}
+              onChange={(value) => updateForm("email", value)}
+              placeholder="usuario@mastercaps.com"
+              helper={
+                editingUser ? "El correo no se edita desde este panel." : ""
+              }
+            />
+
+            {!editingUser && (
+              <InputField
+                label="Contraseña temporal"
+                type="password"
+                value={form.password}
+                onChange={(value) => updateForm("password", value)}
+                placeholder="Mínimo 6 caracteres"
+              />
+            )}
+
+            <label>
+              <span className="text-[12px] font-normal text-black/55">
+                Rol
+              </span>
+
+              <select
+                value={form.role}
+                onChange={(event) => updateForm("role", event.target.value)}
+                className="mt-2 h-10 w-full rounded-xl border border-black/[0.08] bg-white px-3 text-[13px] outline-none transition focus:border-red-600 focus:ring-4 focus:ring-red-600/10"
+              >
+                <option value="seller">Vendedor</option>
+                <option value="admin">Administrador</option>
+              </select>
+            </label>
+
+            <div className="rounded-2xl bg-black/[0.025] p-4">
+              <div className="flex items-start gap-3">
+                {form.role === "admin" ? (
+                  <Shield size={20} className="mt-0.5 text-red-600" />
+                ) : (
+                  <CheckCircle2 size={20} className="mt-0.5 text-emerald-600" />
+                )}
+
+                <div>
+                  <p className="text-[14px] font-medium text-black">
+                    {form.role === "admin" ? "Administrador" : "Vendedor"}
+                  </p>
+
+                  <p className="mt-1 text-[13px] leading-5 text-black/50">
+                    {form.role === "admin"
+                      ? "Podrá entrar al panel y gestionar la operación completa."
+                      : "Podrá registrar ventas y quedará asociado a las acciones que realice."}
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-5 grid grid-cols-2 gap-3">
+            <button
+              type="button"
+              onClick={closeForm}
+              className="inline-flex h-11 items-center justify-center rounded-2xl border border-black/[0.08] text-[14px] font-medium text-black/70 transition hover:bg-black/[0.035]"
+            >
+              Cancelar
+            </button>
+
+            <button
+              type="submit"
+              disabled={saving}
+              className="inline-flex h-11 items-center justify-center rounded-2xl bg-red-600 text-[14px] font-medium text-white shadow-lg shadow-red-600/20 transition hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {saving
+                ? "Guardando..."
+                : editingUser
+                  ? "Actualizar"
+                  : "Crear usuario"}
+            </button>
+          </div>
+        </form>
+      </section>
+    </div>
+  );
+}
+
+function InputField({
+  label,
+  value,
+  onChange,
+  placeholder,
+  type = "text",
+  disabled = false,
+  helper = "",
+}) {
+  return (
+    <label>
+      <span className="text-[12px] font-normal text-black/55">{label}</span>
+
+      <input
+        type={type}
+        value={value}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.value)}
+        className="mt-2 h-10 w-full rounded-xl border border-black/[0.08] bg-white px-3 text-[13px] text-black outline-none transition placeholder:text-black/35 focus:border-red-600 focus:ring-4 focus:ring-red-600/10 disabled:bg-black/[0.025] disabled:text-black/45"
+        placeholder={placeholder}
+      />
+
+      {helper && <p className="mt-1 text-[11px] text-black/40">{helper}</p>}
+    </label>
   );
 }
