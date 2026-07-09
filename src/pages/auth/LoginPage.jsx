@@ -1,31 +1,20 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Navigate, useNavigate } from "react-router-dom";
 import { Eye, EyeOff, Lock, Mail, Store } from "lucide-react";
 
-import { loginAdmin, subscribeAuth } from "../../services/auth.service";
+import { useAuth } from "../../context/AuthContext";
+import { loginAdmin } from "../../services/auth.service";
 
 export default function LoginPage() {
   const navigate = useNavigate();
 
-  const [user, setUser] = useState(null);
-  const [checking, setChecking] = useState(true);
+  const { loading, isAuthenticated, canAccessPanel } = useAuth();
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
 
   const [showPassword, setShowPassword] = useState(false);
   const [logging, setLogging] = useState(false);
-
-  useEffect(() => {
-    const unsubscribe = subscribeAuth((currentUser) => {
-      setUser(currentUser);
-      setChecking(false);
-    });
-
-    return () => {
-      unsubscribe();
-    };
-  }, []);
 
   async function handleSubmit(event) {
     event.preventDefault();
@@ -53,7 +42,7 @@ export default function LoginPage() {
     }
   }
 
-  if (checking) {
+  if (loading) {
     return (
       <main className="flex min-h-screen items-center justify-center bg-brand-cream px-4">
         <section className="rounded-3xl bg-white p-8 text-center shadow-sm ring-1 ring-black/5">
@@ -65,7 +54,7 @@ export default function LoginPage() {
     );
   }
 
-  if (user) {
+  if (isAuthenticated && canAccessPanel) {
     return <Navigate to="/admin/inventario" replace />;
   }
 
@@ -80,9 +69,7 @@ export default function LoginPage() {
         </div>
 
         <div className="mt-6 text-center">
-          <p className="text-sm font-medium text-brand-gold">
-            Master Caps
-          </p>
+          <p className="text-sm font-medium text-brand-gold">Master Caps</p>
 
           <h1 className="mt-2 text-3xl font-semibold tracking-tight text-brand-black">
             Iniciar sesión

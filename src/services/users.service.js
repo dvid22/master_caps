@@ -156,3 +156,30 @@ export async function setUserActiveStatus(userId, active) {
     updatedAt: serverTimestamp(),
   });
 }
+export function subscribeUserProfile(uid, callback, onError) {
+  if (!uid) {
+    callback(null);
+    return () => {};
+  }
+
+  const userRef = doc(db, "users", uid);
+
+  return onSnapshot(
+    userRef,
+    (snapshot) => {
+      if (!snapshot.exists()) {
+        callback(null);
+        return;
+      }
+
+      callback({
+        id: snapshot.id,
+        ...snapshot.data(),
+      });
+    },
+    (error) => {
+      console.error("Error escuchando perfil de usuario:", error);
+      if (onError) onError(error);
+    }
+  );
+}

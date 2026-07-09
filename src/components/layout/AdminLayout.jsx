@@ -3,53 +3,75 @@ import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import {
   ExternalLink,
   FileClock,
+  LayoutDashboard,
   LogOut,
   Menu,
   Package,
   ShoppingBag,
   Store,
-  X,
   Users,
-  LayoutDashboard,
+  X,
 } from "lucide-react";
 
+import { useAuth } from "../../context/AuthContext";
 import { STORE_ID } from "../../services/categories.service";
 import { logoutAdmin } from "../../services/auth.service";
 
 const navItems = [
   {
+    label: "Dashboard",
+    path: "/admin/dashboard",
+    icon: LayoutDashboard,
+    roles: ["admin"],
+  },
+  {
     label: "Inventario",
     path: "/admin/inventario",
     icon: Package,
+    roles: ["admin", "seller"],
   },
   {
     label: "Ventas",
     path: "/admin/ventas",
     icon: ShoppingBag,
+    roles: ["admin", "seller"],
   },
   {
     label: "Apartados",
     path: "/admin/apartados",
     icon: FileClock,
+    roles: ["admin", "seller"],
   },
   {
-  label: "Usuarios",
-  path: "/admin/usuarios",
-  icon: Users,
-},
-{
-  label: "Dashboard",
-  path: "/admin/dashboard",
-  icon: LayoutDashboard,
-},
+    label: "Usuarios",
+    path: "/admin/usuarios",
+    icon: Users,
+    roles: ["admin"],
+  },
 ];
+
+function getRoleLabel(role) {
+  const labels = {
+    admin: "Administrador",
+    seller: "Vendedor",
+  };
+
+  return labels[role] || "Usuario";
+}
 
 export default function AdminLayout() {
   const navigate = useNavigate();
+  const { profile, role } = useAuth();
+
   const [mobileOpen, setMobileOpen] = useState(false);
+
+  const visibleNavItems = navItems.filter((item) =>
+    item.roles.includes(role)
+  );
 
   function openCatalog() {
     const catalogUrl = `${window.location.origin}/catalogo/${STORE_ID}`;
+
     window.open(catalogUrl, "_blank", "noopener,noreferrer");
 
     navigator.clipboard
@@ -60,6 +82,8 @@ export default function AdminLayout() {
       .catch(() => {
         console.log("No se pudo copiar automáticamente:", catalogUrl);
       });
+
+    setMobileOpen(false);
   }
 
   async function handleLogout() {
@@ -68,6 +92,8 @@ export default function AdminLayout() {
     if (!confirmLogout) return;
 
     await logoutAdmin();
+
+    setMobileOpen(false);
     navigate("/login", { replace: true });
   }
 
@@ -81,19 +107,24 @@ export default function AdminLayout() {
                 <Store size={24} />
               </div>
 
-              <div>
+              <div className="min-w-0">
                 <p className="text-lg font-semibold text-brand-black">
                   Master Caps
                 </p>
-                <p className="text-xs text-gray-500">
-                  Panel administrador
+
+                <p className="truncate text-xs text-gray-500">
+                  {profile?.displayName || "Panel administrador"}
+                </p>
+
+                <p className="mt-0.5 text-[11px] font-semibold uppercase tracking-wide text-brand-gold">
+                  {getRoleLabel(role)}
                 </p>
               </div>
             </div>
           </div>
 
           <nav className="flex-1 space-y-2 p-4">
-            {navItems.map((item) => {
+            {visibleNavItems.map((item) => {
               const Icon = item.icon;
 
               return (
@@ -140,12 +171,17 @@ export default function AdminLayout() {
       <section className="min-w-0">
         <header className="sticky top-0 z-40 border-b border-black/10 bg-white/90 px-4 py-3 backdrop-blur lg:hidden">
           <div className="flex items-center justify-between">
-            <div>
+            <div className="min-w-0">
               <p className="text-sm font-semibold text-brand-black">
                 Master Caps
               </p>
-              <p className="text-xs text-gray-500">
-                Panel administrador
+
+              <p className="truncate text-xs text-gray-500">
+                {profile?.displayName || "Panel administrador"}
+              </p>
+
+              <p className="mt-0.5 text-[11px] font-semibold uppercase tracking-wide text-brand-gold">
+                {getRoleLabel(role)}
               </p>
             </div>
 
@@ -166,12 +202,17 @@ export default function AdminLayout() {
         <div className="fixed inset-0 z-50 bg-black/50 lg:hidden">
           <aside className="h-full w-[86%] max-w-sm bg-white shadow-2xl">
             <div className="flex items-center justify-between border-b border-black/10 p-5">
-              <div>
+              <div className="min-w-0">
                 <p className="text-lg font-semibold text-brand-black">
                   Master Caps
                 </p>
-                <p className="text-xs text-gray-500">
-                  Menú principal
+
+                <p className="truncate text-xs text-gray-500">
+                  {profile?.displayName || "Menú principal"}
+                </p>
+
+                <p className="mt-0.5 text-[11px] font-semibold uppercase tracking-wide text-brand-gold">
+                  {getRoleLabel(role)}
                 </p>
               </div>
 
@@ -185,7 +226,7 @@ export default function AdminLayout() {
             </div>
 
             <nav className="space-y-2 p-4">
-              {navItems.map((item) => {
+              {visibleNavItems.map((item) => {
                 const Icon = item.icon;
 
                 return (
