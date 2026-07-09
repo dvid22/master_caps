@@ -9,6 +9,8 @@ import {
   Minus,
   Phone,
   Plus,
+  ShieldCheck,
+  ShoppingBag,
   User,
 } from "lucide-react";
 
@@ -65,9 +67,7 @@ export default function ReserveProductPage() {
 
   const cleanQuantity = useMemo(() => {
     const number = Number(quantity || 1);
-
     if (!Number.isFinite(number) || number <= 0) return 1;
-
     return number;
   }, [quantity]);
 
@@ -86,13 +86,8 @@ export default function ReserveProductPage() {
     setQuantity((current) => {
       const currentNumber = Number(current || 1);
 
-      if (!Number.isFinite(currentNumber) || currentNumber <= 0) {
-        return "1";
-      }
-
-      if (currentNumber > availableStock) {
-        return String(availableStock);
-      }
+      if (!Number.isFinite(currentNumber) || currentNumber <= 0) return "1";
+      if (currentNumber > availableStock) return String(availableStock);
 
       return current;
     });
@@ -130,7 +125,6 @@ export default function ReserveProductPage() {
     }
 
     const safeQuantity = Math.min(Math.max(number, 1), availableStock || 1);
-
     setQuantity(String(safeQuantity));
   }
 
@@ -198,29 +192,31 @@ export default function ReserveProductPage() {
 
   if (loading) {
     return (
-      <main className="flex min-h-screen items-center justify-center bg-brand-cream px-4">
-        <div className="rounded-3xl bg-white p-8 text-center text-sm text-gray-500 shadow-sm">
-          Cargando producto en tiempo real...
-        </div>
-      </main>
+      <CenteredState message="Cargando producto en tiempo real..." />
     );
   }
 
   if (!product) {
     return (
-      <main className="flex min-h-screen items-center justify-center bg-brand-cream px-4">
-        <section className="w-full max-w-md rounded-3xl bg-white p-8 text-center shadow-sm ring-1 ring-black/5">
-          <h1 className="text-2xl font-semibold text-brand-black">
+      <main className="flex min-h-screen items-center justify-center bg-white px-5">
+        <section className="w-full max-w-md rounded-[30px] bg-white p-7 text-center shadow-[0_18px_55px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.06]">
+          <img
+            src="/logo.png"
+            alt="Master Caps"
+            className="mx-auto h-24 w-auto object-contain"
+          />
+
+          <h1 className="mt-5 text-[24px] font-medium tracking-[-0.04em] text-black">
             Producto no encontrado
           </h1>
 
-          <p className="mt-2 text-sm text-gray-500">
+          <p className="mt-2 text-[13px] leading-6 text-black/50">
             La prenda que intentas apartar no existe o fue eliminada.
           </p>
 
           <Link
             to={`/catalogo/${storeId}`}
-            className="mt-6 inline-flex items-center justify-center rounded-2xl bg-brand-black px-5 py-3 text-sm font-semibold text-white"
+            className="mt-6 inline-flex h-12 w-full items-center justify-center rounded-2xl bg-red-600 px-5 text-[14px] font-medium text-white shadow-lg shadow-red-600/20 transition hover:bg-red-700"
           >
             Volver al catálogo
           </Link>
@@ -231,49 +227,53 @@ export default function ReserveProductPage() {
 
   if (success) {
     return (
-      <main className="flex min-h-screen items-center justify-center bg-brand-cream px-4 py-8">
-        <section className="w-full max-w-lg rounded-3xl bg-white p-8 text-center shadow-sm ring-1 ring-black/5">
-          <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-green-100">
-            <CheckCircle2 size={34} className="text-green-700" />
+      <main className="flex min-h-screen items-center justify-center bg-white px-5 py-7">
+        <section className="w-full max-w-lg rounded-[32px] bg-white p-6 text-center shadow-[0_18px_55px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.06] sm:p-8">
+          <img
+            src="/logo.png"
+            alt="Master Caps"
+            className="mx-auto h-24 w-auto object-contain"
+          />
+
+          <div className="mx-auto mt-5 flex h-16 w-16 items-center justify-center rounded-full bg-emerald-50">
+            <CheckCircle2 size={34} className="text-emerald-600" />
           </div>
 
-          <h1 className="mt-5 text-2xl font-semibold text-brand-black">
+          <h1 className="mt-5 text-[25px] font-medium tracking-[-0.04em] text-black">
             Prenda apartada correctamente
           </h1>
 
-          <p className="mt-3 text-sm leading-6 text-gray-600">
+          <p className="mt-3 text-[14px] leading-6 text-black/55">
             Tu apartado quedó registrado. Tienes 7 días para retirar o pagar la
             prenda. Después de ese tiempo, podrá volver a estar disponible.
           </p>
 
-          <div className="mt-6 rounded-3xl bg-brand-cream p-4 text-left">
-            <p className="text-xs font-medium uppercase tracking-wide text-brand-gold">
-              Producto
-            </p>
+          <div className="mt-6 rounded-[26px] bg-black/[0.025] p-4 text-left">
+            <p className="text-[12px] font-medium text-red-600">Producto</p>
 
-            <p className="mt-1 font-semibold text-brand-black">
+            <p className="mt-1 text-[16px] font-medium text-black">
               {product.name}
             </p>
 
-            <p className="mt-1 text-sm text-gray-500">
+            <p className="mt-1 text-[13px] text-black/50">
               Código: {product.code} · Talla: {productSize}
             </p>
 
-            <p className="mt-1 text-sm text-gray-500">
+            <p className="mt-1 text-[13px] text-black/50">
               Cantidad apartada: {reservedQuantity}
             </p>
 
-            <p className="mt-2 text-lg font-semibold text-brand-black">
+            <p className="mt-3 text-[22px] font-medium tracking-[-0.04em] text-black">
               {formatCurrency(
                 Number(product.salePrice || 0) * Number(reservedQuantity || 1)
               )}
             </p>
           </div>
 
-          <div className="mt-6 flex flex-col gap-3 sm:flex-row">
+          <div className="mt-6 grid gap-3 sm:grid-cols-2">
             <Link
               to={`/catalogo/${storeId}`}
-              className="flex-1 rounded-2xl border border-black/10 px-5 py-3 text-sm font-semibold text-brand-black hover:border-brand-black"
+              className="inline-flex h-12 items-center justify-center rounded-2xl border border-black/[0.08] px-5 text-[14px] font-medium text-black transition hover:bg-black/[0.035]"
             >
               Ver más prendas
             </Link>
@@ -281,7 +281,7 @@ export default function ReserveProductPage() {
             <button
               type="button"
               onClick={() => navigate(`/catalogo/${storeId}`)}
-              className="flex-1 rounded-2xl bg-brand-black px-5 py-3 text-sm font-semibold text-white hover:bg-black"
+              className="inline-flex h-12 items-center justify-center rounded-2xl bg-red-600 px-5 text-[14px] font-medium text-white shadow-lg shadow-red-600/20 transition hover:bg-red-700"
             >
               Finalizar
             </button>
@@ -292,19 +292,27 @@ export default function ReserveProductPage() {
   }
 
   return (
-    <main className="min-h-screen overflow-x-hidden bg-brand-cream px-4 py-6 sm:px-6">
-      <section className="mx-auto w-full max-w-7xl">
-        <Link
-          to={`/catalogo/${storeId}`}
-          className="inline-flex items-center gap-2 rounded-2xl border border-black/10 bg-white px-4 py-3 text-sm font-medium text-brand-black hover:border-brand-black"
-        >
-          <ArrowLeft size={17} />
-          Volver al catálogo
-        </Link>
+    <main className="min-h-screen bg-white text-black">
+      <section className="mx-auto min-h-screen w-full max-w-[1500px] px-5 py-6 sm:px-6 lg:px-7">
+        <header className="mb-5 flex items-center justify-between gap-4">
+          <Link
+            to={`/catalogo/${storeId}`}
+            className="inline-flex h-11 items-center gap-2 rounded-2xl border border-black/[0.08] bg-white px-4 text-[13px] font-medium text-black shadow-[0_10px_30px_rgba(0,0,0,0.025)] transition hover:bg-red-50 hover:text-red-600"
+          >
+            <ArrowLeft size={17} />
+            Volver
+          </Link>
 
-        <section className="mt-6 grid w-full overflow-hidden rounded-3xl bg-white shadow-sm ring-1 ring-black/5 lg:grid-cols-[minmax(0,1fr)_minmax(380px,460px)]">
-          <div className="min-w-0 bg-gray-100">
-            <div className="aspect-[4/5] lg:h-full lg:min-h-[640px]">
+          <img
+            src="/logo.png"
+            alt="Master Caps"
+            className="h-16 w-auto object-contain sm:h-20"
+          />
+        </header>
+
+        <section className="grid overflow-hidden rounded-[32px] bg-white shadow-[0_18px_55px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.06] lg:grid-cols-[minmax(0,1.05fr)_minmax(390px,480px)]">
+          <div className="min-w-0 bg-black/[0.025]">
+            <div className="relative aspect-[4/4.2] lg:h-full lg:min-h-[700px]">
               {product.imageUrl ? (
                 <img
                   src={product.imageUrl}
@@ -312,61 +320,58 @@ export default function ReserveProductPage() {
                   className="h-full w-full object-cover"
                 />
               ) : (
-                <div className="flex h-full w-full items-center justify-center text-gray-400">
-                  <Camera size={44} />
+                <div className="flex h-full w-full items-center justify-center text-black/30">
+                  <Camera size={48} />
                 </div>
               )}
+
+              <span className="absolute left-4 top-4 rounded-full bg-red-600 px-4 py-1.5 text-[12px] font-medium text-white shadow-lg shadow-red-600/20">
+                Disponible
+              </span>
             </div>
           </div>
 
-          <div className="min-w-0 p-6 sm:p-8">
-            <p className="break-words text-xs font-medium uppercase tracking-wide text-brand-gold">
-              {product.categoryName}
+          <div className="min-w-0 p-5 sm:p-6 lg:p-7">
+            <p className="text-[12px] font-normal text-black/45">
+              {product.code || "Sin código"} · {product.categoryName}
             </p>
 
-            <h1 className="mt-2 break-words text-3xl font-semibold tracking-tight text-brand-black">
+            <h1 className="mt-2 text-[30px] font-medium leading-tight tracking-[-0.05em] text-black sm:text-[36px]">
               {product.name}
             </h1>
 
-            <p className="mt-2 break-words text-sm text-gray-500">
-              Código: {product.code}
-            </p>
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <span className="rounded-full bg-black/[0.035] px-3 py-1.5 text-[12px] text-black/60">
+                {productSize}
+              </span>
 
-            <p className="mt-1 break-words text-sm font-medium text-brand-black">
-              Talla: {productSize}
-            </p>
+              <span
+                className={`rounded-full px-3 py-1.5 text-[12px] font-medium ${
+                  isAvailable
+                    ? "bg-emerald-50 text-emerald-600"
+                    : "bg-red-50 text-red-600"
+                }`}
+              >
+                {isAvailable
+                  ? `${availableStock} disponible(s)`
+                  : "No disponible"}
+              </span>
+            </div>
 
-            <p className="mt-5 text-3xl font-semibold text-brand-black">
+            <p className="mt-5 text-[32px] font-medium tracking-[-0.05em] text-black">
               {formatCurrency(product.salePrice)}
             </p>
 
-            <div
-              className={`mt-5 rounded-3xl p-4 ${
-                isAvailable
-                  ? "bg-green-50 text-green-800"
-                  : "bg-red-50 text-red-700"
-              }`}
-            >
-              <p className="break-words text-sm font-semibold">
-                {isAvailable
-                  ? `${availableStock} unidad(es) disponible(s)`
-                  : "Esta prenda ya no está disponible"}
-              </p>
-            </div>
+            <div className="mt-5 rounded-[24px] bg-red-50 p-4">
+              <div className="flex items-start gap-3">
+                <CalendarClock size={22} className="mt-0.5 text-red-600" />
 
-            <div className="mt-5 rounded-3xl bg-brand-cream p-4">
-              <div className="flex min-w-0 items-start gap-3">
-                <CalendarClock
-                  size={22}
-                  className="mt-0.5 shrink-0 text-brand-black"
-                />
-
-                <div className="min-w-0">
-                  <p className="text-sm font-semibold text-brand-black">
+                <div>
+                  <p className="text-[14px] font-medium text-black">
                     Apartado por 7 días
                   </p>
 
-                  <p className="mt-1 break-words text-sm leading-6 text-gray-600">
+                  <p className="mt-1 text-[13px] leading-5 text-black/55">
                     Registra tus datos para separar esta prenda. Si no se retira
                     durante la semana, volverá a estar disponible.
                   </p>
@@ -374,18 +379,24 @@ export default function ReserveProductPage() {
               </div>
             </div>
 
-            <form onSubmit={handleSubmit} className="mt-6 space-y-4">
-              <div>
-                <label className="text-sm font-medium text-brand-black">
-                  Cantidad a apartar
-                </label>
+            <form onSubmit={handleSubmit} className="mt-5 space-y-4">
+              <section className="rounded-[24px] border border-black/[0.06] bg-white p-4">
+                <div className="flex items-center justify-between">
+                  <label className="text-[13px] font-medium text-black">
+                    Cantidad
+                  </label>
 
-                <div className="mt-2 grid grid-cols-[44px_minmax(0,1fr)_44px] items-center gap-3">
+                  <p className="text-[12px] text-black/45">
+                    Stock: {availableStock}
+                  </p>
+                </div>
+
+                <div className="mt-3 grid grid-cols-[44px_1fr_44px] items-center gap-3">
                   <button
                     type="button"
                     onClick={decreaseQuantity}
                     disabled={!isAvailable || cleanQuantity <= 1}
-                    className="flex h-11 w-11 items-center justify-center rounded-2xl border border-black/10 hover:border-brand-black disabled:cursor-not-allowed disabled:opacity-50"
+                    className="flex h-11 w-11 items-center justify-center rounded-2xl border border-black/[0.08] transition hover:bg-black/[0.035] disabled:cursor-not-allowed disabled:opacity-45"
                   >
                     <Minus size={17} />
                   </button>
@@ -399,109 +410,113 @@ export default function ReserveProductPage() {
                       handleQuantityChange(event.target.value)
                     }
                     disabled={!isAvailable}
-                    className="h-11 min-w-0 rounded-2xl border border-black/10 px-4 text-center text-sm outline-none focus:border-brand-black disabled:bg-gray-100"
+                    className="h-11 min-w-0 rounded-2xl border border-black/[0.08] px-4 text-center text-[14px] outline-none transition focus:border-red-600 focus:ring-4 focus:ring-red-600/10 disabled:bg-black/[0.025]"
                   />
 
                   <button
                     type="button"
                     onClick={increaseQuantity}
                     disabled={!isAvailable || cleanQuantity >= availableStock}
-                    className="flex h-11 w-11 items-center justify-center rounded-2xl border border-black/10 hover:border-brand-black disabled:cursor-not-allowed disabled:opacity-50"
+                    className="flex h-11 w-11 items-center justify-center rounded-2xl border border-black/[0.08] transition hover:bg-black/[0.035] disabled:cursor-not-allowed disabled:opacity-45"
                   >
                     <Plus size={17} />
                   </button>
                 </div>
 
-                <div className="mt-3 rounded-3xl bg-brand-cream p-4">
-                  <p className="text-xs text-gray-500">Total apartado</p>
+                <div className="mt-4 rounded-2xl bg-black/[0.025] p-4">
+                  <p className="text-[12px] text-black/45">Total apartado</p>
 
-                  <p className="mt-1 text-2xl font-semibold text-brand-black">
+                  <p className="mt-1 text-[24px] font-medium tracking-[-0.04em] text-black">
                     {formatCurrency(totalReservation)}
                   </p>
-
-                  <p className="mt-1 text-xs text-gray-500">
-                    Stock disponible: {availableStock}
-                  </p>
                 </div>
-              </div>
+              </section>
 
-              <label className="block">
-                <span className="text-sm font-medium text-brand-black">
-                  Nombre completo
-                </span>
+              <InputField
+                icon={User}
+                label="Nombre completo"
+                value={form.customerName}
+                onChange={(value) => updateForm("customerName", value)}
+                placeholder="Ej: Juan Pérez"
+              />
 
-                <div className="relative mt-2">
-                  <User
-                    size={18}
-                    className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-gray-400"
-                  />
+              <InputField
+                icon={IdCard}
+                label="Cédula"
+                value={form.customerDocument}
+                onChange={(value) => updateForm("customerDocument", value)}
+                placeholder="Ej: 1000000000"
+              />
 
-                  <input
-                    value={form.customerName}
-                    onChange={(event) =>
-                      updateForm("customerName", event.target.value)
-                    }
-                    className="h-12 w-full rounded-2xl border border-black/10 pl-11 pr-4 text-sm outline-none focus:border-brand-black"
-                    placeholder="Ej: Juan Pérez"
-                  />
-                </div>
-              </label>
-
-              <label className="block">
-                <span className="text-sm font-medium text-brand-black">
-                  Cédula
-                </span>
-
-                <div className="relative mt-2">
-                  <IdCard
-                    size={18}
-                    className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-gray-400"
-                  />
-
-                  <input
-                    value={form.customerDocument}
-                    onChange={(event) =>
-                      updateForm("customerDocument", event.target.value)
-                    }
-                    className="h-12 w-full rounded-2xl border border-black/10 pl-11 pr-4 text-sm outline-none focus:border-brand-black"
-                    placeholder="Ej: 1000000000"
-                  />
-                </div>
-              </label>
-
-              <label className="block">
-                <span className="text-sm font-medium text-brand-black">
-                  Teléfono opcional
-                </span>
-
-                <div className="relative mt-2">
-                  <Phone
-                    size={18}
-                    className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-gray-400"
-                  />
-
-                  <input
-                    value={form.customerPhone}
-                    onChange={(event) =>
-                      updateForm("customerPhone", event.target.value)
-                    }
-                    className="h-12 w-full rounded-2xl border border-black/10 pl-11 pr-4 text-sm outline-none focus:border-brand-black"
-                    placeholder="Ej: 3000000000"
-                  />
-                </div>
-              </label>
+              <InputField
+                icon={Phone}
+                label="Teléfono opcional"
+                value={form.customerPhone}
+                onChange={(value) => updateForm("customerPhone", value)}
+                placeholder="Ej: 3000000000"
+              />
 
               <button
                 type="submit"
                 disabled={reserving || !isAvailable}
-                className="w-full rounded-2xl bg-brand-black px-5 py-3 text-sm font-semibold text-white hover:bg-black disabled:cursor-not-allowed disabled:bg-gray-300"
+                className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-red-600 px-5 text-[14px] font-medium text-white shadow-lg shadow-red-600/20 transition hover:bg-red-700 disabled:cursor-not-allowed disabled:bg-black/20 disabled:shadow-none"
               >
+                <ShoppingBag size={17} />
                 {reserving ? "Apartando prenda..." : "Confirmar apartado"}
               </button>
             </form>
+
+            <div className="mt-5 grid gap-3 sm:grid-cols-2">
+              <MiniBenefit icon={ShieldCheck} title="Compra segura" />
+              <MiniBenefit icon={CalendarClock} title="Reserva por 7 días" />
+            </div>
           </div>
         </section>
       </section>
     </main>
+  );
+}
+
+function CenteredState({ message }) {
+  return (
+    <main className="flex min-h-screen items-center justify-center bg-white px-5">
+      <div className="rounded-[28px] bg-white p-8 text-center text-[14px] text-black/50 shadow-[0_18px_55px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.06]">
+        {message}
+      </div>
+    </main>
+  );
+}
+
+function InputField({ icon: Icon, label, value, onChange, placeholder }) {
+  return (
+    <label className="block">
+      <span className="text-[13px] font-medium text-black">{label}</span>
+
+      <div className="relative mt-2">
+        <Icon
+          size={18}
+          className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-black/35"
+        />
+
+        <input
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          className="h-12 w-full rounded-2xl border border-black/[0.08] bg-white pl-11 pr-4 text-[14px] outline-none transition placeholder:text-black/35 focus:border-red-600 focus:ring-4 focus:ring-red-600/10"
+          placeholder={placeholder}
+        />
+      </div>
+    </label>
+  );
+}
+
+function MiniBenefit({ icon: Icon, title }) {
+  return (
+    <div className="flex items-center gap-3 rounded-2xl bg-black/[0.025] px-4 py-3">
+      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-red-50 text-red-600">
+        <Icon size={17} />
+      </div>
+
+      <p className="text-[13px] font-medium text-black">{title}</p>
+    </div>
   );
 }
