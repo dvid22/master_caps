@@ -10,8 +10,10 @@ import InventoryPage from "./pages/admin/InventoryPage";
 import SalesPage from "./pages/admin/SalesPage";
 import ReservationsPage from "./pages/admin/ReservationsPage";
 import UsersPage from "./pages/admin/UsersPage";
+
 import CatalogPage from "./pages/public/CatalogPage";
 import ReserveProductPage from "./pages/public/ReserveProductPage";
+import ReservationCheckoutPage from "./pages/public/ReservationCheckoutPage";
 
 export default function App() {
   return (
@@ -77,9 +79,15 @@ export default function App() {
       </Route>
 
       <Route path="/catalogo/:storeId" element={<CatalogPage />} />
+
       <Route
         path="/catalogo/:storeId/apartar/:productId"
         element={<ReserveProductPage />}
+      />
+
+      <Route
+        path="/catalogo/:storeId/checkout"
+        element={<ReservationCheckoutPage />}
       />
 
       <Route path="*" element={<Navigate to="/admin/inventario" replace />} />

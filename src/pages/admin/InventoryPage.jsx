@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+  Barcode,
   Camera,
   ChevronLeft,
   ChevronRight,
@@ -41,6 +42,7 @@ import {
 } from "../../utils/money";
 
 import { getCurrentUserActor } from "../../services/auth.service";
+import BarcodeLabel from "../../components/products/BarcodeLabel";
 
 const createVariantId = () =>
   `variant-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
@@ -160,6 +162,7 @@ export default function InventoryPage() {
 
   const [editingProduct, setEditingProduct] = useState(null);
   const [detailProduct, setDetailProduct] = useState(null);
+  const [labelProduct, setLabelProduct] = useState(null);
   const [showForm, setShowForm] = useState(false);
 
   const [suggestedCode, setSuggestedCode] = useState("");
@@ -187,6 +190,11 @@ export default function InventoryPage() {
         setLoading(false);
 
         setDetailProduct((current) => {
+          if (!current) return null;
+          return productsData.find((product) => product.id === current.id) || null;
+        });
+
+        setLabelProduct((current) => {
           if (!current) return null;
           return productsData.find((product) => product.id === current.id) || null;
         });
@@ -838,6 +846,7 @@ export default function InventoryPage() {
                       key={product.id}
                       product={product}
                       onView={() => setDetailProduct(product)}
+                      onPrintLabels={() => setLabelProduct(product)}
                       onEdit={() => handleEdit(product)}
                       onDelete={() => handleDelete(product)}
                     />
@@ -861,10 +870,25 @@ export default function InventoryPage() {
         <ProductDetailModal
           product={detailProduct}
           onClose={() => setDetailProduct(null)}
+          onPrintLabels={() => setLabelProduct(detailProduct)}
           onEdit={() => {
             const productToEdit = detailProduct;
             setDetailProduct(null);
             handleEdit(productToEdit);
+          }}
+        />
+      )}
+
+      {labelProduct && (
+        <BarcodeLabel
+          product={labelProduct}
+          open={Boolean(labelProduct)}
+          onClose={() => setLabelProduct(null)}
+          defaultPreset="thermal58"
+          store={{
+            name: "MASTER CAPS",
+            logoUrl: "/logo.png",
+            showStoreName: false,
           }}
         />
       )}
@@ -928,7 +952,7 @@ function EmptyInventory({ onCreate }) {
   );
 }
 
-function ProductCard({ product, onView, onEdit, onDelete }) {
+function ProductCard({ product, onView, onPrintLabels, onEdit, onDelete }) {
   const stock = getTotalStock(product);
   const stockStatus = getStockStatus(stock);
   const coverImage = getProductCoverImage(product);
@@ -1031,11 +1055,11 @@ function ProductCard({ product, onView, onEdit, onDelete }) {
           </span>
         </div>
 
-        <div className="mt-3 grid grid-cols-[1fr_0.8fr_40px] gap-2">
+        <div className="mt-3 grid grid-cols-2 gap-2">
           <button
             type="button"
             onClick={onView}
-            className="inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-black/[0.08] bg-white text-[12px] font-medium text-black transition hover:border-red-500/25 hover:bg-red-50 hover:text-red-600"
+            className="inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-black/[0.08] bg-white text-[11px] font-medium text-black transition hover:border-red-500/25 hover:bg-red-50 hover:text-red-600"
           >
             <Eye size={14} />
             Ver detalles
@@ -1043,8 +1067,25 @@ function ProductCard({ product, onView, onEdit, onDelete }) {
 
           <button
             type="button"
+            onClick={onPrintLabels}
+            disabled={!product.code || stock <= 0}
+            className="inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-red-100 bg-red-50 text-[11px] font-medium text-red-600 transition hover:border-red-200 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-40"
+            title={
+              !product.code
+                ? "El producto necesita un código"
+                : stock <= 0
+                  ? "El producto no tiene stock"
+                  : "Generar e imprimir etiquetas"
+            }
+          >
+            <Barcode size={14} />
+            Etiquetas
+          </button>
+
+          <button
+            type="button"
             onClick={onEdit}
-            className="inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-black/[0.08] bg-white text-[12px] font-medium text-black transition hover:border-red-500/25 hover:bg-red-50 hover:text-red-600"
+            className="inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-black/[0.08] bg-white text-[11px] font-medium text-black transition hover:border-red-500/25 hover:bg-red-50 hover:text-red-600"
           >
             <Edit3 size={14} />
             Editar
@@ -1053,10 +1094,11 @@ function ProductCard({ product, onView, onEdit, onDelete }) {
           <button
             type="button"
             onClick={onDelete}
-            className="inline-flex h-9 items-center justify-center rounded-xl border border-red-100 bg-white text-red-600 transition hover:bg-red-50"
+            className="inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-red-100 bg-white text-[11px] font-medium text-red-600 transition hover:bg-red-50"
             title="Eliminar producto"
           >
             <Trash2 size={14} />
+            Eliminar
           </button>
         </div>
       </div>
@@ -1064,7 +1106,7 @@ function ProductCard({ product, onView, onEdit, onDelete }) {
   );
 }
 
-function ProductDetailModal({ product, onClose, onEdit }) {
+function ProductDetailModal({ product, onClose, onEdit, onPrintLabels }) {
   const images = getProductImages(product);
   const variants = normalizeProductVariants(
     product.variants,
@@ -1258,13 +1300,23 @@ function ProductDetailModal({ product, onClose, onEdit }) {
           </div>
         </div>
 
-        <div className="sticky bottom-0 flex justify-end gap-3 border-t border-black/[0.06] bg-white/95 px-5 py-4 backdrop-blur-xl">
+        <div className="sticky bottom-0 flex flex-col gap-2 border-t border-black/[0.06] bg-white/95 px-5 py-4 backdrop-blur-xl sm:flex-row sm:items-center sm:justify-end">
           <button
             type="button"
             onClick={onClose}
             className="h-10 rounded-xl border border-black/[0.08] px-5 text-[13px] font-medium text-black/70 transition hover:bg-black/[0.035]"
           >
             Cerrar
+          </button>
+
+          <button
+            type="button"
+            onClick={onPrintLabels}
+            disabled={!product.code || totalStock <= 0}
+            className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-red-200 bg-red-50 px-5 text-[13px] font-medium text-red-600 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <Barcode size={15} />
+            Imprimir etiquetas
           </button>
 
           <button
