@@ -7,6 +7,7 @@ import {
   LogOut,
   Menu,
   Package,
+  TimerReset,
   PanelLeftClose,
   PanelLeftOpen,
   ShoppingBag,
@@ -45,12 +46,21 @@ const navItems = [
     roles: ["admin", "seller"],
   },
   {
-    label: "Usuarios",
+    label: "Usuarios y nómina",
+    sellerLabel: "Mi jornada",
     path: "/admin/usuarios",
-    icon: Users,
-    roles: ["admin"],
+    icon: TimerReset,
+    roles: ["admin", "seller"],
   },
 ];
+
+function getNavigationLabel(item, role) {
+  if (role === "seller" && item.sellerLabel) {
+    return item.sellerLabel;
+  }
+
+  return item.label;
+}
 
 function getRoleLabel(role) {
   const labels = {
@@ -203,13 +213,14 @@ export default function AdminLayout() {
           <nav className="flex-1 space-y-1.5 px-4 py-2">
             {visibleNavItems.map((item) => {
               const Icon = item.icon;
+              const navLabel = getNavigationLabel(item, role);
               const isReservationsItem = item.label === "Apartados";
 
               return (
                 <NavLink
                   key={item.path}
                   to={item.path}
-                  title={sidebarCollapsed ? item.label : undefined}
+                  title={sidebarCollapsed ? navLabel : undefined}
                   className={({ isActive }) =>
                     `group relative flex items-center rounded-2xl text-[14px] font-normal transition-all ${
                       sidebarCollapsed
@@ -245,7 +256,7 @@ export default function AdminLayout() {
                       {!sidebarCollapsed && (
                         <>
                           <span className="min-w-0 flex-1 truncate">
-                            {item.label}
+                            {navLabel}
                           </span>
 
                           {isReservationsItem && (
@@ -362,6 +373,7 @@ export default function AdminLayout() {
             <nav className="space-y-1.5 px-4 py-4">
               {visibleNavItems.map((item) => {
                 const Icon = item.icon;
+                const navLabel = getNavigationLabel(item, role);
                 const isReservationsItem = item.label === "Apartados";
 
                 return (
@@ -390,7 +402,7 @@ export default function AdminLayout() {
                         </span>
 
                         <span className="min-w-0 flex-1 truncate">
-                          {item.label}
+                          {navLabel}
                         </span>
 
                         {isReservationsItem && (

@@ -21,6 +21,7 @@ import {
 } from "../../services/products.service";
 import { useReservationCart } from "../../services/reservationCart.store";
 import ReservationCartDrawer from "../../components/catalog/ReservationCartDrawer";
+import { subscribeReservationSettings } from "../../services/reservations.service";
 import { formatCurrency } from "../../utils/money";
 
 function getProductVariants(product) {
@@ -38,6 +39,9 @@ export default function ReserveProductPage() {
   const cart = useReservationCart(storeId);
 
   const [products, setProducts] = useState([]);
+  const [reservationSettings, setReservationSettings] = useState({
+    defaultReservationDays: 7,
+  });
   const [quantity, setQuantity] = useState("1");
   const [selectedVariantId, setSelectedVariantId] = useState("");
   const [activeImageIndex, setActiveImageIndex] = useState(0);
@@ -61,7 +65,16 @@ export default function ReserveProductPage() {
       storeId
     );
 
-    return () => unsubscribeProducts();
+    const unsubscribeSettings = subscribeReservationSettings(
+      setReservationSettings,
+      () => {},
+      storeId
+    );
+
+    return () => {
+      unsubscribeProducts();
+      unsubscribeSettings();
+    };
   }, [storeId]);
 
   useEffect(() => {
@@ -435,22 +448,22 @@ export default function ReserveProductPage() {
             </div>
           </div>
 
-          <aside className="min-w-0 border-t border-black/[0.06] bg-white lg:max-h-[calc(100vh-72px)] lg:overflow-y-auto lg:border-l lg:border-t-0">
-            <div className="p-5 sm:p-6 lg:p-7">
+          <aside className="min-w-0 overflow-x-hidden border-t border-black/[0.06] bg-white lg:border-l lg:border-t-0">
+            <div className="p-4 sm:p-5 lg:p-5 xl:p-6">
               <p className="text-[11px] uppercase tracking-[0.1em] text-black/35">
                 {product.code || "Sin código"} ·{" "}
                 {product.categoryName || "Colección"}
               </p>
 
-              <h1 className="mt-2 text-[30px] font-semibold leading-[1.02] tracking-[-0.055em] sm:text-[36px]">
+              <h1 className="mt-1.5 text-[27px] font-semibold leading-[1.02] tracking-[-0.05em] sm:text-[31px]">
                 {product.name}
               </h1>
 
-              <p className="mt-4 text-[32px] font-semibold tracking-[-0.05em]">
+              <p className="mt-2.5 text-[28px] font-semibold tracking-[-0.045em]">
                 {formatCurrency(product.salePrice)}
               </p>
 
-              <section className="mt-5">
+              <section className="mt-4">
                 <div className="flex items-center justify-between">
                   <p className="text-[13px] font-medium">Selecciona una talla</p>
 
@@ -459,7 +472,7 @@ export default function ReserveProductPage() {
                   </span>
                 </div>
 
-                <div className="mt-3 grid grid-cols-3 gap-2">
+                <div className="mt-2.5 grid grid-cols-3 gap-2">
                   {variants.map((variant) => {
                     const stock = Number(variant.stock || 0);
                     const active = selectedVariant?.id === variant.id;
@@ -470,7 +483,7 @@ export default function ReserveProductPage() {
                         type="button"
                         disabled={stock <= 0}
                         onClick={() => selectVariant(variant)}
-                        className={`rounded-2xl border px-3 py-3 text-left transition ${
+                        className={`rounded-2xl border px-3 py-2.5 text-left transition ${
                           active
                             ? "border-red-600 bg-red-50 text-red-600 ring-4 ring-red-600/10"
                             : stock > 0
@@ -489,7 +502,7 @@ export default function ReserveProductPage() {
                 </div>
               </section>
 
-              <div className="mt-5 rounded-[20px] border border-red-100 bg-red-50/70 p-4">
+              <div className="mt-4 rounded-[18px] border border-red-100 bg-red-50/70 p-3.5">
                 <div className="flex items-start gap-3">
                   <CalendarClock
                     size={20}
@@ -498,7 +511,7 @@ export default function ReserveProductPage() {
 
                   <div>
                     <p className="text-[13px] font-medium">
-                      Apartado por 7 días
+                      Apartado por {reservationSettings.defaultReservationDays} día(s)
                     </p>
 
                     <p className="mt-1 text-[11px] leading-5 text-black/55">
@@ -509,7 +522,7 @@ export default function ReserveProductPage() {
                 </div>
               </div>
 
-              <section className="mt-5 rounded-[22px] border border-black/[0.06] p-4">
+              <section className="mt-4 rounded-[20px] border border-black/[0.06] p-3.5">
                 <div className="flex items-center justify-between">
                   <div>
                     <p className="text-[12px] font-medium">Cantidad</p>
@@ -524,12 +537,12 @@ export default function ReserveProductPage() {
                   </p>
                 </div>
 
-                <div className="mt-3 grid grid-cols-[42px_1fr_42px] items-center gap-2">
+                <div className="mt-2.5 grid grid-cols-[40px_1fr_40px] items-center gap-2">
                   <button
                     type="button"
                     onClick={decreaseQuantity}
                     disabled={!isAvailable || cleanQuantity <= 1}
-                    className="flex h-10 w-10 items-center justify-center rounded-2xl border border-black/[0.08] transition hover:bg-black/[0.035] disabled:cursor-not-allowed disabled:opacity-35"
+                    className="flex h-9 w-9 items-center justify-center rounded-xl border border-black/[0.08] transition hover:bg-black/[0.035] disabled:cursor-not-allowed disabled:opacity-35"
                   >
                     <Minus size={16} />
                   </button>
@@ -543,20 +556,20 @@ export default function ReserveProductPage() {
                       handleQuantityChange(event.target.value)
                     }
                     disabled={!isAvailable}
-                    className="h-10 min-w-0 rounded-2xl border border-black/[0.08] text-center text-[14px] outline-none focus:border-red-600 focus:ring-4 focus:ring-red-600/10 disabled:bg-black/[0.025]"
+                    className="h-9 min-w-0 rounded-xl border border-black/[0.08] text-center text-[13px] outline-none focus:border-red-600 focus:ring-4 focus:ring-red-600/10 disabled:bg-black/[0.025]"
                   />
 
                   <button
                     type="button"
                     onClick={increaseQuantity}
                     disabled={!isAvailable || cleanQuantity >= availableStock}
-                    className="flex h-10 w-10 items-center justify-center rounded-2xl border border-black/[0.08] transition hover:bg-black/[0.035] disabled:cursor-not-allowed disabled:opacity-35"
+                    className="flex h-9 w-9 items-center justify-center rounded-xl border border-black/[0.08] transition hover:bg-black/[0.035] disabled:cursor-not-allowed disabled:opacity-35"
                   >
                     <Plus size={16} />
                   </button>
                 </div>
 
-                <div className="mt-3 flex items-end justify-between rounded-2xl bg-black/[0.025] p-3">
+                <div className="mt-2.5 flex items-end justify-between rounded-2xl bg-black/[0.025] p-3">
                   <div>
                     <p className="text-[10px] text-black/40">
                       Total seleccionado
@@ -577,7 +590,7 @@ export default function ReserveProductPage() {
                 </div>
               )}
 
-              <div className="mt-4 grid gap-2 sm:grid-cols-2">
+              <div className="mt-3 grid gap-2 sm:grid-cols-2">
                 <button
                   type="button"
                   onClick={() => addSelectedToCart({ openDrawer: true })}
@@ -599,9 +612,12 @@ export default function ReserveProductPage() {
                 </button>
               </div>
 
-              <div className="mt-4 grid grid-cols-2 gap-2">
+              <div className="mt-3 grid grid-cols-2 gap-2">
                 <MiniBenefit icon={ShieldCheck} title="Compra segura" />
-                <MiniBenefit icon={CalendarClock} title="Reserva por 7 días" />
+                <MiniBenefit
+                  icon={CalendarClock}
+                  title={`Reserva por ${reservationSettings.defaultReservationDays} día(s)`}
+                />
               </div>
             </div>
           </aside>
@@ -637,7 +653,7 @@ function MiniBenefit({ icon: Icon, title }) {
         <Icon size={16} />
       </div>
 
-      <p className="text-[11px] font-medium">{title}</p>
+      <p className="min-w-0 break-words text-[11px] font-medium leading-4">{title}</p>
     </div>
   );
 }

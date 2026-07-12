@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import {
   ArrowLeft,
@@ -12,7 +12,10 @@ import {
   User,
 } from "lucide-react";
 
-import { createReservationCart } from "../../services/reservations.service";
+import {
+  createReservationCart,
+  subscribeReservationSettings,
+} from "../../services/reservations.service";
 import { useReservationCart } from "../../services/reservationCart.store";
 import { formatCurrency } from "../../utils/money";
 
@@ -41,9 +44,21 @@ export default function ReservationCheckoutPage() {
 
   const cart = useReservationCart(storeId);
 
+  const [reservationSettings, setReservationSettings] = useState({
+    defaultReservationDays: 7,
+  });
+
   const [form, setForm] = useState(emptyForm);
   const [submitting, setSubmitting] = useState(false);
   const [completedReservation, setCompletedReservation] = useState(null);
+
+  useEffect(() => {
+    return subscribeReservationSettings(
+      setReservationSettings,
+      () => {},
+      storeId
+    );
+  }, [storeId]);
 
   const canSubmit = useMemo(() => {
     return (
@@ -96,6 +111,9 @@ export default function ReservationCheckoutPage() {
         customerName,
         customerDocument,
         customerPhone,
+        reservationDays: reservationSettings.defaultReservationDays,
+        clientVisitorId: cart.visitorId,
+        clientSessionId: cart.sessionId,
         items: cart.items.map((item) => ({
           productId: item.productId,
           variantId: item.variantId,
@@ -110,7 +128,7 @@ export default function ReservationCheckoutPage() {
         customerName,
       });
 
-      cart.clear();
+      cart.finishSession();
       setForm(emptyForm);
     } catch (error) {
       console.error("Error creando el apartado del carrito:", error);
@@ -179,7 +197,11 @@ export default function ReservationCheckoutPage() {
             </div>
 
             <p className="mt-2 text-[12px] leading-5 text-black/50">
-              Puedes retirar o pagar tus prendas hasta{" "}
+              Este apartado fue creado por{" "}
+              <span className="font-medium text-black">
+                {completedReservation.reservationDays} día(s)
+              </span>
+              . Puedes retirar o pagar tus prendas hasta{" "}
               <span className="font-medium text-black">
                 {formatExpirationDate(completedReservation.expiresAt)}
               </span>

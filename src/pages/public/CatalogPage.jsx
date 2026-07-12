@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
+  CalendarClock,
   Camera,
   ChevronRight,
   Grid3X3,
@@ -24,6 +25,7 @@ import {
 import { formatCurrency } from "../../utils/money";
 import { useReservationCart } from "../../services/reservationCart.store";
 import ReservationCartDrawer from "../../components/catalog/ReservationCartDrawer";
+import { subscribeReservationSettings } from "../../services/reservations.service";
 
 const WHATSAPP_NUMBER = "573118169948";
 const WHATSAPP_MESSAGE =
@@ -55,6 +57,9 @@ export default function CatalogPage() {
 
   const [products, setProducts] = useState([]);
   const [categories, setCategories] = useState([]);
+  const [reservationSettings, setReservationSettings] = useState({
+    defaultReservationDays: 7,
+  });
 
   const [search, setSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("all");
@@ -87,9 +92,16 @@ export default function CatalogPage() {
       storeId
     );
 
+    const unsubscribeSettings = subscribeReservationSettings(
+      setReservationSettings,
+      () => {},
+      storeId
+    );
+
     return () => {
       unsubscribeProducts();
       unsubscribeCategories();
+      unsubscribeSettings();
     };
   }, [storeId]);
 
@@ -188,6 +200,7 @@ export default function CatalogPage() {
             sizeFilter={sizeFilter}
             onCategoryChange={selectCategory}
             onSizeChange={selectSize}
+            reservationDays={reservationSettings.defaultReservationDays}
           />
         </aside>
 
@@ -365,6 +378,7 @@ export default function CatalogPage() {
           sizeFilter={sizeFilter}
           onCategoryChange={selectCategory}
           onSizeChange={selectSize}
+          reservationDays={reservationSettings.defaultReservationDays}
           onClose={() => setMobileSidebarOpen(false)}
         />
       )}
@@ -390,6 +404,7 @@ function CatalogSidebar(props) {
     sizeFilter,
     onCategoryChange,
     onSizeChange,
+    reservationDays = 7,
     onClose,
     mobile = false,
   } = props;
@@ -441,6 +456,21 @@ function CatalogSidebar(props) {
               onClick={() => onCategoryChange(category.id)}
             />
           ))}
+        </div>
+      </div>
+
+      <div className="mt-6 border-t border-black/[0.06] pt-5">
+        <div className="rounded-[20px] border border-red-100 bg-red-50/70 p-4">
+          <div className="flex items-center gap-2 text-red-600">
+            <CalendarClock size={16} />
+            <p className="text-[12px] font-medium">
+              Apartados por {reservationDays} día(s)
+            </p>
+          </div>
+
+          <p className="mt-2 text-[10px] leading-5 text-black/50">
+            Las prendas reservadas se conservarán durante el plazo configurado por la tienda.
+          </p>
         </div>
       </div>
 
