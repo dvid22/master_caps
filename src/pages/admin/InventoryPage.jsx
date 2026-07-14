@@ -44,6 +44,11 @@ import {
 import { getCurrentUserActor } from "../../services/auth.service";
 import BarcodeLabel from "../../components/products/BarcodeLabel";
 
+import {
+  standardizeProductImage,
+  standardizeProductImages,
+} from "../../services/productImageProcessing.service";
+
 const createVariantId = () =>
   `variant-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 
@@ -178,6 +183,13 @@ export default function InventoryPage() {
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [processingImages, setProcessingImages] = useState(false);
+  const [imageProcessingProgress, setImageProcessingProgress] = useState({
+    current: 0,
+    total: 0,
+    progress: 0,
+    message: "",
+  });
 
   const productsPerPage = 8;
 
@@ -411,23 +423,58 @@ export default function InventoryPage() {
       );
   }
 
-  function handleCoverChange(event) {
+  async function handleCoverChange(event) {
     const file = event.target.files?.[0];
     event.target.value = "";
 
-    if (!file) return;
+    if (!file || processingImages) return;
 
-    revokePreview(coverPreview);
+    try {
+      setProcessingImages(true);
+      setImageProcessingProgress({
+        current: 1,
+        total: 1,
+        progress: 0,
+        message: "Preparando portada...",
+      });
 
-    setCoverFile(file);
-    setCoverPreview(URL.createObjectURL(file));
+      const processedFile = await standardizeProductImage(file, {
+        onProgress: ({ progress, message }) => {
+          setImageProcessingProgress({
+            current: 1,
+            total: 1,
+            progress,
+            message,
+          });
+        },
+      });
+
+      revokePreview(coverPreview);
+
+      setCoverFile(processedFile);
+      setCoverPreview(URL.createObjectURL(processedFile));
+    } catch (error) {
+      console.error(error);
+      alert(
+        error.message ||
+          "No se pudo quitar el fondo de la imagen de portada."
+      );
+    } finally {
+      setProcessingImages(false);
+      setImageProcessingProgress({
+        current: 0,
+        total: 0,
+        progress: 0,
+        message: "",
+      });
+    }
   }
 
-  function handleGalleryChange(event) {
+  async function handleGalleryChange(event) {
     const files = Array.from(event.target.files || []);
     event.target.value = "";
 
-    if (files.length === 0) return;
+    if (files.length === 0 || processingImages) return;
 
     const currentCount =
       existingImages.length +
@@ -445,17 +492,68 @@ export default function InventoryPage() {
 
     if (acceptedFiles.length < files.length) {
       alert(
-        `Solo se agregaron ${acceptedFiles.length} imágenes porque el máximo es ${MAX_PRODUCT_IMAGES}.`
+        `Solo se procesarán ${acceptedFiles.length} imágenes porque el máximo es ${MAX_PRODUCT_IMAGES}.`
       );
     }
 
-    const newImages = acceptedFiles.map((file) => ({
-      id: createLocalImageId(),
-      file,
-      preview: URL.createObjectURL(file),
-    }));
+    try {
+      setProcessingImages(true);
+      setImageProcessingProgress({
+        current: 1,
+        total: acceptedFiles.length,
+        progress: 0,
+        message: "Preparando imágenes...",
+      });
 
-    setGalleryFiles((current) => [...current, ...newImages]);
+      const processedFiles = await standardizeProductImages(
+        acceptedFiles,
+        {
+          onFileStart: ({ index, total }) => {
+            setImageProcessingProgress({
+              current: index + 1,
+              total,
+              progress: 0,
+              message: "Preparando imagen...",
+            });
+          },
+          onFileProgress: ({
+            index,
+            total,
+            progress,
+            message,
+          }) => {
+            setImageProcessingProgress({
+              current: index + 1,
+              total,
+              progress,
+              message,
+            });
+          },
+        }
+      );
+
+      const newImages = processedFiles.map((processedFile) => ({
+        id: createLocalImageId(),
+        file: processedFile,
+        preview: URL.createObjectURL(processedFile),
+      }));
+
+      setGalleryFiles((current) => [...current, ...newImages]);
+    } catch (error) {
+      console.error(error);
+      alert(
+        error.message ||
+          "No se pudieron estandarizar las imágenes seleccionadas."
+      );
+    } finally {
+      setProcessingImages(false);
+      setImageProcessingProgress({
+        current: 0,
+        total: 0,
+        progress: 0,
+        message: "",
+      });
+    }
   }
 
   function removeNewGalleryImage(imageId) {
@@ -628,6 +726,11 @@ export default function InventoryPage() {
 
     if (!normalizedVariants) return;
 
+    if (processingImages) {
+      alert("Espera a que termine el procesamiento de las imágenes.");
+      return;
+    }
+
     if (!name) {
       alert("Escribe el nombre del producto.");
       return;
@@ -743,7 +846,7 @@ export default function InventoryPage() {
   }
 
   return (
-    <main className="min-h-screen bg-[#f7f7f8] px-3 py-4 sm:px-5 lg:px-6">
+    <main className="min-h-screen bg-white px-3 py-4 sm:px-5 lg:px-6">
       <section className="mx-auto max-w-[1540px]">
         <header className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
           <div>
@@ -920,6 +1023,8 @@ export default function InventoryPage() {
           saving={saving}
           profit={profit}
           formTotalStock={formTotalStock}
+          processingImages={processingImages}
+          imageProcessingProgress={imageProcessingProgress}
         />
       )}
     </main>
@@ -967,7 +1072,7 @@ function ProductCard({ product, onView, onPrintLabels, onEdit, onDelete }) {
             <img
               src={coverImage.url}
               alt={product.name}
-              className="h-full w-full object-cover"
+              className="h-full w-full bg-white object-contain p-2"
             />
           ) : (
             <Camera size={25} className="text-black/30" />
@@ -1166,7 +1271,7 @@ function ProductDetailModal({ product, onClose, onEdit, onPrintLabels }) {
                 <img
                   src={activeImage.url}
                   alt={product.name}
-                  className="h-full w-full object-cover"
+                  className="h-full w-full bg-white object-contain p-2"
                 />
               ) : (
                 <Camera size={38} className="text-black/30" />
@@ -1216,7 +1321,7 @@ function ProductDetailModal({ product, onClose, onEdit, onPrintLabels }) {
                     <img
                       src={image.url}
                       alt={`${product.name} ${index + 1}`}
-                      className="h-full w-full object-cover"
+                      className="h-full w-full bg-white object-contain p-2"
                     />
                   </button>
                 ))}
@@ -1378,6 +1483,8 @@ function ProductFormModal({
   saving,
   profit,
   formTotalStock,
+  processingImages,
+  imageProcessingProgress,
 }) {
   const [step, setStep] = useState(1);
   const totalSteps = 4;
@@ -1669,8 +1776,40 @@ function ProductFormModal({
               <section className="mx-auto max-w-[820px]">
                 <StepHeading
                   title="Imágenes del producto"
-                  description="Elige una portada y agrega fotografías adicionales para el catálogo."
+                  description="Cada imagen se procesa automáticamente: se elimina el fondo, se centra el producto y se aplica un fondo blanco uniforme."
                 />
+
+                {processingImages && (
+                  <div className="mt-4 rounded-[18px] border border-red-100 bg-red-50/60 p-3.5">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-[11px] font-medium text-red-700">
+                          Procesando imagen {imageProcessingProgress.current} de{" "}
+                          {imageProcessingProgress.total}
+                        </p>
+                        <p className="mt-0.5 text-[9px] text-red-600/70">
+                          {imageProcessingProgress.message}
+                        </p>
+                      </div>
+
+                      <span className="text-[11px] font-medium text-red-700">
+                        {imageProcessingProgress.progress}%
+                      </span>
+                    </div>
+
+                    <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-red-100">
+                      <div
+                        className="h-full rounded-full bg-red-600 transition-all duration-300"
+                        style={{
+                          width: `${Math.max(
+                            Math.min(imageProcessingProgress.progress, 100),
+                            4
+                          )}%`,
+                        }}
+                      />
+                    </div>
+                  </div>
+                )}
 
                 <div className="mt-5 grid gap-5 md:grid-cols-[250px_1fr]">
                   <div>
@@ -1692,6 +1831,7 @@ function ProductFormModal({
                         accept="image/jpeg,image/png,image/webp,image/avif"
                         onChange={handleCoverChange}
                         className="hidden"
+                        disabled={processingImages}
                       />
 
                       <div className="relative flex aspect-[4/5] max-h-[310px] items-center justify-center overflow-hidden rounded-[24px] border border-dashed border-black/15 bg-black/[0.025] transition hover:border-red-400 hover:bg-red-50/30">
@@ -1699,7 +1839,7 @@ function ProductFormModal({
                           <img
                             src={currentCoverImage}
                             alt="Vista previa de portada"
-                            className="h-full w-full object-cover"
+                            className="h-full w-full bg-white object-contain p-2"
                           />
                         ) : (
                           <div className="px-5 text-center">
@@ -1757,7 +1897,7 @@ function ProductFormModal({
                           multiple
                           onChange={handleGalleryChange}
                           className="hidden"
-                          disabled={totalImages >= MAX_PRODUCT_IMAGES}
+                          disabled={totalImages >= MAX_PRODUCT_IMAGES || processingImages}
                         />
                         <ImagePlus size={14} />
                         Agregar imágenes
@@ -1794,6 +1934,7 @@ function ProductFormModal({
                             multiple
                             onChange={handleGalleryChange}
                             className="hidden"
+                            disabled={processingImages}
                           />
                           <Images size={21} />
                           <span className="mt-1 text-[9px]">Añadir fotos</span>
@@ -2000,7 +2141,7 @@ function ProductFormModal({
             ) : (
               <button
                 type="submit"
-                disabled={saving || loadingCode}
+                disabled={saving || loadingCode || processingImages}
                 className="inline-flex h-11 items-center justify-center rounded-2xl bg-red-600 px-6 text-[13px] font-medium text-white shadow-lg shadow-red-600/20 transition hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {saving
@@ -2051,7 +2192,7 @@ function GalleryImageItem({
       <img
         src={imageUrl}
         alt="Imagen del producto"
-        className="h-full w-full object-cover"
+        className="h-full w-full bg-white object-contain p-2"
       />
 
       <div className="absolute inset-0 bg-black/0 transition group-hover:bg-black/35" />

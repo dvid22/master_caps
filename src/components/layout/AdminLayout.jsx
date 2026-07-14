@@ -11,6 +11,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   ShoppingBag,
+  ReceiptText,
   Users,
   X,
 } from "lucide-react";
@@ -51,6 +52,12 @@ const navItems = [
     path: "/admin/usuarios",
     icon: TimerReset,
     roles: ["admin", "seller"],
+  },
+  {
+    label: "Gastos",
+    path: "/admin/gastos",
+    icon: ReceiptText,
+    roles: ["admin"],
   },
 ];
 

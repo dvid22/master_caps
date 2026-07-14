@@ -24,9 +24,6 @@ import { STORE_ID } from "./categories.service";
 
 export const PAYMENT_TYPES = {
   HOURLY: "hourly",
-  DAILY: "daily",
-  BIWEEKLY: "biweekly",
-  MONTHLY: "monthly",
 };
 
 export const PAYMENT_TYPE_OPTIONS = [
@@ -35,32 +32,12 @@ export const PAYMENT_TYPE_OPTIONS = [
     label: "Pago por hora",
     rateField: "hourlyRate",
   },
-  {
-    value: PAYMENT_TYPES.DAILY,
-    label: "Pago por día",
-    rateField: "dailyRate",
-  },
-  {
-    value: PAYMENT_TYPES.BIWEEKLY,
-    label: "Pago quincenal",
-    rateField: "biweeklySalary",
-  },
-  {
-    value: PAYMENT_TYPES.MONTHLY,
-    label: "Pago mensual",
-    rateField: "monthlySalary",
-  },
 ];
 
 export const DEFAULT_PAYMENT_CONFIG = {
   paymentEnabled: false,
   paymentType: PAYMENT_TYPES.HOURLY,
-
   hourlyRate: 0,
-  dailyRate: 0,
-  biweeklySalary: 0,
-  monthlySalary: 0,
-
   expectedDailyMinutes: 480,
   workDaysPerMonth: 30,
 };
@@ -108,32 +85,16 @@ function mapUsersSnapshot(snapshot) {
 }
 
 export function normalizePaymentConfig(payload = {}) {
-  const paymentType = isValidPaymentType(payload.paymentType)
-    ? payload.paymentType
-    : DEFAULT_PAYMENT_CONFIG.paymentType;
-
   return {
     paymentEnabled: Boolean(payload.paymentEnabled),
-    paymentType,
-
+    paymentType: PAYMENT_TYPES.HOURLY,
     hourlyRate: toNonNegativeNumber(payload.hourlyRate),
-    dailyRate: toNonNegativeNumber(payload.dailyRate),
-    biweeklySalary: toNonNegativeNumber(payload.biweeklySalary),
-    monthlySalary: toNonNegativeNumber(payload.monthlySalary),
-
     expectedDailyMinutes: Math.min(
-      toPositiveInteger(
-        payload.expectedDailyMinutes,
-        DEFAULT_PAYMENT_CONFIG.expectedDailyMinutes
-      ),
+      toPositiveInteger(payload.expectedDailyMinutes, DEFAULT_PAYMENT_CONFIG.expectedDailyMinutes),
       24 * 60
     ),
-
     workDaysPerMonth: Math.min(
-      toPositiveInteger(
-        payload.workDaysPerMonth,
-        DEFAULT_PAYMENT_CONFIG.workDaysPerMonth
-      ),
+      toPositiveInteger(payload.workDaysPerMonth, DEFAULT_PAYMENT_CONFIG.workDaysPerMonth),
       31
     ),
   };
@@ -141,53 +102,20 @@ export function normalizePaymentConfig(payload = {}) {
 
 export function validatePaymentConfig(payload = {}) {
   const config = normalizePaymentConfig(payload);
-
-  if (!config.paymentEnabled) {
-    return config;
+  if (!config.paymentEnabled) return config;
+  if (!config.hourlyRate || config.hourlyRate <= 0) {
+    throw new Error("Debes registrar un valor por hora mayor a cero.");
   }
-
-  const activeRateByType = {
-    [PAYMENT_TYPES.HOURLY]: config.hourlyRate,
-    [PAYMENT_TYPES.DAILY]: config.dailyRate,
-    [PAYMENT_TYPES.BIWEEKLY]: config.biweeklySalary,
-    [PAYMENT_TYPES.MONTHLY]: config.monthlySalary,
-  };
-
-  const selectedRate = activeRateByType[config.paymentType];
-
-  if (!selectedRate || selectedRate <= 0) {
-    const label =
-      PAYMENT_TYPE_OPTIONS.find(
-        (option) => option.value === config.paymentType
-      )?.label || "modalidad seleccionada";
-
-    throw new Error(
-      `Debes registrar un valor mayor a cero para ${label.toLowerCase()}.`
-    );
-  }
-
   return config;
 }
 
-export function getPaymentTypeLabel(paymentType) {
-  return (
-    PAYMENT_TYPE_OPTIONS.find(
-      (option) => option.value === paymentType
-    )?.label || "Sin modalidad"
-  );
+export function getPaymentTypeLabel() {
+  return "Pago por hora";
 }
 
 export function getActivePaymentRate(userOrConfig = {}) {
   const config = normalizePaymentConfig(userOrConfig);
-
-  const rateByType = {
-    [PAYMENT_TYPES.HOURLY]: config.hourlyRate,
-    [PAYMENT_TYPES.DAILY]: config.dailyRate,
-    [PAYMENT_TYPES.BIWEEKLY]: config.biweeklySalary,
-    [PAYMENT_TYPES.MONTHLY]: config.monthlySalary,
-  };
-
-  return rateByType[config.paymentType] || 0;
+  return config.hourlyRate || 0;
 }
 
 export function subscribeUsers(callback, onError, storeId = STORE_ID) {
@@ -251,11 +179,7 @@ export async function createStoreUser({
   creator = null,
 
   paymentEnabled = false,
-  paymentType = PAYMENT_TYPES.HOURLY,
   hourlyRate = 0,
-  dailyRate = 0,
-  biweeklySalary = 0,
-  monthlySalary = 0,
   expectedDailyMinutes = DEFAULT_PAYMENT_CONFIG.expectedDailyMinutes,
   workDaysPerMonth = DEFAULT_PAYMENT_CONFIG.workDaysPerMonth,
 }) {
@@ -278,11 +202,8 @@ export async function createStoreUser({
 
   const paymentConfig = validatePaymentConfig({
     paymentEnabled,
-    paymentType,
+    paymentType: PAYMENT_TYPES.HOURLY,
     hourlyRate,
-    dailyRate,
-    biweeklySalary,
-    monthlySalary,
     expectedDailyMinutes,
     workDaysPerMonth,
   });

@@ -60,6 +60,12 @@ import {
   subscribeUserTimeEntries,
 } from "../../services/timeTracking.service";
 
+import {
+  PAYROLL_STATUS,
+  calculatePayrollEntryAmount,
+  subscribePayrollPayments,
+} from "../../services/payrollPayments.service";
+
 import { STORE_ID } from "../../services/categories.service";
 import { getCurrentUserActor } from "../../services/auth.service";
 import { useAuth } from "../../context/AuthContext";
@@ -76,9 +82,6 @@ const emptyPaymentForm = {
   paymentEnabled: true,
   paymentType: PAYMENT_TYPES.HOURLY,
   hourlyRate: "",
-  dailyRate: "",
-  biweeklySalary: "",
-  monthlySalary: "",
   expectedDailyMinutes: "480",
   workDaysPerMonth: "30",
 };
@@ -177,20 +180,10 @@ function getEntryStatusClass(status) {
 function getPaymentFormFromUser(userItem) {
   return {
     paymentEnabled: Boolean(userItem?.paymentEnabled),
-    paymentType:
-      userItem?.paymentType || DEFAULT_PAYMENT_CONFIG.paymentType,
+    paymentType: PAYMENT_TYPES.HOURLY,
     hourlyRate: String(userItem?.hourlyRate || ""),
-    dailyRate: String(userItem?.dailyRate || ""),
-    biweeklySalary: String(userItem?.biweeklySalary || ""),
-    monthlySalary: String(userItem?.monthlySalary || ""),
-    expectedDailyMinutes: String(
-      userItem?.expectedDailyMinutes ||
-        DEFAULT_PAYMENT_CONFIG.expectedDailyMinutes
-    ),
-    workDaysPerMonth: String(
-      userItem?.workDaysPerMonth ||
-        DEFAULT_PAYMENT_CONFIG.workDaysPerMonth
-    ),
+    expectedDailyMinutes: String(userItem?.expectedDailyMinutes || DEFAULT_PAYMENT_CONFIG.expectedDailyMinutes),
+    workDaysPerMonth: String(userItem?.workDaysPerMonth || DEFAULT_PAYMENT_CONFIG.workDaysPerMonth),
   };
 }
 
@@ -229,6 +222,58 @@ function getCompletedEntries(entries) {
   );
 }
 
+function getEntryPaymentStatus(entry) {
+  return entry?.paymentStatus === PAYROLL_STATUS.PAID
+    ? PAYROLL_STATUS.PAID
+    : PAYROLL_STATUS.PENDING;
+}
+
+function getEntryPaymentStatusLabel(entry) {
+  return getEntryPaymentStatus(entry) === PAYROLL_STATUS.PAID
+    ? "Pagada"
+    : "Pendiente de pago";
+}
+
+function getEntryPaymentStatusClass(entry) {
+  return getEntryPaymentStatus(entry) === PAYROLL_STATUS.PAID
+    ? "bg-emerald-50 text-emerald-700"
+    : "bg-amber-50 text-amber-700";
+}
+
+function summarizePaymentState(entries = []) {
+  return getCompletedEntries(entries).reduce(
+    (summary, entry) => {
+      const amount = calculatePayrollEntryAmount(entry);
+      const minutes = toNumber(entry.workedMinutes);
+
+      summary.generatedAmount += amount;
+      summary.workedMinutes += minutes;
+
+      if (getEntryPaymentStatus(entry) === PAYROLL_STATUS.PAID) {
+        summary.paidEntries += 1;
+        summary.paidAmount += toNumber(entry.paidAmount, amount);
+        summary.paidMinutes += minutes;
+      } else {
+        summary.pendingEntries += 1;
+        summary.pendingAmount += amount;
+        summary.pendingMinutes += minutes;
+      }
+
+      return summary;
+    },
+    {
+      generatedAmount: 0,
+      paidAmount: 0,
+      pendingAmount: 0,
+      workedMinutes: 0,
+      paidMinutes: 0,
+      pendingMinutes: 0,
+      paidEntries: 0,
+      pendingEntries: 0,
+    }
+  );
+}
+
 function calculatePayroll(entries, userItem, period) {
   const filtered = filterEntriesByPeriod(entries, period);
   const completed = getCompletedEntries(filtered);
@@ -240,94 +285,15 @@ function calculatePayroll(entries, userItem, period) {
 
   const workedHours = Math.round((workedMinutes / 60) * 100) / 100;
   const workedDays = countUniqueWorkedDays(completed);
-  const paymentType =
-    userItem?.paymentType || PAYMENT_TYPES.HOURLY;
+  const paymentType = PAYMENT_TYPES.HOURLY;
 
-  let amount = 0;
-
-  if (paymentType === PAYMENT_TYPES.HOURLY) {
-    amount = completed.reduce(
-      (total, entry) =>
-        total +
-        toNumber(
-          entry.calculatedPayment,
-          (toNumber(entry.workedMinutes) / 60) *
-            toNumber(userItem?.hourlyRate)
-        ),
-      0
-    );
-  }
-
-  if (paymentType === PAYMENT_TYPES.DAILY) {
-    const days = new Map();
-
-    completed.forEach((entry) => {
-      const current = days.get(entry.workDate) || {
-        minutes: 0,
-        rate: toNumber(
-          entry.dailyRateSnapshot,
-          userItem?.dailyRate
-        ),
-        expectedMinutes: toNumber(
-          entry.expectedDailyMinutesSnapshot,
-          userItem?.expectedDailyMinutes || 480
-        ),
-      };
-
-      current.minutes += toNumber(entry.workedMinutes);
-      days.set(entry.workDate, current);
-    });
-
-    amount = [...days.values()].reduce((total, day) => {
-      const expected = Math.max(day.expectedMinutes, 1);
-      const ratio = Math.min(day.minutes / expected, 1);
-
-      return total + ratio * day.rate;
-    }, 0);
-  }
-
-  if (
-    paymentType === PAYMENT_TYPES.BIWEEKLY &&
-    completed.length > 0
-  ) {
-    const salary = toNumber(userItem?.biweeklySalary);
-    const expectedMonthlyDays = Math.max(
-      toNumber(userItem?.workDaysPerMonth, 30),
-      1
-    );
-    const expectedHalfDays = Math.max(expectedMonthlyDays / 2, 1);
-
-    if (period === REPORT_PERIODS.DAY) {
-      amount = salary / expectedHalfDays;
-    } else if (period === REPORT_PERIODS.BIWEEKLY) {
-      amount = salary;
-    } else {
-      const halvesWorked = new Set(
-        completed.map((entry) => entry.biweeklyPeriod).filter(Boolean)
-      ).size;
-
-      amount = salary * Math.max(halvesWorked, 1);
-    }
-  }
-
-  if (
-    paymentType === PAYMENT_TYPES.MONTHLY &&
-    completed.length > 0
-  ) {
-    const salary = toNumber(userItem?.monthlySalary);
-    const expectedMonthlyDays = Math.max(
-      toNumber(userItem?.workDaysPerMonth, 30),
-      1
-    );
-
-    if (period === REPORT_PERIODS.DAY) {
-      amount = salary / expectedMonthlyDays;
-    } else if (period === REPORT_PERIODS.BIWEEKLY) {
-      amount = salary / 2;
-    } else {
-      amount = salary;
-    }
-  }
+  const amount = completed.reduce(
+    (total, entry) =>
+      total +
+      (toNumber(entry.workedMinutes) / 60) *
+        toNumber(entry.hourlyRateSnapshot ?? userItem?.hourlyRate),
+    0
+  );
 
   return {
     entries: filtered,
@@ -353,6 +319,8 @@ export default function UsersPage() {
   const [users, setUsers] = useState([]);
   const [storeEntries, setStoreEntries] = useState([]);
   const [sellerEntries, setSellerEntries] = useState([]);
+  const [payrollPayments, setPayrollPayments] = useState([]);
+  const [sellerPayrollPayments, setSellerPayrollPayments] = useState([]);
   const [activeEntry, setActiveEntry] = useState(null);
 
   const [activeTab, setActiveTab] = useState("payroll");
@@ -402,9 +370,17 @@ export default function UsersPage() {
         alert("No se pudieron escuchar las jornadas laborales."),
     });
 
+    const unsubscribePayroll = subscribePayrollPayments({
+      storeId: STORE_ID,
+      callback: setPayrollPayments,
+      onError: () =>
+        alert("No se pudieron escuchar los pagos de nómina."),
+    });
+
     return () => {
       unsubscribeUsers();
       unsubscribeEntries();
+      unsubscribePayroll();
     };
   }, [isAdmin]);
 
@@ -433,9 +409,18 @@ export default function UsersPage() {
       STORE_ID
     );
 
+    const unsubscribePayroll = subscribePayrollPayments({
+      storeId: STORE_ID,
+      sellerUid: firebaseUser.uid,
+      callback: setSellerPayrollPayments,
+      onError: () =>
+        alert("No se pudieron escuchar tus pagos recibidos."),
+    });
+
     return () => {
       unsubscribeEntries();
       unsubscribeActive();
+      unsubscribePayroll();
     };
   }, [isSeller, firebaseUser?.uid]);
 
@@ -479,9 +464,17 @@ export default function UsersPage() {
           (entry) => entry.userId === seller.id
         );
 
+        const periodEntries = filterEntriesByPeriod(entries, period);
+        const paymentState = summarizePaymentState(periodEntries);
+        const sellerPayments = payrollPayments.filter(
+          (payment) => payment.sellerUid === seller.id
+        );
+
         return {
           seller,
           summary: calculatePayroll(entries, seller, period),
+          paymentState,
+          payments: sellerPayments,
         };
       })
       .filter(({ seller }) => {
@@ -507,7 +500,15 @@ export default function UsersPage() {
 
         return matchesSearch && matchesPayment && matchesStatus;
       });
-  }, [sellers, storeEntries, period, search, payrollPaymentFilter, payrollStatusFilter]);
+  }, [
+    sellers,
+    storeEntries,
+    payrollPayments,
+    period,
+    search,
+    payrollPaymentFilter,
+    payrollStatusFilter,
+  ]);
 
   const adminTotals = useMemo(() => {
     return payrollRows.reduce(
@@ -516,6 +517,8 @@ export default function UsersPage() {
         totals.workedHours += row.summary.workedHours;
         totals.workedDays += row.summary.workedDays;
         totals.amount += row.summary.amount;
+        totals.paidAmount += row.paymentState.paidAmount;
+        totals.pendingAmount += row.paymentState.pendingAmount;
         totals.openEntries += row.summary.openEntries;
 
         return totals;
@@ -525,10 +528,26 @@ export default function UsersPage() {
         workedHours: 0,
         workedDays: 0,
         amount: 0,
+        paidAmount: 0,
+        pendingAmount: 0,
         openEntries: 0,
       }
     );
   }, [payrollRows]);
+
+  const sellerPaymentSummary = useMemo(() => {
+    const state = summarizePaymentState(sellerEntries);
+
+    return {
+      ...state,
+      workedHours: Math.round((state.workedMinutes / 60) * 100) / 100,
+      paidHours: Math.round((state.paidMinutes / 60) * 100) / 100,
+      pendingHours:
+        Math.round((state.pendingMinutes / 60) * 100) / 100,
+      paymentsCount: sellerPayrollPayments.length,
+      lastPayment: sellerPayrollPayments[0] || null,
+    };
+  }, [sellerEntries, sellerPayrollPayments]);
 
   const sellerSummaries = useMemo(() => {
     if (!profile) return null;
@@ -727,6 +746,8 @@ export default function UsersPage() {
         activeEntry={activeEntry}
         entries={sellerEntries}
         summaries={sellerSummaries}
+        paymentSummary={sellerPaymentSummary}
+        payrollPayments={sellerPayrollPayments}
         loading={loading}
         clocking={clocking}
         onClockAction={handleClockAction}
@@ -735,7 +756,7 @@ export default function UsersPage() {
   }
 
   return (
-    <main className="min-h-screen bg-[#f7f7f8] px-3 py-4 text-black sm:px-5 lg:px-6">
+    <main className="min-h-screen bg-white px-3 py-4 text-black sm:px-5 lg:px-6">
       <section className="mx-auto max-w-[1580px]">
         <header className="flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
           <div>
@@ -895,11 +916,14 @@ export default function UsersPage() {
                   <EmptyState text="No hay vendedores para mostrar." />
                 ) : (
                   <div className="grid gap-3 md:grid-cols-2 2xl:grid-cols-3">
-                    {payrollRows.map(({ seller, summary }) => (
+                    {payrollRows.map(
+                      ({ seller, summary, paymentState, payments }) => (
                       <PayrollCard
                         key={seller.id}
                         seller={seller}
                         summary={summary}
+                        paymentState={paymentState}
+                        payments={payments}
                         onPayment={() => openPaymentModal(seller)}
                         onDetails={() => setDetailUser(seller)}
                       />
@@ -1005,6 +1029,8 @@ function SellerAttendanceView({
   activeEntry,
   entries,
   summaries,
+  paymentSummary,
+  payrollPayments,
   loading,
   clocking,
   onClockAction,
@@ -1050,7 +1076,7 @@ function SellerAttendanceView({
   }).format(now);
 
   return (
-    <main className="min-h-screen bg-[#f7f7f8] px-3 pb-20 pt-3 text-black sm:px-5 sm:pb-8 sm:pt-5 lg:px-6">
+    <main className="min-h-screen bg-white px-3 pb-20 pt-3 text-black sm:px-5 sm:pb-8 sm:pt-5 lg:px-6">
       <section className="mx-auto max-w-[1450px]">
         <header className="grid gap-3 lg:grid-cols-[1fr_auto] lg:items-end">
           <div>
@@ -1181,7 +1207,7 @@ function SellerAttendanceView({
               <ConfigurationRow
                 icon={Clock3}
                 label="Modalidad de pago"
-                value={getPaymentTypeLabel(profile?.paymentType)}
+                value="Pago por hora"
               />
 
               <ConfigurationRow
@@ -1205,24 +1231,33 @@ function SellerAttendanceView({
           </article>
         </section>
 
-        <section className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+        <section className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <SellerSummaryCard
             icon={WalletCards}
-            label="Ganado hoy"
-            amount={summaries?.day?.amount || 0}
-            hours={summaries?.day?.workedHours || 0}
+            label="Total generado"
+            amount={paymentSummary?.generatedAmount || 0}
+            hours={paymentSummary?.workedHours || 0}
           />
 
           <SellerSummaryCard
-            icon={CalendarDays}
-            label="Ganado en la quincena"
-            amount={summaries?.biweekly?.amount || 0}
-            hours={summaries?.biweekly?.workedHours || 0}
+            icon={CheckCircle2}
+            label="Total recibido"
+            amount={paymentSummary?.paidAmount || 0}
+            hours={paymentSummary?.paidHours || 0}
+            tone="success"
+          />
+
+          <SellerSummaryCard
+            icon={History}
+            label="Saldo pendiente"
+            amount={paymentSummary?.pendingAmount || 0}
+            hours={paymentSummary?.pendingHours || 0}
+            tone="warning"
           />
 
           <SellerSummaryCard
             icon={Banknote}
-            label="Ganado en el mes"
+            label="Ganado este mes"
             amount={summaries?.month?.amount || 0}
             hours={summaries?.month?.workedHours || 0}
           />
@@ -1253,16 +1288,79 @@ function SellerAttendanceView({
               <EmptyState text="Aún no tienes jornadas registradas." />
             ) : (
               <div className="overflow-hidden rounded-[18px] border border-black/[0.06]">
-                <div className="hidden grid-cols-[1.2fr_.7fr_.7fr_.7fr_.8fr] gap-3 bg-black/[0.025] px-4 py-3 text-[10px] font-medium text-black/45 md:grid">
+                <div className="hidden grid-cols-[1.15fr_.65fr_.65fr_.7fr_.8fr_.8fr] gap-3 bg-black/[0.025] px-4 py-3 text-[10px] font-medium text-black/45 md:grid">
                   <span>Fecha</span>
                   <span>Entrada</span>
                   <span>Salida</span>
-                  <span>Tiempo total</span>
-                  <span>Pago estimado</span>
+                  <span>Tiempo</span>
+                  <span>Valor</span>
+                  <span>Estado pago</span>
                 </div>
 
                 {recentEntries.map((entry) => (
                   <SellerHistoryRow key={entry.id} entry={entry} />
+                ))}
+              </div>
+            )}
+          </div>
+        </section>
+
+        <section className="mt-4 rounded-[24px] border border-black/[0.06] bg-white p-4 shadow-[0_16px_46px_rgba(0,0,0,0.035)] sm:p-5">
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <h2 className="text-[15px] font-medium sm:text-[16px]">
+                Pagos recibidos
+              </h2>
+              <p className="mt-0.5 text-[10px] text-black/42">
+                Historial de pagos confirmados por administración.
+              </p>
+            </div>
+
+            <span className="rounded-full bg-emerald-50 px-3 py-1 text-[9px] font-medium text-emerald-700">
+              {paymentSummary?.paymentsCount || 0} pago(s)
+            </span>
+          </div>
+
+          <div className="mt-4">
+            {payrollPayments.length === 0 ? (
+              <EmptyState text="Aún no tienes pagos de nómina registrados." />
+            ) : (
+              <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+                {payrollPayments.map((payment) => (
+                  <article
+                    key={payment.id}
+                    className="rounded-[18px] border border-black/[0.06] bg-white p-3.5"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-[10px] text-black/42">
+                          {formatDateKey(payment.paymentDate)}
+                        </p>
+                        <p className="mt-1 text-[18px] font-medium tracking-[-0.04em]">
+                          {formatCurrency(payment.amount || 0)}
+                        </p>
+                      </div>
+
+                      <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-[8px] font-medium text-emerald-700">
+                        Pagado
+                      </span>
+                    </div>
+
+                    <div className="mt-3 grid grid-cols-2 gap-2">
+                      <SmallInfo
+                        label="Horas pagadas"
+                        value={`${payment.totalHours || 0} h`}
+                      />
+                      <SmallInfo
+                        label="Jornadas"
+                        value={String(payment.entriesCount || 0)}
+                      />
+                    </div>
+
+                    <p className="mt-2 text-[8px] text-black/38">
+                      Ref. {payment.id}
+                    </p>
+                  </article>
                 ))}
               </div>
             )}
@@ -1294,49 +1392,66 @@ function ConfigurationRow({ icon: Icon, label, value }) {
 }
 
 function SellerHistoryRow({ entry }) {
+  const paid = getEntryPaymentStatus(entry) === PAYROLL_STATUS.PAID;
+
   return (
     <div className="border-t border-black/[0.055] px-3 py-3 first:border-t-0 sm:px-4">
-      <div className="grid gap-3 md:grid-cols-[1.2fr_.7fr_.7fr_.7fr_.8fr] md:items-center">
-        <div className="flex items-start justify-between gap-3 md:block">
-          <div>
-            <p className="text-[11px] font-medium">
-              {formatDateKey(entry.workDate)}
-            </p>
-
-            <span
-              className={`mt-1 inline-flex rounded-full px-2 py-0.5 text-[8px] ${getEntryStatusClass(
-                entry.status
-              )}`}
-            >
-              {getEntryStatusLabel(entry.status)}
-            </span>
-          </div>
-
-          <p className="text-right text-[12px] font-medium text-emerald-600 md:hidden">
-            {formatCurrency(entry.calculatedPayment || 0)}
+      <div className="grid gap-3 md:grid-cols-[1.15fr_.65fr_.65fr_.7fr_.8fr_.8fr] md:items-center">
+        <div>
+          <p className="text-[11px] font-medium">
+            {formatDateKey(entry.workDate)}
           </p>
+
+          <span
+            className={`mt-1 inline-flex rounded-full px-2 py-0.5 text-[8px] ${getEntryStatusClass(
+              entry.status
+            )}`}
+          >
+            {getEntryStatusLabel(entry.status)}
+          </span>
         </div>
 
-        <div className="grid grid-cols-3 gap-2 md:contents">
-          <MobileHistoryValue
-            label="Entrada"
-            value={formatTime(entry.clockIn)}
-          />
+        <MobileHistoryValue
+          label="Entrada"
+          value={formatTime(entry.clockIn)}
+        />
 
-          <MobileHistoryValue
-            label="Salida"
-            value={formatTime(entry.clockOut)}
-          />
+        <MobileHistoryValue
+          label="Salida"
+          value={formatTime(entry.clockOut)}
+        />
 
-          <MobileHistoryValue
-            label="Tiempo"
-            value={formatWorkedTime(entry.workedMinutes)}
-            strong
-          />
+        <MobileHistoryValue
+          label="Tiempo"
+          value={formatWorkedTime(entry.workedMinutes)}
+          strong
+        />
 
-          <p className="hidden text-[11px] font-medium text-emerald-600 md:block">
-            {formatCurrency(entry.calculatedPayment || 0)}
+        <div>
+          <p className="text-[11px] font-medium">
+            {formatCurrency(calculatePayrollEntryAmount(entry))}
           </p>
+          {paid && entry.paidAt && (
+            <p className="mt-0.5 text-[8px] text-black/38">
+              {formatDateTime(entry.paidAt)}
+            </p>
+          )}
+        </div>
+
+        <div>
+          <span
+            className={`inline-flex rounded-full px-2.5 py-1 text-[8px] font-medium ${getEntryPaymentStatusClass(
+              entry
+            )}`}
+          >
+            {getEntryPaymentStatusLabel(entry)}
+          </span>
+
+          {paid && entry.payrollPaymentId && (
+            <p className="mt-1 truncate text-[7px] text-black/32">
+              Ref. {entry.payrollPaymentId}
+            </p>
+          )}
         </div>
       </div>
     </div>
@@ -1403,6 +1518,8 @@ function MetricCard({
 function PayrollCard({
   seller,
   summary,
+  paymentState,
+  payments,
   onPayment,
   onDetails,
 }) {
@@ -1448,17 +1565,35 @@ function PayrollCard({
         </div>
       </div>
 
-      <div className="mt-3 grid grid-cols-[repeat(3,1fr)_1.25fr] divide-x divide-black/[0.06] rounded-2xl bg-black/[0.022] px-2 py-3">
+      <div className="mt-3 grid grid-cols-3 divide-x divide-black/[0.06] rounded-2xl bg-black/[0.022] px-2 py-3">
         <PayrollMiniMetric
+          label="Generado"
+          value={formatCurrency(paymentState?.generatedAmount || 0)}
+        />
+        <PayrollMiniMetric
+          label="Pagado"
+          value={formatCurrency(paymentState?.paidAmount || 0)}
+          success
+        />
+        <PayrollMiniMetric
+          label="Pendiente"
+          value={formatCurrency(paymentState?.pendingAmount || 0)}
+          warning
+        />
+      </div>
+
+      <div className="mt-2 grid grid-cols-3 gap-2">
+        <SmallInfo
           label="Horas"
           value={`${summary.workedHours.toFixed(2)} h`}
         />
-        <PayrollMiniMetric label="Días" value={summary.workedDays} />
-        <PayrollMiniMetric label="Jornadas" value={summary.completedEntries} />
-        <PayrollMiniMetric
-          label="Pago estimado"
-          value={formatCurrency(summary.amount)}
-          strong
+        <SmallInfo
+          label="Jornadas"
+          value={String(summary.completedEntries)}
+        />
+        <SmallInfo
+          label="Pagos"
+          value={String(payments?.length || 0)}
         />
       </div>
 
@@ -1485,15 +1620,25 @@ function PayrollCard({
   );
 }
 
-function PayrollMiniMetric({ label, value, strong = false }) {
+function PayrollMiniMetric({
+  label,
+  value,
+  strong = false,
+  success = false,
+  warning = false,
+}) {
   return (
     <div className="min-w-0 px-2 text-center">
       <p className="truncate text-[8px] text-black/38">{label}</p>
       <p
         className={`mt-1 truncate ${
-          strong
-            ? "text-[13px] font-medium"
-            : "text-[11px] font-medium"
+          success
+            ? "text-[11px] font-medium text-emerald-700"
+            : warning
+              ? "text-[11px] font-medium text-amber-700"
+              : strong
+                ? "text-[13px] font-medium"
+                : "text-[11px] font-medium"
         }`}
       >
         {value}
@@ -1711,10 +1856,19 @@ function SellerSummaryCard({
   label,
   amount,
   hours,
+  tone = "default",
 }) {
   return (
     <article className="group flex items-center gap-3 rounded-[22px] border border-black/[0.06] bg-white p-3.5 shadow-[0_14px_40px_rgba(0,0,0,0.03)] transition hover:-translate-y-0.5 hover:shadow-[0_18px_48px_rgba(0,0,0,0.055)] sm:p-4">
-      <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-red-50 text-red-600">
+      <div
+        className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl ${
+          tone === "success"
+            ? "bg-emerald-50 text-emerald-600"
+            : tone === "warning"
+              ? "bg-amber-50 text-amber-600"
+              : "bg-red-50 text-red-600"
+        }`}
+      >
         <Icon size={19} />
       </div>
 
@@ -1909,11 +2063,7 @@ function PaymentConfigurationModal({
   onSubmit,
   onChange,
 }) {
-  const selectedOption = PAYMENT_TYPE_OPTIONS.find(
-    (option) => option.value === form.paymentType
-  );
-
-  const rateField = selectedOption?.rateField || "hourlyRate";
+  const rateField = "hourlyRate";
 
   return (
     <ModalShell
@@ -1943,25 +2093,10 @@ function PaymentConfigurationModal({
           />
         </label>
 
-        <label className="mt-4 block">
-          <span className="text-[11px] font-medium text-black/60">
-            Modalidad de pago
-          </span>
-
-          <select
-            value={form.paymentType}
-            onChange={(event) =>
-              onChange("paymentType", event.target.value)
-            }
-            className="mt-2 h-11 w-full rounded-2xl border border-black/[0.08] bg-white px-3 text-[12px] outline-none focus:border-red-600"
-          >
-            {PAYMENT_TYPE_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </label>
+        <div className="mt-4 rounded-[20px] border border-red-100 bg-red-50/60 p-4">
+          <p className="text-[11px] font-medium text-red-600">Modalidad de pago</p>
+          <p className="mt-1 text-[15px] font-medium text-black">Pago por hora</p>
+        </div>
 
         <div className="mt-4 rounded-[22px] border border-red-100 bg-red-50/60 p-4">
           <p className="text-[11px] font-medium text-red-600">
@@ -1970,15 +2105,7 @@ function PaymentConfigurationModal({
 
           <div className="mt-3 grid gap-3 sm:grid-cols-2">
             <InputField
-              label={
-                form.paymentType === PAYMENT_TYPES.HOURLY
-                  ? "Valor por hora"
-                  : form.paymentType === PAYMENT_TYPES.DAILY
-                    ? "Valor por día"
-                    : form.paymentType === PAYMENT_TYPES.BIWEEKLY
-                      ? "Valor quincenal"
-                      : "Valor mensual"
-              }
+              label="Valor por hora"
               type="number"
               min="0"
               value={form[rateField]}
