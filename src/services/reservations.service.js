@@ -273,6 +273,8 @@ export async function createReservationCart({
   initialPaymentMethod = "efectivo",
   notes = "",
   actor = null,
+  clientVisitorId = "",
+  clientSessionId = "",
 }) {
   const cleanStoreId = safeString(storeId) || STORE_ID;
   const normalizedItems = normalizeCartItems(items);
@@ -534,6 +536,8 @@ export async function createReservation(payload) {
     customerPhone: payload.customerPhone || "",
     storeId: payload.storeId || STORE_ID,
     source: "catalog-single",
+    clientVisitorId: payload.clientVisitorId || "",
+    clientSessionId: payload.clientSessionId || "",
   });
 
   return result.reservationIds[0];

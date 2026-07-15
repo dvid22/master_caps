@@ -114,11 +114,123 @@ function getDueText(group) {
   return `${daysLeft} días restantes`;
 }
 
+function getTimestampMilliseconds(value) {
+  if (!value) return 0;
+  if (typeof value.toMillis === "function") return value.toMillis();
+  if (typeof value.seconds === "number") return value.seconds * 1000;
+
+  const date = value?.toDate?.() || new Date(value);
+  return Number.isNaN(date?.getTime?.()) ? 0 : date.getTime();
+}
+
+function getReservationGroupKey(reservation) {
+  const explicitGroupId = String(
+    reservation?.reservationGroupId || ""
+  ).trim();
+
+  if (explicitGroupId) return explicitGroupId;
+
+  /*
+   * Compatibilidad con registros creados antes de reservationGroups.
+   * Solo se agrupan juntos cuando comparten cliente, sesión y momento.
+   */
+  const visitorId = String(
+    reservation?.clientVisitorId || ""
+  ).trim();
+  const sessionId = String(
+    reservation?.clientSessionId || ""
+  ).trim();
+  const customerDocument = String(
+    reservation?.customerDocument || ""
+  ).trim();
+  const groupNumber = String(
+    reservation?.reservationGroupNumber || ""
+  ).trim();
+
+  if (groupNumber) return `number:${groupNumber}`;
+
+  if (visitorId && sessionId) {
+    return `visitor:${visitorId}:session:${sessionId}`;
+  }
+
+  const createdBucket = Math.floor(
+    getTimestampMilliseconds(
+      reservation?.reservedAt || reservation?.createdAt
+    ) / 60000
+  );
+
+  return [
+    "legacy",
+    customerDocument || reservation?.customerPhone || "sin-cliente",
+    createdBucket,
+  ].join(":");
+}
+
+function buildFallbackGroup(groupKey, lines) {
+  const sortedLines = [...lines].sort(
+    (a, b) =>
+      Number(a.lineNumber || 0) - Number(b.lineNumber || 0)
+  );
+  const first = sortedLines[0] || {};
+
+  const subtotal = sortedLines.reduce(
+    (total, line) =>
+      total +
+      Number(
+        line.subtotal ??
+          Number(line.unitPrice || 0) *
+            Number(line.quantity || 1)
+      ),
+    0
+  );
+
+  const totalItems = sortedLines.reduce(
+    (total, line) => total + Number(line.quantity || 1),
+    0
+  );
+
+  const amountPaid = Math.max(
+    ...sortedLines.map((line) => Number(line.amountPaid || 0)),
+    0
+  );
+
+  return {
+    id: String(first.reservationGroupId || groupKey),
+    groupNumber:
+      first.reservationGroupNumber ||
+      `AP-${String(first.id || groupKey)
+        .replace(/[^a-zA-Z0-9]/g, "")
+        .slice(0, 8)
+        .toUpperCase()}`,
+    customerName: first.customerName,
+    customerDocument: first.customerDocument,
+    customerPhone: first.customerPhone,
+    status: first.status,
+    source: first.source || "legacy",
+    clientVisitorId: first.clientVisitorId || "",
+    clientSessionId: first.clientSessionId || "",
+    reservationDays: first.reservationDays || 7,
+    subtotal,
+    amountPaid,
+    balanceDue: Math.max(subtotal - amountPaid, 0),
+    totalItems,
+    totalLines: sortedLines.length,
+    expiresAt: first.expiresAt,
+    reservedAt: first.reservedAt,
+    createdAt: first.createdAt,
+    paymentHistory: first.paymentHistory || [],
+    reservationIds: sortedLines.map((line) => line.id),
+    lines: sortedLines,
+    legacy: !first.reservationGroupId,
+    temporaryGroup: Boolean(first.reservationGroupId),
+  };
+}
+
 function buildGroups(groups, reservations) {
   const linesByGroup = new Map();
 
   reservations.forEach((reservation) => {
-    const key = reservation.reservationGroupId || reservation.id;
+    const key = getReservationGroupKey(reservation);
 
     if (!linesByGroup.has(key)) {
       linesByGroup.set(key, []);
@@ -127,50 +239,61 @@ function buildGroups(groups, reservations) {
     linesByGroup.get(key).push(reservation);
   });
 
-  const knownIds = new Set(groups.map((group) => group.id));
+  const normalized = [];
+  const consumedKeys = new Set();
 
-  const normalized = groups.map((group) => ({
-    ...group,
-    lines: linesByGroup.get(group.id) || [],
-  }));
+  groups.forEach((group) => {
+    const directLines =
+      linesByGroup.get(group.id) ||
+      linesByGroup.get(`number:${group.groupNumber}`) ||
+      [];
 
-  reservations.forEach((reservation) => {
-    const key = reservation.reservationGroupId || reservation.id;
+    consumedKeys.add(group.id);
 
-    if (knownIds.has(key)) return;
-
-    const subtotal =
-      Number(reservation.unitPrice || 0) *
-      Number(reservation.quantity || 1);
+    if (group.groupNumber) {
+      consumedKeys.add(`number:${group.groupNumber}`);
+    }
 
     normalized.push({
-      id: key,
-      groupNumber:
-        reservation.reservationGroupNumber ||
-        `AP-${reservation.id.slice(0, 8).toUpperCase()}`,
-      customerName: reservation.customerName,
-      customerDocument: reservation.customerDocument,
-      customerPhone: reservation.customerPhone,
-      status: reservation.status,
-      source: reservation.source || "legacy",
-      reservationDays: reservation.reservationDays || 7,
-      subtotal,
-      amountPaid: Number(reservation.amountPaid || 0),
-      balanceDue: subtotal - Number(reservation.amountPaid || 0),
-      totalItems: Number(reservation.quantity || 1),
-      totalLines: 1,
-      expiresAt: reservation.expiresAt,
-      reservedAt: reservation.reservedAt,
-      createdAt: reservation.createdAt,
-      paymentHistory: reservation.paymentHistory || [],
-      lines: [reservation],
-      legacy: true,
+      ...group,
+      totalLines:
+        Number(group.totalLines || 0) || directLines.length,
+      totalItems:
+        Number(group.totalItems || 0) ||
+        directLines.reduce(
+          (total, line) =>
+            total + Number(line.quantity || 1),
+          0
+        ),
+      lines: [...directLines].sort(
+        (a, b) =>
+          Number(a.lineNumber || 0) -
+          Number(b.lineNumber || 0)
+      ),
+      legacy: false,
+      temporaryGroup: false,
     });
   });
 
+  /*
+   * Si el snapshot de las líneas llega antes que el snapshot del grupo,
+   * se crea UNA sola tarjeta temporal por reservationGroupId.
+   * Antes se creaba una tarjeta por cada línea, que era el error visual.
+   */
+  linesByGroup.forEach((lines, groupKey) => {
+    if (consumedKeys.has(groupKey)) return;
+
+    normalized.push(buildFallbackGroup(groupKey, lines));
+  });
+
   return normalized.sort((a, b) => {
-    const dateA = a.reservedAt?.seconds || a.createdAt?.seconds || 0;
-    const dateB = b.reservedAt?.seconds || b.createdAt?.seconds || 0;
+    const dateA = getTimestampMilliseconds(
+      a.reservedAt || a.createdAt
+    );
+    const dateB = getTimestampMilliseconds(
+      b.reservedAt || b.createdAt
+    );
+
     return dateB - dateA;
   });
 }
@@ -185,6 +308,7 @@ export default function ReservationsPage() {
   });
 
   const [selectedGroup, setSelectedGroup] = useState(null);
+  const [detailGroup, setDetailGroup] = useState(null);
   const [saleForm, setSaleForm] = useState(emptySaleForm);
   const [paymentForm, setPaymentForm] = useState(emptyPaymentForm);
 
@@ -424,7 +548,7 @@ export default function ReservationsPage() {
   }
 
   return (
-    <main className="min-h-screen bg-[#f7f7f8] px-3 py-4 sm:px-5 lg:px-6">
+    <main className="min-h-screen bg-white px-3 py-4 sm:px-5 lg:px-6">
       <section className="mx-auto max-w-[1540px]">
         <header className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
           <div>
@@ -564,6 +688,7 @@ export default function ReservationsPage() {
                         setPaymentForm(emptyPaymentForm);
                       }}
                       onCancel={() => handleCancel(group)}
+                      onView={() => setDetailGroup(group)}
                     />
                   ))}
                 </div>
@@ -693,6 +818,25 @@ export default function ReservationsPage() {
         />
       )}
 
+      {detailGroup && (
+        <ReservationGroupDetailModal
+          group={detailGroup}
+          onClose={() => setDetailGroup(null)}
+          onPayment={() => {
+            setSelectedGroup(detailGroup);
+            setPaymentOpen(true);
+            setPaymentForm(emptyPaymentForm);
+            setDetailGroup(null);
+          }}
+          onSell={() => {
+            setSelectedGroup(detailGroup);
+            setPaymentOpen(false);
+            setSaleForm(emptySaleForm);
+            setDetailGroup(null);
+          }}
+        />
+      )}
+
       {selectedGroup && !paymentOpen && (
         <SaleModal
           group={selectedGroup}
@@ -751,141 +895,126 @@ function ReservationGroupCard({
   onSell,
   onPayment,
   onCancel,
+  onView,
 }) {
   const total = Number(group.subtotal || 0);
   const paid = Number(group.amountPaid || 0);
-  const balance = Math.max(
-    Number(group.balanceDue ?? total - paid),
-    0
-  );
+  const balance = Math.max(Number(group.balanceDue ?? total - paid), 0);
   const isActive = group.status === "active";
   const overdue =
     isActive &&
     getDaysLeft(group.expiresAt) !== null &&
     getDaysLeft(group.expiresAt) < 0;
-
-  const cover = group.lines[0]?.productImageUrl;
+  const lines = Array.isArray(group.lines) ? group.lines : [];
+  const visibleLines = lines.slice(0, 3);
 
   return (
-    <article className="rounded-[24px] bg-white p-3 shadow-[0_14px_40px_rgba(0,0,0,0.035)] ring-1 ring-black/[0.06]">
-      <div className="flex gap-3">
-        <div className="flex h-[86px] w-[86px] shrink-0 items-center justify-center overflow-hidden rounded-[20px] bg-black/[0.025]">
-          {cover ? (
-            <img
-              src={cover}
-              alt={group.lines[0]?.productName}
-              className="h-full w-full object-cover"
-            />
+    <article className="overflow-hidden rounded-[24px] bg-white shadow-[0_16px_46px_rgba(0,0,0,0.045)] ring-1 ring-black/[0.06] transition hover:-translate-y-0.5 hover:shadow-[0_24px_62px_rgba(0,0,0,0.075)]">
+      <div className="p-3.5">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-[10px] font-medium uppercase tracking-[0.08em] text-red-600">{group.groupNumber}</p>
+            <h3 className="mt-1 truncate text-[16px] font-medium tracking-[-0.025em]">{group.customerName || "Sin cliente"}</h3>
+            <p className="mt-1 text-[10px] text-black/42">{group.totalItems || 0} prenda(s) · {group.totalLines || lines.length || 0} línea(s)</p>
+          </div>
+          <span className={`shrink-0 rounded-full px-3 py-1.5 text-[9px] font-medium ${getStatusClass(group.status)}`}>{getStatusLabel(group.status)}</span>
+        </div>
+
+        <div className="mt-3 space-y-2">
+          {visibleLines.map((line) => {
+            const quantity = Number(line.quantity || 1);
+            const unitPrice = Number(line.unitPrice || 0);
+            const subtotal = Number(line.subtotal ?? quantity * unitPrice);
+            return (
+              <div key={line.id} className="flex items-center gap-2.5 rounded-[16px] border border-black/[0.055] bg-white p-2">
+                <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-[13px] bg-black/[0.025]">
+                  {line.productImageUrl ? <img src={line.productImageUrl} alt={line.productName || "Producto"} className="h-full w-full bg-white object-contain p-1" /> : <Camera size={17} className="text-black/25" />}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-[11px] font-medium">{line.productName || "Producto"}</p>
+                  <p className="mt-0.5 truncate text-[8px] text-black/40">Talla {line.productSize || line.size || "Talla única"} · {quantity} unidad(es)</p>
+                </div>
+                <p className="shrink-0 text-[10px] font-medium">{formatCurrency(subtotal)}</p>
+              </div>
+            );
+          })}
+        </div>
+
+        <button type="button" onClick={onView} className="mt-3 inline-flex h-9 w-full items-center justify-center gap-2 rounded-xl border border-black/[0.07] text-[9px] font-medium text-black/60 transition hover:border-red-200 hover:bg-red-50 hover:text-red-600">
+          <Eye size={13} />
+          Ver todos los productos y detalles
+        </button>
+      </div>
+
+      <div className="border-t border-black/[0.055] bg-black/[0.015] px-3.5 py-3">
+        <div className="grid grid-cols-3 divide-x divide-black/[0.06]">
+          <ReservationMetric label="Total" value={formatCurrency(total)} />
+          <ReservationMetric label="Pagado" value={formatCurrency(paid)} success />
+          <ReservationMetric label="Saldo" value={formatCurrency(balance)} danger={balance > 0} success={balance <= 0} />
+        </div>
+        <div className="mt-3 flex items-center justify-between gap-3 rounded-xl bg-white px-3 py-2 ring-1 ring-black/[0.05]">
+          <div><p className="text-[8px] text-black/38">Fecha límite</p><p className="mt-0.5 text-[9px] font-medium">{formatDate(group.expiresAt)}</p></div>
+          <span className={`rounded-full px-2.5 py-1 text-[8px] font-medium ${overdue ? "bg-red-50 text-red-600" : "bg-amber-50 text-amber-700"}`}>{getDueText(group)}</span>
+        </div>
+        <div className="mt-3">
+          {isActive && !overdue ? (
+            <div className="grid grid-cols-3 gap-2">
+              <button type="button" onClick={onPayment} disabled={processing || balance <= 0} className="inline-flex h-10 items-center justify-center gap-1 rounded-xl border border-emerald-200 text-[10px] font-medium text-emerald-600 disabled:opacity-30"><HandCoins size={14}/>Abono</button>
+              <button type="button" onClick={onSell} disabled={processing} className="inline-flex h-10 items-center justify-center gap-1 rounded-xl bg-red-600 text-[10px] font-medium text-white"><ShoppingBag size={14}/>Vender</button>
+              <button type="button" onClick={onCancel} disabled={processing} className="inline-flex h-10 items-center justify-center gap-1 rounded-xl border border-black/[0.08] text-[10px] font-medium"><Trash2 size={14}/>Liberar</button>
+            </div>
+          ) : group.status === "completed" ? (
+            <div className="flex h-10 items-center justify-center gap-2 rounded-xl bg-emerald-50 text-[11px] font-medium text-emerald-600"><CheckCircle2 size={15}/>Venta registrada</div>
           ) : (
-            <Camera size={25} className="text-black/30" />
+            <div className="flex h-10 items-center justify-center gap-2 rounded-xl bg-black/[0.035] text-[11px] text-black/55"><Clock size={15}/>Cerrado</div>
           )}
         </div>
-
-        <div className="min-w-0 flex-1">
-          <div className="flex items-start justify-between gap-2">
-            <div>
-              <p className="text-[11px] font-medium text-red-600">
-                {group.groupNumber}
-              </p>
-
-              <h3 className="mt-1 truncate text-[14px] font-medium">
-                {group.customerName || "Sin cliente"}
-              </h3>
-            </div>
-
-            <span
-              className={`rounded-full px-3 py-1.5 text-[10px] ${getStatusClass(
-                group.status
-              )}`}
-            >
-              {getStatusLabel(group.status)}
-            </span>
-          </div>
-
-          <p className="mt-2 text-[11px] text-black/45">
-            {group.totalItems || 0} prenda(s) · {group.totalLines || 0} producto(s)
-          </p>
-
-          <p className="mt-1 text-[11px] text-black/45">
-            {group.source === "manual" ? "Creado en tienda" : "Catálogo público"}
-          </p>
-        </div>
-      </div>
-
-      <div className="mt-3 space-y-2 border-t border-black/[0.06] pt-3 text-[11px]">
-        <InfoRow
-          label="Vence"
-          value={`${formatDate(group.expiresAt)} · ${getDueText(group)}`}
-        />
-        <InfoRow label="Total" value={formatCurrency(total)} />
-        <InfoRow
-          label="Pagado"
-          value={formatCurrency(paid)}
-          valueClass="text-emerald-600"
-        />
-        <InfoRow
-          label="Saldo"
-          value={formatCurrency(balance)}
-          valueClass={balance > 0 ? "text-red-600" : "text-emerald-600"}
-        />
-      </div>
-
-      {Array.isArray(group.paymentHistory) &&
-        group.paymentHistory.length > 0 && (
-          <div className="mt-3 rounded-2xl bg-black/[0.025] px-3 py-2.5">
-            <p className="text-[10px] text-black/45">
-              {group.paymentHistory.length} movimiento(s) de pago
-            </p>
-          </div>
-        )}
-
-      <div className="mt-3">
-        {isActive && !overdue ? (
-          <div className="grid grid-cols-3 gap-2">
-            <button
-              type="button"
-              onClick={onPayment}
-              disabled={processing || balance <= 0}
-              className="inline-flex h-10 items-center justify-center gap-1 rounded-2xl border border-emerald-200 text-[11px] font-medium text-emerald-600 hover:bg-emerald-50 disabled:opacity-30"
-            >
-              <HandCoins size={14} />
-              Abono
-            </button>
-
-            <button
-              type="button"
-              onClick={onSell}
-              disabled={processing}
-              className="inline-flex h-10 items-center justify-center gap-1 rounded-2xl bg-red-600 text-[11px] font-medium text-white"
-            >
-              <ShoppingBag size={14} />
-              Vender
-            </button>
-
-            <button
-              type="button"
-              onClick={onCancel}
-              disabled={processing}
-              className="inline-flex h-10 items-center justify-center gap-1 rounded-2xl border border-black/[0.08] text-[11px] font-medium"
-            >
-              <Trash2 size={14} />
-              Liberar
-            </button>
-          </div>
-        ) : group.status === "completed" ? (
-          <div className="flex h-10 items-center justify-center gap-2 rounded-2xl bg-emerald-50 text-[12px] font-medium text-emerald-600">
-            <CheckCircle2 size={15} />
-            Venta registrada
-          </div>
-        ) : (
-          <div className="flex h-10 items-center justify-center gap-2 rounded-2xl bg-black/[0.035] text-[12px] text-black/55">
-            <Clock size={15} />
-            Cerrado
-          </div>
-        )}
       </div>
     </article>
   );
+}
+
+function ReservationMetric({ label, value, danger = false, success = false }) {
+  return <div className="min-w-0 px-2 text-center"><p className="text-[7px] text-black/36">{label}</p><p className={`mt-1 truncate text-[10px] font-medium ${danger ? "text-red-600" : success ? "text-emerald-600" : "text-black"}`}>{value}</p></div>;
+}
+
+function ReservationGroupDetailModal({ group, onClose, onPayment, onSell }) {
+  const lines = Array.isArray(group.lines) ? group.lines : [];
+  const total = Number(group.subtotal || 0);
+  const paid = Number(group.amountPaid || 0);
+  const balance = Math.max(Number(group.balanceDue ?? total - paid), 0);
+  const canOperate = group.status === "active" && (getDaysLeft(group.expiresAt) === null || getDaysLeft(group.expiresAt) >= 0);
+
+  return (
+    <ModalShell title={`Detalle · ${group.groupNumber}`} subtitle={`${group.customerName || "Sin cliente"} · ${group.totalItems || 0} prenda(s)`} onClose={onClose} maxWidth="max-w-[860px]">
+      <div className="grid gap-3 sm:grid-cols-4">
+        <DetailSummary label="Productos" value={String(group.totalLines || lines.length)} />
+        <DetailSummary label="Unidades" value={String(group.totalItems || 0)} />
+        <DetailSummary label="Pagado" value={formatCurrency(paid)} success />
+        <DetailSummary label="Saldo" value={formatCurrency(balance)} danger={balance > 0} />
+      </div>
+      <div className="mt-4 max-h-[48vh] space-y-2 overflow-y-auto pr-1">
+        {lines.map((line) => {
+          const quantity = Number(line.quantity || 1);
+          const unitPrice = Number(line.unitPrice || 0);
+          const subtotal = Number(line.subtotal ?? quantity * unitPrice);
+          return (
+            <article key={line.id} className="grid gap-3 rounded-[18px] border border-black/[0.06] bg-white p-3 sm:grid-cols-[70px_minmax(0,1fr)_auto] sm:items-center">
+              <div className="flex h-[70px] w-[70px] items-center justify-center overflow-hidden rounded-[16px] bg-black/[0.025]">{line.productImageUrl ? <img src={line.productImageUrl} alt={line.productName || "Producto"} className="h-full w-full bg-white object-contain p-1.5"/> : <Camera size={22} className="text-black/25"/>}</div>
+              <div className="min-w-0"><p className="truncate text-[13px] font-medium">{line.productName || "Producto"}</p><p className="mt-1 text-[9px] text-black/42">Código: {line.productCode || "Sin código"} · Talla {line.productSize || line.size || "Talla única"}</p><div className="mt-2 flex flex-wrap gap-2"><span className="rounded-full bg-black/[0.035] px-2.5 py-1 text-[8px] text-black/55">{quantity} unidad(es)</span><span className="rounded-full bg-red-50 px-2.5 py-1 text-[8px] text-red-600">{formatCurrency(unitPrice)} c/u</span></div></div>
+              <div className="text-left sm:text-right"><p className="text-[8px] text-black/38">Subtotal</p><p className="mt-1 text-[13px] font-medium">{formatCurrency(subtotal)}</p></div>
+            </article>
+          );
+        })}
+      </div>
+      <div className="mt-4 grid gap-3 rounded-[18px] bg-black/[0.025] p-3 sm:grid-cols-2"><InfoRow label="Documento" value={group.customerDocument || "Sin documento"}/><InfoRow label="Teléfono" value={group.customerPhone || "Sin teléfono"}/><InfoRow label="Vencimiento" value={`${formatDate(group.expiresAt)} · ${getDueText(group)}`}/><InfoRow label="Origen" value={group.source === "manual" ? "Tienda física" : "Catálogo público"}/></div>
+      {canOperate && <div className="mt-4 grid grid-cols-2 gap-2"><button type="button" onClick={onPayment} disabled={balance <= 0} className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-emerald-200 text-[11px] font-medium text-emerald-600 disabled:opacity-35"><HandCoins size={15}/>Registrar abono</button><button type="button" onClick={onSell} className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-red-600 text-[11px] font-medium text-white"><ShoppingBag size={15}/>Finalizar venta</button></div>}
+    </ModalShell>
+  );
+}
+
+function DetailSummary({ label, value, danger = false, success = false }) {
+  return <div className="rounded-[16px] bg-black/[0.025] px-3 py-2.5"><p className="text-[8px] text-black/38">{label}</p><p className={`mt-1 truncate text-[12px] font-medium ${danger ? "text-red-600" : success ? "text-emerald-600" : ""}`}>{value}</p></div>;
 }
 
 function normalizeManualVariants(product) {

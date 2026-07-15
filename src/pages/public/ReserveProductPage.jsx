@@ -103,10 +103,27 @@ export default function ReserveProductPage() {
     [variants]
   );
 
-  const images = useMemo(
-    () => (product ? getProductImages(product) : []),
-    [product]
-  );
+  const images = useMemo(() => {
+    if (!product) return [];
+
+    const normalizedImages = getProductImages(product).filter(
+      (image) => Boolean(image?.url)
+    );
+
+    if (normalizedImages.length > 0) return normalizedImages;
+
+    const legacyUrl = String(product.imageUrl || "").trim();
+
+    return legacyUrl
+      ? [
+          {
+            id: "legacy-cover",
+            type: "cover",
+            url: legacyUrl,
+          },
+        ]
+      : [];
+  }, [product]);
 
   useEffect(() => {
     setActiveImageIndex(0);
@@ -371,7 +388,13 @@ export default function ReserveProductPage() {
 
         <section className="grid min-h-[calc(100vh-72px)] bg-white lg:grid-cols-[minmax(0,1.3fr)_430px] xl:grid-cols-[minmax(0,1.4fr)_460px]">
           <div className="min-w-0 bg-white p-3 sm:p-4 lg:p-5 xl:p-6">
-            <div className="grid gap-3 lg:grid-cols-[76px_minmax(0,1fr)] xl:grid-cols-[84px_minmax(0,1fr)]">
+            <div
+              className={`grid gap-3 ${
+                images.length > 1
+                  ? "lg:grid-cols-[76px_minmax(0,1fr)] xl:grid-cols-[84px_minmax(0,1fr)]"
+                  : "grid-cols-1"
+              }`}
+            >
               {images.length > 1 && (
                 <div className="order-2 flex gap-2 overflow-x-auto pb-1 lg:order-1 lg:flex-col lg:overflow-visible lg:pb-0">
                   {images.map((image, index) => (
@@ -388,7 +411,7 @@ export default function ReserveProductPage() {
                       <img
                         src={image.url}
                         alt={`${product.name} ${index + 1}`}
-                        className="h-full w-full object-cover"
+                        className="h-full w-full bg-white object-contain p-1"
                       />
 
                       {activeImageIndex === index && (
@@ -401,13 +424,19 @@ export default function ReserveProductPage() {
                 </div>
               )}
 
-              <div className="order-1 lg:order-2">
-                <div className="relative flex min-h-[430px] items-center justify-center overflow-hidden rounded-[24px] border border-black/[0.05] bg-[#fbfbfc] sm:min-h-[560px] lg:h-[calc(100vh-112px)]">
+              <div className={images.length > 1 ? "order-1 lg:order-2" : "order-1"}>
+                <div
+                  className={`relative flex items-center justify-center overflow-hidden rounded-[24px] border border-black/[0.05] bg-white ${
+                    images.length > 1
+                      ? "min-h-[430px] sm:min-h-[560px] lg:h-[calc(100vh-112px)]"
+                      : "min-h-[430px] sm:min-h-[560px] lg:h-[calc(100vh-112px)]"
+                  }`}
+                >
                   {activeImage?.url ? (
                     <img
                       src={activeImage.url}
                       alt={product.name}
-                      className="h-full w-full object-contain p-2 sm:p-4 lg:p-5"
+                      className="max-h-full max-w-full object-contain p-3 sm:p-5 lg:p-6"
                     />
                   ) : (
                     <Camera size={48} className="text-black/25" />
