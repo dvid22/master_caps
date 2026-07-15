@@ -28,9 +28,9 @@ export const MAX_PRODUCT_IMAGES = 8;
 
 /**
  * Cantidad máxima permitida por archivo.
- * Actualmente: 8 MB.
+ * Actualmente: 25 MB.
  */
-export const MAX_PRODUCT_IMAGE_SIZE = 8 * 1024 * 1024;
+export const MAX_PRODUCT_IMAGE_SIZE = 25 * 1024 * 1024;
 
 const ALLOWED_IMAGE_TYPES = [
   "image/jpeg",
@@ -334,7 +334,7 @@ export function validateProductImage(file) {
 
   if (Number(file.size || 0) > MAX_PRODUCT_IMAGE_SIZE) {
     throw new Error(
-      `La imagen "${file.name}" supera el tamaño máximo de 8 MB.`
+      `La imagen "${file.name}" supera el tamaño máximo de 25 MB.`
     );
   }
 
@@ -1054,28 +1054,16 @@ export async function updateProduct(
       const oldCode = normalizeProductCode(transactionProduct.code);
       let newCode = normalizeProductCode(productData?.code);
 
+      /*
+       * En edición no generamos un código nuevo si el campo llega vacío.
+       * Esto evita que al actualizar imágenes, precios o tallas se cambie
+       * accidentalmente el código del producto.
+       */
       if (!newCode) {
-        const nextCode = await getNextAvailableProductCode(
-          transaction,
-          storeId
-        );
-
-        newCode = nextCode.code;
-
-        const counterRef = getProductCounterRef(storeId);
-
-        transaction.set(
-          counterRef,
-          {
-            storeId,
-            lastNumber: nextCode.number,
-            updatedAt: serverTimestamp(),
-          },
-          { merge: true }
-        );
+        newCode = oldCode;
       }
 
-      if (newCode !== oldCode) {
+      if (newCode && newCode !== oldCode) {
         const newCodeIndexRef = getProductCodeIndexRef(
           storeId,
           newCode

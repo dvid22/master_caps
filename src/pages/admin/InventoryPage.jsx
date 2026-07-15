@@ -38,13 +38,13 @@ import {
 import {
   calculateProfit,
   formatCurrency,
-  toNumber,
 } from "../../utils/money";
 
 import { getCurrentUserActor } from "../../services/auth.service";
 import BarcodeLabel from "../../components/products/BarcodeLabel";
 
 import {
+  BACKGROUND_PROCESSING_MODES,
   standardizeProductImage,
   standardizeProductImages,
 } from "../../services/productImageProcessing.service";
@@ -152,6 +152,34 @@ function revokePreview(preview) {
   }
 }
 
+function getOnlyDigits(value) {
+  return String(value || "").replace(/\D/g, "");
+}
+
+function formatThousands(value) {
+  const digits = getOnlyDigits(value);
+
+  if (!digits) return "";
+
+  const cleanDigits = digits.replace(/^0+(?=\d)/, "");
+
+  return cleanDigits.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+}
+
+function parseMoneyInput(value) {
+  const digits = getOnlyDigits(value);
+
+  if (!digits) return 0;
+
+  return Number(digits);
+}
+
+function normalizeMoneyInputValue(value) {
+  if (value === null || value === undefined || value === "") return "";
+
+  return formatThousands(value);
+}
+
 export default function InventoryPage() {
   const [products, setProducts] = useState([]);
   const [categories, setCategories] = useState([]);
@@ -161,8 +189,12 @@ export default function InventoryPage() {
   const [coverFile, setCoverFile] = useState(null);
   const [coverPreview, setCoverPreview] = useState("");
 
+  const [pendingCoverFile, setPendingCoverFile] = useState(null);
+  const [pendingCoverPreview, setPendingCoverPreview] = useState("");
+
   const [existingImages, setExistingImages] = useState([]);
   const [galleryFiles, setGalleryFiles] = useState([]);
+  const [pendingGalleryFiles, setPendingGalleryFiles] = useState([]);
   const [removedImagePaths, setRemovedImagePaths] = useState([]);
 
   const [editingProduct, setEditingProduct] = useState(null);
@@ -233,12 +265,17 @@ export default function InventoryPage() {
   useEffect(() => {
     return () => {
       revokePreview(coverPreview);
+      revokePreview(pendingCoverPreview);
       galleryFiles.forEach((image) => revokePreview(image.preview));
+      pendingGalleryFiles.forEach((image) => revokePreview(image.preview));
     };
   }, []);
 
   const profit = useMemo(() => {
-    return calculateProfit(form.costPrice, form.salePrice);
+    return calculateProfit(
+      parseMoneyInput(form.costPrice),
+      parseMoneyInput(form.salePrice)
+    );
   }, [form.costPrice, form.salePrice]);
 
   const formTotalStock = useMemo(() => {
@@ -344,7 +381,9 @@ export default function InventoryPage() {
 
   function clearMediaPreviews() {
     revokePreview(coverPreview);
+    revokePreview(pendingCoverPreview);
     galleryFiles.forEach((image) => revokePreview(image.preview));
+    pendingGalleryFiles.forEach((image) => revokePreview(image.preview));
   }
 
   function resetForm() {
@@ -353,8 +392,11 @@ export default function InventoryPage() {
     setForm(createEmptyForm());
     setCoverFile(null);
     setCoverPreview("");
+    setPendingCoverFile(null);
+    setPendingCoverPreview("");
     setExistingImages([]);
     setGalleryFiles([]);
+    setPendingGalleryFiles([]);
     setRemovedImagePaths([]);
 
     setEditingProduct(null);
@@ -423,11 +465,46 @@ export default function InventoryPage() {
       );
   }
 
+  function getProjectedImageCount({ includePending = true } = {}) {
+    const hasExistingCover = existingImages.some(
+      (image) => image.type === "cover"
+    ) || existingImages.length > 0;
+
+    const newCoverAddsSlot =
+      !hasExistingCover && Boolean(coverFile || pendingCoverFile);
+
+    return (
+      existingImages.length +
+      galleryFiles.length +
+      Number(newCoverAddsSlot) +
+      (includePending ? pendingGalleryFiles.length : 0)
+    );
+  }
+
+  function clearPendingCover() {
+    revokePreview(pendingCoverPreview);
+    setPendingCoverFile(null);
+    setPendingCoverPreview("");
+  }
+
+  function removePendingCover() {
+    clearPendingCover();
+  }
+
   async function handleCoverChange(event) {
     const file = event.target.files?.[0];
     event.target.value = "";
 
     if (!file || processingImages) return;
+
+    revokePreview(pendingCoverPreview);
+
+    setPendingCoverFile(file);
+    setPendingCoverPreview(URL.createObjectURL(file));
+  }
+
+  async function processPendingCover(backgroundMode) {
+    if (!pendingCoverFile || processingImages) return;
 
     try {
       setProcessingImages(true);
@@ -435,10 +512,14 @@ export default function InventoryPage() {
         current: 1,
         total: 1,
         progress: 0,
-        message: "Preparando portada...",
+        message:
+          backgroundMode === BACKGROUND_PROCESSING_MODES.REMOVE
+            ? "Preparando portada para quitar fondo..."
+            : "Preparando portada original...",
       });
 
-      const processedFile = await standardizeProductImage(file, {
+      const processedFile = await standardizeProductImage(pendingCoverFile, {
+        backgroundMode,
         onProgress: ({ progress, message }) => {
           setImageProcessingProgress({
             current: 1,
@@ -450,14 +531,17 @@ export default function InventoryPage() {
       });
 
       revokePreview(coverPreview);
+      revokePreview(pendingCoverPreview);
 
       setCoverFile(processedFile);
       setCoverPreview(URL.createObjectURL(processedFile));
+      setPendingCoverFile(null);
+      setPendingCoverPreview("");
     } catch (error) {
       console.error(error);
       alert(
         error.message ||
-          "No se pudo quitar el fondo de la imagen de portada."
+          "No se pudo preparar la imagen de portada."
       );
     } finally {
       setProcessingImages(false);
@@ -476,11 +560,7 @@ export default function InventoryPage() {
 
     if (files.length === 0 || processingImages) return;
 
-    const currentCount =
-      existingImages.length +
-      galleryFiles.length +
-      Number(Boolean(coverFile));
-
+    const currentCount = getProjectedImageCount();
     const availableSlots = MAX_PRODUCT_IMAGES - currentCount;
 
     if (availableSlots <= 0) {
@@ -492,22 +572,112 @@ export default function InventoryPage() {
 
     if (acceptedFiles.length < files.length) {
       alert(
-        `Solo se procesarán ${acceptedFiles.length} imágenes porque el máximo es ${MAX_PRODUCT_IMAGES}.`
+        `Solo se agregarán ${acceptedFiles.length} imágenes porque el máximo es ${MAX_PRODUCT_IMAGES}.`
       );
     }
+
+    const newPendingImages = acceptedFiles.map((file) => ({
+      id: createLocalImageId(),
+      file,
+      preview: URL.createObjectURL(file),
+    }));
+
+    setPendingGalleryFiles((current) => [...current, ...newPendingImages]);
+  }
+
+  function removePendingGalleryImage(imageId) {
+    setPendingGalleryFiles((current) => {
+      const imageToRemove = current.find((image) => image.id === imageId);
+
+      if (imageToRemove) {
+        revokePreview(imageToRemove.preview);
+      }
+
+      return current.filter((image) => image.id !== imageId);
+    });
+  }
+
+  async function processPendingGalleryImage(imageId, backgroundMode) {
+    const pendingImage = pendingGalleryFiles.find((image) => image.id === imageId);
+
+    if (!pendingImage || processingImages) return;
 
     try {
       setProcessingImages(true);
       setImageProcessingProgress({
         current: 1,
-        total: acceptedFiles.length,
+        total: 1,
         progress: 0,
-        message: "Preparando imágenes...",
+        message:
+          backgroundMode === BACKGROUND_PROCESSING_MODES.REMOVE
+            ? "Preparando imagen para quitar fondo..."
+            : "Preparando imagen original...",
+      });
+
+      const processedFile = await standardizeProductImage(pendingImage.file, {
+        backgroundMode,
+        onProgress: ({ progress, message }) => {
+          setImageProcessingProgress({
+            current: 1,
+            total: 1,
+            progress,
+            message,
+          });
+        },
+      });
+
+      revokePreview(pendingImage.preview);
+
+      setGalleryFiles((current) => [
+        ...current,
+        {
+          id: createLocalImageId(),
+          file: processedFile,
+          preview: URL.createObjectURL(processedFile),
+        },
+      ]);
+
+      setPendingGalleryFiles((current) =>
+        current.filter((image) => image.id !== imageId)
+      );
+    } catch (error) {
+      console.error(error);
+      alert(
+        error.message ||
+          "No se pudo preparar la imagen seleccionada."
+      );
+    } finally {
+      setProcessingImages(false);
+      setImageProcessingProgress({
+        current: 0,
+        total: 0,
+        progress: 0,
+        message: "",
+      });
+    }
+  }
+
+  async function processPendingGalleryImages(backgroundMode) {
+    if (pendingGalleryFiles.length === 0 || processingImages) return;
+
+    const pendingFiles = [...pendingGalleryFiles];
+
+    try {
+      setProcessingImages(true);
+      setImageProcessingProgress({
+        current: 1,
+        total: pendingFiles.length,
+        progress: 0,
+        message:
+          backgroundMode === BACKGROUND_PROCESSING_MODES.REMOVE
+            ? "Preparando imágenes para quitar fondo..."
+            : "Preparando imágenes originales...",
       });
 
       const processedFiles = await standardizeProductImages(
-        acceptedFiles,
+        pendingFiles.map((image) => image.file),
         {
+          backgroundMode,
           onFileStart: ({ index, total }) => {
             setImageProcessingProgress({
               current: index + 1,
@@ -538,12 +708,19 @@ export default function InventoryPage() {
         preview: URL.createObjectURL(processedFile),
       }));
 
+      pendingFiles.forEach((image) => revokePreview(image.preview));
+
       setGalleryFiles((current) => [...current, ...newImages]);
+      setPendingGalleryFiles((current) =>
+        current.filter(
+          (image) => !pendingFiles.some((pending) => pending.id === image.id)
+        )
+      );
     } catch (error) {
       console.error(error);
       alert(
         error.message ||
-          "No se pudieron estandarizar las imágenes seleccionadas."
+          "No se pudieron preparar las imágenes seleccionadas."
       );
     } finally {
       setProcessingImages(false);
@@ -590,9 +767,12 @@ export default function InventoryPage() {
 
   function makeExistingImageCover(imageId) {
     revokePreview(coverPreview);
+    revokePreview(pendingCoverPreview);
 
     setCoverFile(null);
     setCoverPreview("");
+    setPendingCoverFile(null);
+    setPendingCoverPreview("");
 
     setExistingImages((current) => {
       const selectedImage = current.find((image) => image.id === imageId);
@@ -613,9 +793,12 @@ export default function InventoryPage() {
     if (!selectedImage) return;
 
     revokePreview(coverPreview);
+    revokePreview(pendingCoverPreview);
 
     setCoverFile(selectedImage.file);
     setCoverPreview(selectedImage.preview);
+    setPendingCoverFile(null);
+    setPendingCoverPreview("");
 
     setGalleryFiles((current) =>
       current.filter((image) => image.id !== imageId)
@@ -650,8 +833,8 @@ export default function InventoryPage() {
       categoryId: product.categoryId || "",
       categoryName: product.categoryName || "",
       newCategoryName: "",
-      costPrice: String(product.costPrice || ""),
-      salePrice: String(product.salePrice || ""),
+      costPrice: normalizeMoneyInputValue(product.costPrice),
+      salePrice: normalizeMoneyInputValue(product.salePrice),
       variants: normalizedVariants.map((variant) => ({
         id: variant.id || createVariantId(),
         size: variant.size || "Talla única",
@@ -662,7 +845,10 @@ export default function InventoryPage() {
     setExistingImages(images);
     setCoverPreview(coverImage.url || "");
     setCoverFile(null);
+    setPendingCoverFile(null);
+    setPendingCoverPreview("");
     setGalleryFiles([]);
+    setPendingGalleryFiles([]);
     setRemovedImagePaths([]);
 
     setShowForm(true);
@@ -720,14 +906,19 @@ export default function InventoryPage() {
         ? ""
         : form.code.trim();
 
-    const costPrice = toNumber(form.costPrice);
-    const salePrice = toNumber(form.salePrice);
+    const costPrice = parseMoneyInput(form.costPrice);
+    const salePrice = parseMoneyInput(form.salePrice);
     const normalizedVariants = validateVariants();
 
     if (!normalizedVariants) return;
 
     if (processingImages) {
       alert("Espera a que termine el procesamiento de las imágenes.");
+      return;
+    }
+
+    if (pendingCoverFile || pendingGalleryFiles.length > 0) {
+      alert("Decide si quieres quitar fondo o dejar original en las imágenes pendientes.");
       return;
     }
 
@@ -751,10 +942,9 @@ export default function InventoryPage() {
       return;
     }
 
-    const totalImages =
-      existingImages.length +
-      galleryFiles.length +
-      Number(Boolean(coverFile));
+    const totalImages = getProjectedImageCount({
+      includePending: false,
+    });
 
     if (totalImages > MAX_PRODUCT_IMAGES) {
       alert(`Puedes subir máximo ${MAX_PRODUCT_IMAGES} imágenes por producto.`);
@@ -1003,6 +1193,11 @@ export default function InventoryPage() {
           handleSubmit={handleSubmit}
           handleCoverChange={handleCoverChange}
           handleGalleryChange={handleGalleryChange}
+          processPendingCover={processPendingCover}
+          removePendingCover={removePendingCover}
+          processPendingGalleryImage={processPendingGalleryImage}
+          processPendingGalleryImages={processPendingGalleryImages}
+          removePendingGalleryImage={removePendingGalleryImage}
           removeNewCover={removeNewCover}
           removeNewGalleryImage={removeNewGalleryImage}
           removeExistingImage={removeExistingImage}
@@ -1010,8 +1205,11 @@ export default function InventoryPage() {
           makeNewGalleryImageCover={makeNewGalleryImageCover}
           coverPreview={coverPreview}
           coverFile={coverFile}
+          pendingCoverFile={pendingCoverFile}
+          pendingCoverPreview={pendingCoverPreview}
           existingImages={existingImages}
           galleryFiles={galleryFiles}
+          pendingGalleryFiles={pendingGalleryFiles}
           form={form}
           updateForm={updateForm}
           updateVariant={updateVariant}
@@ -1160,7 +1358,7 @@ function ProductCard({ product, onView, onPrintLabels, onEdit, onDelete }) {
           </span>
         </div>
 
-        <div className="mt-3 grid grid-cols-2 gap-2">
+        <div className="mt-2 grid grid-cols-2 gap-2">
           <button
             type="button"
             onClick={onView}
@@ -1463,6 +1661,11 @@ function ProductFormModal({
   handleSubmit,
   handleCoverChange,
   handleGalleryChange,
+  processPendingCover,
+  removePendingCover,
+  processPendingGalleryImage,
+  processPendingGalleryImages,
+  removePendingGalleryImage,
   removeNewCover,
   removeNewGalleryImage,
   removeExistingImage,
@@ -1470,8 +1673,11 @@ function ProductFormModal({
   makeNewGalleryImageCover,
   coverPreview,
   coverFile,
+  pendingCoverFile,
+  pendingCoverPreview,
   existingImages,
   galleryFiles,
+  pendingGalleryFiles,
   form,
   updateForm,
   updateVariant,
@@ -1489,12 +1695,21 @@ function ProductFormModal({
   const [step, setStep] = useState(1);
   const totalSteps = 4;
 
+  const hasExistingCover =
+    existingImages.some((image) => image.type === "cover") ||
+    existingImages.length > 0;
+
+  const newCoverAddsSlot =
+    !hasExistingCover && Boolean(coverFile || pendingCoverFile);
+
   const totalImages =
     existingImages.length +
     galleryFiles.length +
-    Number(Boolean(coverFile));
+    pendingGalleryFiles.length +
+    Number(newCoverAddsSlot);
 
   const currentCoverImage =
+    pendingCoverPreview ||
     coverPreview ||
     existingImages.find((image) => image.type === "cover")?.url ||
     existingImages[0]?.url ||
@@ -1541,6 +1756,11 @@ function ProductFormModal({
         alert(`Puedes subir máximo ${MAX_PRODUCT_IMAGES} imágenes.`);
         return false;
       }
+
+      if (pendingCoverFile || pendingGalleryFiles.length > 0) {
+        alert("Decide si quieres quitar fondo o dejar original en las imágenes pendientes.");
+        return false;
+      }
     }
 
     if (step === 3) {
@@ -1570,12 +1790,12 @@ function ProductFormModal({
     }
 
     if (step === 4) {
-      if (toNumber(form.costPrice) <= 0) {
+      if (parseMoneyInput(form.costPrice) <= 0) {
         alert("El precio de llegada debe ser mayor a cero.");
         return false;
       }
 
-      if (toNumber(form.salePrice) <= 0) {
+      if (parseMoneyInput(form.salePrice) <= 0) {
         alert("El precio de venta debe ser mayor a cero.");
         return false;
       }
@@ -1594,20 +1814,13 @@ function ProductFormModal({
   }
 
   function goToStep(nextStep) {
-    if (nextStep < step) {
-      setStep(nextStep);
-      return;
-    }
-
-    if (nextStep === step + 1 && validateCurrentStep()) {
-      setStep(nextStep);
-    }
+    setStep(Math.min(Math.max(nextStep, 1), totalSteps));
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 px-3 py-3 backdrop-blur-sm sm:px-4">
-      <section className="flex h-[min(760px,94vh)] w-full max-w-[980px] flex-col overflow-hidden rounded-[30px] bg-white shadow-2xl">
-        <header className="flex shrink-0 items-center justify-between border-b border-black/[0.06] px-5 py-4 sm:px-6">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 px-3 py-4 backdrop-blur-sm sm:px-4">
+      <section className="flex h-[min(760px,92vh)] w-full max-w-[1120px] flex-col overflow-hidden rounded-[28px] bg-white shadow-2xl">
+        <header className="flex shrink-0 items-center justify-between border-b border-black/[0.06] px-5 py-3 sm:px-6">
           <div className="min-w-0">
             <p className="text-[12px] font-normal text-red-600">
               {editingProduct ? "Editar producto" : "Nuevo producto"}
@@ -1621,13 +1834,13 @@ function ProductFormModal({
           <button
             type="button"
             onClick={closeForm}
-            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-black/[0.035] text-black/60 transition hover:bg-red-50 hover:text-red-600"
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl bg-black/[0.035] text-black/60 transition hover:bg-red-50 hover:text-red-600"
           >
             <X size={20} />
           </button>
         </header>
 
-        <nav className="shrink-0 border-b border-black/[0.06] bg-[#fafafa] px-4 py-3 sm:px-6">
+        <nav className="shrink-0 border-b border-black/[0.06] bg-[#fafafa] px-4 py-2 sm:px-6">
           <div className="grid grid-cols-4 gap-2">
             {stepMeta.map((item) => {
               const active = step === item.number;
@@ -1679,10 +1892,10 @@ function ProductFormModal({
         </nav>
 
         <form
-          onSubmit={handleSubmit}
+          onSubmit={(event) => event.preventDefault()}
           className="flex min-h-0 flex-1 flex-col"
         >
-          <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5 sm:px-6">
+          <div className="min-h-0 flex-1 overflow-y-auto px-5 py-3 sm:px-6">
             {step === 1 && (
               <section className="mx-auto max-w-[760px]">
                 <StepHeading
@@ -1773,10 +1986,10 @@ function ProductFormModal({
             )}
 
             {step === 2 && (
-              <section className="mx-auto max-w-[820px]">
+              <section className="mx-auto max-w-[980px]">
                 <StepHeading
                   title="Imágenes del producto"
-                  description="Cada imagen se procesa automáticamente: se elimina el fondo, se centra el producto y se aplica un fondo blanco uniforme."
+                  description="Primero sube la foto. Luego decides si quieres quitar el fondo o conservar la imagen original."
                 />
 
                 {processingImages && (
@@ -1811,7 +2024,7 @@ function ProductFormModal({
                   </div>
                 )}
 
-                <div className="mt-5 grid gap-5 md:grid-cols-[250px_1fr]">
+                <div className="mt-3 grid gap-4 lg:grid-cols-[300px_1fr]">
                   <div>
                     <div className="flex items-center justify-between">
                       <p className="text-[13px] font-medium text-black">
@@ -1834,7 +2047,7 @@ function ProductFormModal({
                         disabled={processingImages}
                       />
 
-                      <div className="relative flex aspect-[4/5] max-h-[310px] items-center justify-center overflow-hidden rounded-[24px] border border-dashed border-black/15 bg-black/[0.025] transition hover:border-red-400 hover:bg-red-50/30">
+                      <div className="relative flex aspect-square max-h-[300px] items-center justify-center overflow-hidden rounded-[22px] border border-dashed border-black/15 bg-black/[0.025] transition hover:border-red-400 hover:bg-red-50/30">
                         {currentCoverImage ? (
                           <img
                             src={currentCoverImage}
@@ -1861,7 +2074,22 @@ function ProductFormModal({
                       </div>
                     </label>
 
-                    {coverFile && (
+                    {pendingCoverFile && (
+                      <BackgroundDecisionCard
+                        title="Portada pendiente"
+                        description="Revisa la foto y elige qué hacer antes de guardarla."
+                        onRemove={() =>
+                          processPendingCover(BACKGROUND_PROCESSING_MODES.REMOVE)
+                        }
+                        onKeep={() =>
+                          processPendingCover(BACKGROUND_PROCESSING_MODES.KEEP)
+                        }
+                        onCancel={removePendingCover}
+                        disabled={processingImages}
+                      />
+                    )}
+
+                    {coverFile && !pendingCoverFile && (
                       <button
                         type="button"
                         onClick={removeNewCover}
@@ -1904,12 +2132,12 @@ function ProductFormModal({
                       </label>
                     </div>
 
-                    <div className="mt-3 grid grid-cols-3 gap-2 sm:grid-cols-4">
+                    <div className="mt-3 grid grid-cols-3 gap-2 sm:grid-cols-4 lg:grid-cols-5">
                       {existingImages.map((image) => (
                         <GalleryImageItem
                           key={image.id}
                           imageUrl={image.url}
-                          isCover={image.type === "cover" && !coverFile}
+                          isCover={image.type === "cover" && !coverFile && !pendingCoverFile}
                           onSetCover={() => makeExistingImageCover(image.id)}
                           onRemove={() => removeExistingImage(image.id)}
                         />
@@ -1923,6 +2151,27 @@ function ProductFormModal({
                           onSetCover={() => makeNewGalleryImageCover(image.id)}
                           onRemove={() => removeNewGalleryImage(image.id)}
                           isNew
+                        />
+                      ))}
+
+                      {pendingGalleryFiles.map((image) => (
+                        <PendingGalleryImageItem
+                          key={image.id}
+                          imageUrl={image.preview}
+                          onRemoveBackground={() =>
+                            processPendingGalleryImage(
+                              image.id,
+                              BACKGROUND_PROCESSING_MODES.REMOVE
+                            )
+                          }
+                          onKeepBackground={() =>
+                            processPendingGalleryImage(
+                              image.id,
+                              BACKGROUND_PROCESSING_MODES.KEEP
+                            )
+                          }
+                          onRemove={() => removePendingGalleryImage(image.id)}
+                          disabled={processingImages}
                         />
                       ))}
 
@@ -1941,6 +2190,27 @@ function ProductFormModal({
                         </label>
                       )}
                     </div>
+
+                    {pendingGalleryFiles.length > 0 && (
+                      <BackgroundDecisionCard
+                        className="mt-3"
+                        title={`${pendingGalleryFiles.length} imagen(es) pendiente(s)`}
+                        description="Elige una acción para preparar estas imágenes."
+                        removeLabel="Quitar fondo a todas"
+                        keepLabel="Dejar originales"
+                        onRemove={() =>
+                          processPendingGalleryImages(
+                            BACKGROUND_PROCESSING_MODES.REMOVE
+                          )
+                        }
+                        onKeep={() =>
+                          processPendingGalleryImages(
+                            BACKGROUND_PROCESSING_MODES.KEEP
+                          )
+                        }
+                        disabled={processingImages}
+                      />
+                    )}
                   </div>
                 </div>
               </section>
@@ -2038,18 +2308,18 @@ function ProductFormModal({
                 />
 
                 <div className="mt-5 grid gap-4 sm:grid-cols-2">
-                  <InputField
+                  <MoneyInputField
                     label="Precio llegada"
                     value={form.costPrice}
                     onChange={(value) => updateForm("costPrice", value)}
-                    placeholder="45000"
+                    placeholder="45.000"
                   />
 
-                  <InputField
+                  <MoneyInputField
                     label="Precio venta"
                     value={form.salePrice}
                     onChange={(value) => updateForm("salePrice", value)}
-                    placeholder="85000"
+                    placeholder="85.000"
                   />
                 </div>
 
@@ -2105,7 +2375,7 @@ function ProductFormModal({
                     />
                     <SummaryBox
                       label="Precio venta"
-                      value={formatCurrency(toNumber(form.salePrice))}
+                      value={formatCurrency(parseMoneyInput(form.salePrice))}
                     />
                   </div>
                 </div>
@@ -2113,7 +2383,7 @@ function ProductFormModal({
             )}
           </div>
 
-          <footer className="flex shrink-0 items-center justify-between gap-3 border-t border-black/[0.06] bg-white px-5 py-4 sm:px-6">
+          <footer className="flex shrink-0 items-center justify-between gap-3 border-t border-black/[0.06] bg-white px-5 py-3 sm:px-6">
             <button
               type="button"
               onClick={step === 1 ? closeForm : goBack}
@@ -2140,7 +2410,8 @@ function ProductFormModal({
               </button>
             ) : (
               <button
-                type="submit"
+                type="button"
+                onClick={handleSubmit}
                 disabled={saving || loadingCode || processingImages}
                 className="inline-flex h-11 items-center justify-center rounded-2xl bg-red-600 px-6 text-[13px] font-medium text-white shadow-lg shadow-red-600/20 transition hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60"
               >
@@ -2176,6 +2447,119 @@ function SummaryBox({ label, value }) {
       <p className="mt-1 truncate text-[12px] font-medium text-black">
         {value}
       </p>
+    </div>
+  );
+}
+
+function BackgroundDecisionCard({
+  title,
+  description,
+  removeLabel = "Quitar fondo",
+  keepLabel = "Dejar original",
+  onRemove,
+  onKeep,
+  onCancel,
+  disabled = false,
+  className = "mt-3",
+}) {
+  return (
+    <div
+      className={`${className} rounded-[18px] border border-red-100 bg-red-50/60 p-2.5`}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-[12px] font-medium text-black">{title}</p>
+          <p className="mt-0.5 text-[9px] leading-snug text-black/45">
+            {description}
+          </p>
+        </div>
+
+        {onCancel && (
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={disabled}
+            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-white text-black/45 ring-1 ring-black/[0.06] transition hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-50"
+            title="Descartar imagen pendiente"
+          >
+            <X size={13} />
+          </button>
+        )}
+      </div>
+
+      <div className="mt-2 grid grid-cols-2 gap-2">
+        <button
+          type="button"
+          onClick={onRemove}
+          disabled={disabled}
+          className="inline-flex h-8 items-center justify-center rounded-xl bg-red-600 px-3 text-[10.5px] font-medium text-white shadow-lg shadow-red-600/15 transition hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {removeLabel}
+        </button>
+
+        <button
+          type="button"
+          onClick={onKeep}
+          disabled={disabled}
+          className="inline-flex h-8 items-center justify-center rounded-xl bg-white px-3 text-[10.5px] font-medium text-black ring-1 ring-black/[0.08] transition hover:bg-black/[0.035] disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {keepLabel}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function PendingGalleryImageItem({
+  imageUrl,
+  onRemoveBackground,
+  onKeepBackground,
+  onRemove,
+  disabled = false,
+}) {
+  return (
+    <div className="group relative overflow-hidden rounded-2xl bg-black/[0.025] ring-1 ring-orange-200">
+      <div className="relative aspect-square">
+        <img
+          src={imageUrl}
+          alt="Imagen pendiente"
+          className="h-full w-full bg-white object-contain p-2"
+        />
+
+        <span className="absolute left-1.5 top-1.5 rounded-lg bg-orange-500 px-2 py-1 text-[9px] text-white">
+          Pendiente
+        </span>
+
+        <button
+          type="button"
+          onClick={onRemove}
+          disabled={disabled}
+          className="absolute right-1.5 top-1.5 flex h-7 w-7 items-center justify-center rounded-lg bg-white/95 text-red-600 shadow-sm transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
+          title="Descartar imagen"
+        >
+          <Trash2 size={12} />
+        </button>
+      </div>
+
+      <div className="grid grid-cols-2 gap-1 border-t border-orange-100 bg-white p-1.5">
+        <button
+          type="button"
+          onClick={onRemoveBackground}
+          disabled={disabled}
+          className="h-7 rounded-lg bg-red-600 px-1 text-[8.5px] font-medium text-white transition hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          Quitar
+        </button>
+
+        <button
+          type="button"
+          onClick={onKeepBackground}
+          disabled={disabled}
+          className="h-7 rounded-lg bg-black/[0.04] px-1 text-[8.5px] font-medium text-black/65 transition hover:bg-black/[0.07] disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          Original
+        </button>
+      </div>
     </div>
   );
 }
@@ -2315,6 +2699,39 @@ function Pagination({
   );
 }
 
+function MoneyInputField({
+  label,
+  value,
+  onChange,
+  placeholder,
+  disabled = false,
+  compact = false,
+}) {
+  return (
+    <label>
+      <span className="text-[13px] font-normal text-black/65">{label}</span>
+
+      <div className="relative mt-2">
+        <span className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-[13px] text-black/35">
+          $
+        </span>
+
+        <input
+          type="text"
+          inputMode="numeric"
+          value={value}
+          disabled={disabled}
+          onChange={(event) => onChange(formatThousands(event.target.value))}
+          className={`w-full rounded-2xl border border-black/[0.08] bg-white pl-8 pr-4 text-[13px] text-black outline-none transition placeholder:text-black/35 focus:border-red-600 focus:ring-4 focus:ring-red-600/10 disabled:bg-black/[0.025] disabled:text-black/45 ${
+            compact ? "h-10" : "h-11"
+          }`}
+          placeholder={placeholder}
+        />
+      </div>
+    </label>
+  );
+}
+
 function InputField({
   label,
   value,
@@ -2325,16 +2742,31 @@ function InputField({
   min,
   compact = false,
 }) {
+  const numericInput = type === "number";
+
   return (
     <label>
       <span className="text-[13px] font-normal text-black/65">{label}</span>
 
       <input
-        type={type}
-        min={min}
+        type={numericInput ? "text" : type}
+        inputMode={numericInput ? "numeric" : undefined}
+        pattern={numericInput ? "[0-9]*" : undefined}
+        min={numericInput ? undefined : min}
         value={value}
         disabled={disabled}
-        onChange={(event) => onChange(event.target.value)}
+        onWheel={(event) => {
+          if (numericInput) {
+            event.currentTarget.blur();
+          }
+        }}
+        onChange={(event) => {
+          const nextValue = numericInput
+            ? event.target.value.replace(/\D/g, "")
+            : event.target.value;
+
+          onChange(nextValue);
+        }}
         className={`mt-2 w-full rounded-2xl border border-black/[0.08] bg-white px-4 text-[13px] text-black outline-none transition placeholder:text-black/35 focus:border-red-600 focus:ring-4 focus:ring-red-600/10 disabled:bg-black/[0.025] disabled:text-black/45 ${
           compact ? "h-10" : "h-11"
         }`}
