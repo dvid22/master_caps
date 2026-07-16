@@ -1,9 +1,11 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Barcode,
   Camera,
+  Check,
   ChevronLeft,
   ChevronRight,
+  Crop,
   Edit3,
   ExternalLink,
   Eye,
@@ -11,10 +13,13 @@ import {
   Images,
   Package,
   Plus,
+  RotateCcw,
   Search,
   Star,
   Trash2,
   X,
+  ZoomIn,
+  ZoomOut,
 } from "lucide-react";
 
 import {
@@ -42,6 +47,13 @@ import {
 
 import { getCurrentUserActor } from "../../services/auth.service";
 import BarcodeLabel from "../../components/products/BarcodeLabel";
+import ReactCrop, {
+  centerCrop,
+  makeAspectCrop,
+} from "react-image-crop";
+import "react-image-crop/dist/ReactCrop.css";
+import { getBlob, ref as storageRef } from "firebase/storage";
+import { storage } from "../../firebase/firebase";
 
 import {
   BACKGROUND_PROCESSING_MODES,
@@ -180,6 +192,297 @@ function normalizeMoneyInputValue(value) {
   return formatThousands(value);
 }
 
+
+function loadCropImage(source) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+
+    image.onload = () => resolve(image);
+    image.onerror = () =>
+      reject(
+        new Error(
+          "No se pudo abrir la imagen para recortarla. Revisa que el archivo siga disponible."
+        )
+      );
+
+    image.decoding = "async";
+
+    if (/^https?:\/\//i.test(String(source || ""))) {
+      image.crossOrigin = "anonymous";
+    }
+
+    image.src = source;
+  });
+}
+
+async function createLocalEditableImageUrl(source, storagePath = "") {
+  const cleanSource = String(source || "").trim();
+  const cleanStoragePath = String(storagePath || "").trim();
+
+  if (!cleanSource && !cleanStoragePath) {
+    throw new Error("No se encontró la imagen que deseas editar.");
+  }
+
+  if (
+    cleanSource.startsWith("blob:") ||
+    cleanSource.startsWith("data:")
+  ) {
+    return {
+      url: cleanSource,
+      revoke: false,
+    };
+  }
+
+  let blob = null;
+
+  /*
+   * Las imágenes existentes se preparan de forma segura para su edición.
+   * Esto evita el bloqueo CORS que produce fetch() sobre downloadURL.
+   */
+  if (cleanStoragePath) {
+    try {
+      blob = await getBlob(storageRef(storage, cleanStoragePath));
+    } catch (error) {
+      console.error("No se pudo descargar por ruta de Storage:", error);
+    }
+  }
+
+  if (!blob && cleanSource) {
+    try {
+      const response = await fetch(cleanSource, {
+        method: "GET",
+        cache: "no-store",
+      });
+
+      if (response.ok) {
+        blob = await response.blob();
+      }
+    } catch (error) {
+      console.error("No se pudo descargar por URL pública:", error);
+    }
+  }
+
+  if (!blob) {
+    throw new Error(
+      "No se pudo preparar la imagen para editarla. Intenta nuevamente o reemplázala por una nueva."
+    );
+  }
+
+  if (!blob.type.startsWith("image/")) {
+    throw new Error("El archivo recibido no es una imagen válida.");
+  }
+
+  return {
+    url: URL.createObjectURL(blob),
+    revoke: true,
+  };
+}
+
+function canvasToImageBlob(canvas, mimeType = "image/webp", quality = 0.94) {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (blob) resolve(blob);
+      else reject(new Error("No se pudo generar la imagen recortada."));
+    }, mimeType, quality);
+  });
+}
+
+function getCroppedFileName(originalName = "producto") {
+  const cleanName = String(originalName || "producto")
+    .replace(/\.[^.]+$/, "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "") || "producto";
+  return `${cleanName}-recortada.webp`;
+}
+
+async function createCroppedImageFile({
+  imageUrl,
+  cropPixels,
+  rotation = 0,
+  fileName = "producto",
+  frame = null,
+}) {
+  const image = await loadCropImage(imageUrl);
+  const radians = (rotation * Math.PI) / 180;
+  const sin = Math.abs(Math.sin(radians));
+  const cos = Math.abs(Math.cos(radians));
+
+  const rotatedWidth = Math.round(
+    image.naturalWidth * cos + image.naturalHeight * sin
+  );
+  const rotatedHeight = Math.round(
+    image.naturalWidth * sin + image.naturalHeight * cos
+  );
+
+  const rotationCanvas = document.createElement("canvas");
+  rotationCanvas.width = rotatedWidth;
+  rotationCanvas.height = rotatedHeight;
+
+  const rotationContext = rotationCanvas.getContext("2d", {
+    alpha: true,
+    desynchronized: true,
+  });
+
+  if (!rotationContext) {
+    throw new Error("El navegador no permite recortar esta imagen.");
+  }
+
+  rotationContext.imageSmoothingEnabled = true;
+  rotationContext.imageSmoothingQuality = "high";
+  rotationContext.translate(rotatedWidth / 2, rotatedHeight / 2);
+  rotationContext.rotate(radians);
+  rotationContext.drawImage(
+    image,
+    -image.naturalWidth / 2,
+    -image.naturalHeight / 2
+  );
+
+  const safeCrop = {
+    x: Math.max(Math.round(cropPixels?.x || 0), 0),
+    y: Math.max(Math.round(cropPixels?.y || 0), 0),
+    width: Math.max(Math.round(cropPixels?.width || 1), 1),
+    height: Math.max(Math.round(cropPixels?.height || 1), 1),
+  };
+
+  const croppedCanvas = document.createElement("canvas");
+  croppedCanvas.width = safeCrop.width;
+  croppedCanvas.height = safeCrop.height;
+
+  const croppedContext = croppedCanvas.getContext("2d", {
+    alpha: true,
+    desynchronized: true,
+  });
+
+  if (!croppedContext) {
+    throw new Error("No se pudo crear el recorte final.");
+  }
+
+  croppedContext.imageSmoothingEnabled = true;
+  croppedContext.imageSmoothingQuality = "high";
+  croppedContext.clearRect(
+    0,
+    0,
+    croppedCanvas.width,
+    croppedCanvas.height
+  );
+
+  croppedContext.drawImage(
+    rotationCanvas,
+    safeCrop.x,
+    safeCrop.y,
+    safeCrop.width,
+    safeCrop.height,
+    0,
+    0,
+    safeCrop.width,
+    safeCrop.height
+  );
+
+  let outputCanvas = croppedCanvas;
+
+  if (frame) {
+    const outputSize = Math.max(
+      Number(frame.outputSize || 1200),
+      600
+    );
+    const scale = Math.min(
+      Math.max(Number(frame.scale || 0.82), 0.25),
+      1.5
+    );
+    const offsetX = Math.min(
+      Math.max(Number(frame.offsetX || 0), -100),
+      100
+    );
+    const offsetY = Math.min(
+      Math.max(Number(frame.offsetY || 0), -100),
+      100
+    );
+
+    outputCanvas = document.createElement("canvas");
+    outputCanvas.width = outputSize;
+    outputCanvas.height = outputSize;
+
+    const outputContext = outputCanvas.getContext("2d", {
+      alpha: false,
+      desynchronized: true,
+    });
+
+    if (!outputContext) {
+      throw new Error("No se pudo crear el lienzo blanco final.");
+    }
+
+    outputContext.fillStyle = "#ffffff";
+    outputContext.fillRect(0, 0, outputSize, outputSize);
+    outputContext.imageSmoothingEnabled = true;
+    outputContext.imageSmoothingQuality = "high";
+
+    const fitScale = Math.min(
+      outputSize / croppedCanvas.width,
+      outputSize / croppedCanvas.height
+    );
+
+    const drawWidth =
+      croppedCanvas.width * fitScale * scale;
+    const drawHeight =
+      croppedCanvas.height * fitScale * scale;
+
+    const movementRangeX = outputSize * 0.32;
+    const movementRangeY = outputSize * 0.32;
+
+    const drawX =
+      (outputSize - drawWidth) / 2 +
+      (offsetX / 100) * movementRangeX;
+    const drawY =
+      (outputSize - drawHeight) / 2 +
+      (offsetY / 100) * movementRangeY;
+
+    outputContext.drawImage(
+      croppedCanvas,
+      drawX,
+      drawY,
+      drawWidth,
+      drawHeight
+    );
+  } else {
+    const flatCanvas = document.createElement("canvas");
+    flatCanvas.width = croppedCanvas.width;
+    flatCanvas.height = croppedCanvas.height;
+
+    const flatContext = flatCanvas.getContext("2d", {
+      alpha: false,
+      desynchronized: true,
+    });
+
+    if (!flatContext) {
+      throw new Error("No se pudo preparar la vista previa.");
+    }
+
+    flatContext.fillStyle = "#ffffff";
+    flatContext.fillRect(
+      0,
+      0,
+      flatCanvas.width,
+      flatCanvas.height
+    );
+    flatContext.drawImage(croppedCanvas, 0, 0);
+    outputCanvas = flatCanvas;
+  }
+
+  const blob = await canvasToImageBlob(outputCanvas);
+
+  return new File(
+    [blob],
+    getCroppedFileName(fileName),
+    {
+      type: "image/webp",
+      lastModified: Date.now(),
+    }
+  );
+}
+
 export default function InventoryPage() {
   const [products, setProducts] = useState([]);
   const [categories, setCategories] = useState([]);
@@ -222,6 +525,8 @@ export default function InventoryPage() {
     progress: 0,
     message: "",
   });
+  const [cropEditor, setCropEditor] = useState(null);
+  const [savingCrop, setSavingCrop] = useState(false);
 
   const productsPerPage = 8;
 
@@ -811,6 +1116,105 @@ export default function InventoryPage() {
     setCoverPreview("");
   }
 
+  function openCropEditor({ sourceUrl, sourceFile = null, targetType, targetId = "", existingImage = null }) {
+    if (!sourceUrl || processingImages || savingCrop) return;
+    setCropEditor({ sourceUrl, sourceFile, targetType, targetId, existingImage });
+  }
+
+  function closeCropEditor() {
+    if (!savingCrop) setCropEditor(null);
+  }
+
+  async function saveCroppedImage({
+    cropPixels,
+    rotation,
+    imageUrl,
+    frame,
+  }) {
+    if (!cropEditor || !cropPixels || savingCrop) return;
+
+    try {
+      setSavingCrop(true);
+      const originalName =
+        cropEditor.sourceFile?.name ||
+        cropEditor.existingImage?.name ||
+        cropEditor.existingImage?.path?.split("/").pop() ||
+        `${form.name || "producto"}.webp`;
+
+      const croppedFile = await createCroppedImageFile({
+        imageUrl: imageUrl || cropEditor.sourceUrl,
+        cropPixels,
+        rotation,
+        fileName: originalName,
+        frame,
+      });
+      const nextPreview = URL.createObjectURL(croppedFile);
+
+      if (cropEditor.targetType === "pending-cover") {
+        revokePreview(pendingCoverPreview);
+        setPendingCoverFile(croppedFile);
+        setPendingCoverPreview(nextPreview);
+      } else if (cropEditor.targetType === "new-cover") {
+        revokePreview(coverPreview);
+        setCoverFile(croppedFile);
+        setCoverPreview(nextPreview);
+      } else if (cropEditor.targetType === "pending-gallery") {
+        setPendingGalleryFiles((current) =>
+          current.map((image) => {
+            if (image.id !== cropEditor.targetId) return image;
+            revokePreview(image.preview);
+            return { ...image, file: croppedFile, preview: nextPreview };
+          })
+        );
+      } else if (cropEditor.targetType === "new-gallery") {
+        setGalleryFiles((current) =>
+          current.map((image) => {
+            if (image.id !== cropEditor.targetId) return image;
+            revokePreview(image.preview);
+            return { ...image, file: croppedFile, preview: nextPreview };
+          })
+        );
+      } else if (cropEditor.targetType === "existing") {
+        const image = cropEditor.existingImage;
+        if (image?.path) {
+          setRemovedImagePaths((paths) => [...new Set([...paths, image.path])]);
+        }
+
+        setExistingImages((current) => {
+          const remaining = current.filter((item) => item.id !== image?.id);
+          return remaining.map((item, index) => ({
+            ...item,
+            type: image?.type === "cover" ? "gallery" : item.type,
+            sortOrder: image?.type === "cover" ? index + 1 : index,
+          }));
+        });
+
+        if (image?.type === "cover") {
+          revokePreview(coverPreview);
+          setCoverFile(croppedFile);
+          setCoverPreview(nextPreview);
+        } else {
+          setGalleryFiles((current) => [
+            ...current,
+            {
+              id: createLocalImageId(),
+              file: croppedFile,
+              preview: nextPreview,
+              editedFromExisting: true,
+            },
+          ]);
+        }
+      }
+
+      setCropEditor(null);
+    } catch (error) {
+      console.error(error);
+      alert(error.message || "No se pudo guardar el recorte de la imagen.");
+    } finally {
+      setSavingCrop(false);
+    }
+  }
+
   function handleEdit(product) {
     resetForm();
 
@@ -1223,6 +1627,17 @@ export default function InventoryPage() {
           formTotalStock={formTotalStock}
           processingImages={processingImages}
           imageProcessingProgress={imageProcessingProgress}
+          openCropEditor={openCropEditor}
+        />
+      )}
+
+      {cropEditor && (
+        <ProductImageCropModal
+          imageUrl={cropEditor.sourceUrl}
+          storagePath={cropEditor.existingImage?.path || ""}
+          saving={savingCrop}
+          onClose={closeCropEditor}
+          onSave={saveCroppedImage}
         />
       )}
     </main>
@@ -1691,6 +2106,7 @@ function ProductFormModal({
   formTotalStock,
   processingImages,
   imageProcessingProgress,
+  openCropEditor,
 }) {
   const [step, setStep] = useState(1);
   const totalSteps = 4;
@@ -2049,11 +2465,37 @@ function ProductFormModal({
 
                       <div className="relative flex aspect-square max-h-[300px] items-center justify-center overflow-hidden rounded-[22px] border border-dashed border-black/15 bg-black/[0.025] transition hover:border-red-400 hover:bg-red-50/30">
                         {currentCoverImage ? (
+                          <>
                           <img
                             src={currentCoverImage}
                             alt="Vista previa de portada"
                             className="h-full w-full bg-white object-contain p-2"
                           />
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              openCropEditor({
+                                sourceUrl: currentCoverImage,
+                                sourceFile: pendingCoverFile || coverFile || null,
+                                targetType: pendingCoverFile
+                                  ? "pending-cover"
+                                  : coverFile
+                                    ? "new-cover"
+                                    : "existing",
+                                existingImage:
+                                  !pendingCoverFile && !coverFile
+                                    ? existingImages.find((image) => image.type === "cover") || existingImages[0] || null
+                                    : null,
+                              });
+                            }}
+                            className="absolute right-3 top-3 inline-flex h-9 items-center gap-2 rounded-xl bg-white/95 px-3 text-[10px] font-medium text-black shadow-lg ring-1 ring-black/[0.06] transition hover:bg-red-50 hover:text-red-600"
+                          >
+                            <Crop size={14} />
+                            Recortar
+                          </button>
+                          </>
                         ) : (
                           <div className="px-5 text-center">
                             <Camera size={30} className="mx-auto text-black/35" />
@@ -2139,6 +2581,14 @@ function ProductFormModal({
                           imageUrl={image.url}
                           isCover={image.type === "cover" && !coverFile && !pendingCoverFile}
                           onSetCover={() => makeExistingImageCover(image.id)}
+                          onEdit={() =>
+                            openCropEditor({
+                              sourceUrl: image.url,
+                              targetType: "existing",
+                              targetId: image.id,
+                              existingImage: image,
+                            })
+                          }
                           onRemove={() => removeExistingImage(image.id)}
                         />
                       ))}
@@ -2149,6 +2599,14 @@ function ProductFormModal({
                           imageUrl={image.preview}
                           isCover={false}
                           onSetCover={() => makeNewGalleryImageCover(image.id)}
+                          onEdit={() =>
+                            openCropEditor({
+                              sourceUrl: image.preview,
+                              sourceFile: image.file,
+                              targetType: "new-gallery",
+                              targetId: image.id,
+                            })
+                          }
                           onRemove={() => removeNewGalleryImage(image.id)}
                           isNew
                         />
@@ -2169,6 +2627,14 @@ function ProductFormModal({
                               image.id,
                               BACKGROUND_PROCESSING_MODES.KEEP
                             )
+                          }
+                          onEdit={() =>
+                            openCropEditor({
+                              sourceUrl: image.preview,
+                              sourceFile: image.file,
+                              targetType: "pending-gallery",
+                              targetId: image.id,
+                            })
                           }
                           onRemove={() => removePendingGalleryImage(image.id)}
                           disabled={processingImages}
@@ -2514,6 +2980,7 @@ function PendingGalleryImageItem({
   imageUrl,
   onRemoveBackground,
   onKeepBackground,
+  onEdit,
   onRemove,
   disabled = false,
 }) {
@@ -2530,15 +2997,26 @@ function PendingGalleryImageItem({
           Pendiente
         </span>
 
-        <button
-          type="button"
-          onClick={onRemove}
-          disabled={disabled}
-          className="absolute right-1.5 top-1.5 flex h-7 w-7 items-center justify-center rounded-lg bg-white/95 text-red-600 shadow-sm transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
-          title="Descartar imagen"
-        >
-          <Trash2 size={12} />
-        </button>
+        <div className="absolute right-1.5 top-1.5 flex gap-1">
+          <button
+            type="button"
+            onClick={onEdit}
+            disabled={disabled}
+            className="flex h-7 w-7 items-center justify-center rounded-lg bg-white/95 text-black shadow-sm transition hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-60"
+            title="Recortar imagen"
+          >
+            <Crop size={12} />
+          </button>
+          <button
+            type="button"
+            onClick={onRemove}
+            disabled={disabled}
+            className="flex h-7 w-7 items-center justify-center rounded-lg bg-white/95 text-red-600 shadow-sm transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
+            title="Descartar imagen"
+          >
+            <Trash2 size={12} />
+          </button>
+        </div>
       </div>
 
       <div className="grid grid-cols-2 gap-1 border-t border-orange-100 bg-white p-1.5">
@@ -2568,6 +3046,7 @@ function GalleryImageItem({
   imageUrl,
   isCover,
   onSetCover,
+  onEdit,
   onRemove,
   isNew = false,
 }) {
@@ -2594,7 +3073,7 @@ function GalleryImageItem({
         </span>
       )}
 
-      <div className="absolute inset-x-1.5 bottom-1.5 grid grid-cols-2 gap-1 opacity-0 transition group-hover:opacity-100">
+      <div className="absolute inset-x-1.5 bottom-1.5 grid grid-cols-3 gap-1 opacity-0 transition group-hover:opacity-100">
         <button
           type="button"
           onClick={onSetCover}
@@ -2606,12 +3085,751 @@ function GalleryImageItem({
 
         <button
           type="button"
+          onClick={onEdit}
+          className="flex h-7 items-center justify-center rounded-lg bg-white/95 text-black transition hover:text-red-600"
+          title="Recortar imagen"
+        >
+          <Crop size={12} />
+        </button>
+
+        <button
+          type="button"
           onClick={onRemove}
           className="flex h-7 items-center justify-center rounded-lg bg-white/95 text-red-600 transition hover:bg-red-50"
           title="Eliminar imagen"
         >
           <Trash2 size={12} />
         </button>
+      </div>
+    </div>
+  );
+}
+
+function createCenteredCrop(mediaWidth, mediaHeight, aspect) {
+  return centerCrop(
+    makeAspectCrop(
+      {
+        unit: "%",
+        width: 82,
+      },
+      aspect,
+      mediaWidth,
+      mediaHeight
+    ),
+    mediaWidth,
+    mediaHeight
+  );
+}
+
+function ProductImageCropModal({
+  imageUrl,
+  storagePath,
+  saving,
+  onClose,
+  onSave,
+}) {
+  const imageElementRef = useRef(null);
+
+  const [editorStep, setEditorStep] = useState("crop");
+  const [crop, setCrop] = useState();
+  const [completedCrop, setCompletedCrop] = useState(null);
+  const [preparedCropPixels, setPreparedCropPixels] = useState(null);
+  const [aspect, setAspect] = useState(undefined);
+
+  const [editableImageUrl, setEditableImageUrl] = useState("");
+  const [framedImageUrl, setFramedImageUrl] = useState("");
+  const [loadingImage, setLoadingImage] = useState(true);
+  const [preparingFrame, setPreparingFrame] = useState(false);
+  const [imageError, setImageError] = useState("");
+
+  const [frameScale, setFrameScale] = useState(0.82);
+  const [frameOffsetX, setFrameOffsetX] = useState(0);
+  const [frameOffsetY, setFrameOffsetY] = useState(0);
+
+  useEffect(() => {
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    let localUrl = "";
+    let shouldRevoke = false;
+
+    async function prepareImage() {
+      try {
+        setLoadingImage(true);
+        setImageError("");
+        setEditableImageUrl("");
+        setCrop(undefined);
+        setCompletedCrop(null);
+        setPreparedCropPixels(null);
+        setEditorStep("crop");
+
+        const prepared = await createLocalEditableImageUrl(
+          imageUrl,
+          storagePath
+        );
+
+        if (cancelled) {
+          if (prepared.revoke) {
+            URL.revokeObjectURL(prepared.url);
+          }
+          return;
+        }
+
+        localUrl = prepared.url;
+        shouldRevoke = prepared.revoke;
+        setEditableImageUrl(prepared.url);
+      } catch (error) {
+        console.error("Error preparando imagen para recorte:", error);
+
+        if (!cancelled) {
+          setImageError(
+            error.message ||
+              "No se pudo preparar la imagen para recortarla."
+          );
+        }
+      } finally {
+        if (!cancelled) {
+          setLoadingImage(false);
+        }
+      }
+    }
+
+    prepareImage();
+
+    return () => {
+      cancelled = true;
+
+      if (shouldRevoke && localUrl) {
+        URL.revokeObjectURL(localUrl);
+      }
+    };
+  }, [imageUrl, storagePath]);
+
+  useEffect(() => {
+    return () => {
+      revokePreview(framedImageUrl);
+    };
+  }, [framedImageUrl]);
+
+  function handleImageLoad(event) {
+    const { width, height } = event.currentTarget;
+
+    setCrop(
+      aspect
+        ? createCenteredCrop(width, height, aspect)
+        : {
+            unit: "%",
+            x: 8,
+            y: 8,
+            width: 84,
+            height: 84,
+          }
+    );
+  }
+
+  function applyAspect(nextAspect) {
+    const image = imageElementRef.current;
+    setAspect(nextAspect);
+
+    if (!image) return;
+
+    setCrop(
+      nextAspect
+        ? createCenteredCrop(image.width, image.height, nextAspect)
+        : {
+            unit: "%",
+            x: 8,
+            y: 8,
+            width: 84,
+            height: 84,
+          }
+    );
+    setCompletedCrop(null);
+    setPreparedCropPixels(null);
+  }
+
+  function resetCrop() {
+    const image = imageElementRef.current;
+    if (!image) return;
+
+    setCrop(
+      aspect
+        ? createCenteredCrop(image.width, image.height, aspect)
+        : {
+            unit: "%",
+            x: 8,
+            y: 8,
+            width: 84,
+            height: 84,
+          }
+    );
+    setCompletedCrop(null);
+    setPreparedCropPixels(null);
+  }
+
+  function resetFrame() {
+    setFrameScale(0.82);
+    setFrameOffsetX(0);
+    setFrameOffsetY(0);
+  }
+
+  function buildNaturalPixelCrop() {
+    const image = imageElementRef.current;
+
+    if (
+      !image ||
+      !completedCrop?.width ||
+      !completedCrop?.height
+    ) {
+      return null;
+    }
+
+    const scaleX = image.naturalWidth / image.width;
+    const scaleY = image.naturalHeight / image.height;
+
+    return {
+      x: Math.max(
+        Math.round(completedCrop.x * scaleX),
+        0
+      ),
+      y: Math.max(
+        Math.round(completedCrop.y * scaleY),
+        0
+      ),
+      width: Math.max(
+        Math.round(completedCrop.width * scaleX),
+        1
+      ),
+      height: Math.max(
+        Math.round(completedCrop.height * scaleY),
+        1
+      ),
+    };
+  }
+
+  async function continueToFrame() {
+    const naturalCrop = buildNaturalPixelCrop();
+
+    if (!naturalCrop) {
+      alert(
+        "Selecciona un área válida antes de continuar."
+      );
+      return;
+    }
+
+    try {
+      setPreparingFrame(true);
+
+      const previewFile = await createCroppedImageFile({
+        imageUrl: editableImageUrl,
+        cropPixels: naturalCrop,
+        rotation: 0,
+        fileName: "vista-previa",
+      });
+
+      revokePreview(framedImageUrl);
+      setFramedImageUrl(
+        URL.createObjectURL(previewFile)
+      );
+      setPreparedCropPixels(naturalCrop);
+      resetFrame();
+      setEditorStep("frame");
+    } catch (error) {
+      console.error(error);
+      alert(
+        error.message ||
+          "No se pudo preparar la imagen recortada."
+      );
+    } finally {
+      setPreparingFrame(false);
+    }
+  }
+
+  function saveFinalImage() {
+    if (!preparedCropPixels) {
+      alert(
+        "No se encontró un recorte válido para guardar."
+      );
+      return;
+    }
+
+    onSave({
+      cropPixels: preparedCropPixels,
+      rotation: 0,
+      imageUrl: editableImageUrl,
+      frame: {
+        outputSize: 1200,
+        scale: frameScale,
+        offsetX: frameOffsetX,
+        offsetY: frameOffsetY,
+      },
+    });
+  }
+
+  const editorBlocked =
+    saving ||
+    loadingImage ||
+    preparingFrame ||
+    Boolean(imageError) ||
+    !editableImageUrl;
+
+  return (
+    <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/70 px-3 py-4 backdrop-blur-md sm:px-5">
+      <style>{`
+        .premium-image-crop {
+          --crop-accent: #ef2929;
+          --crop-accent-soft: rgba(239, 41, 41, 0.22);
+          filter: drop-shadow(0 24px 48px rgba(0, 0, 0, 0.28));
+        }
+
+        .premium-image-crop .ReactCrop__child-wrapper {
+          overflow: hidden;
+          border-radius: 18px;
+          background:
+            linear-gradient(145deg, rgba(255,255,255,0.06), rgba(255,255,255,0.015));
+          box-shadow:
+            0 0 0 1px rgba(255,255,255,0.08),
+            0 24px 70px rgba(0,0,0,0.34);
+        }
+
+        .premium-image-crop .ReactCrop__crop-selection {
+          border: 2px solid rgba(255, 255, 255, 0.98);
+          border-radius: 10px;
+          box-shadow:
+            0 0 0 1px rgba(239, 41, 41, 0.9),
+            0 0 0 9999em rgba(0, 0, 0, 0.58),
+            0 10px 32px rgba(0, 0, 0, 0.28);
+          outline: none;
+        }
+
+        .premium-image-crop .ReactCrop__crop-selection::before {
+          content: "";
+          position: absolute;
+          inset: 0;
+          border-radius: 8px;
+          pointer-events: none;
+          box-shadow:
+            inset 0 0 0 1px rgba(255,255,255,0.28),
+            inset 0 0 22px rgba(255,255,255,0.04);
+        }
+
+        .premium-image-crop .ReactCrop__drag-handle {
+          width: 16px;
+          height: 16px;
+          border: 3px solid #ffffff;
+          border-radius: 999px;
+          background: var(--crop-accent);
+          box-shadow:
+            0 0 0 2px rgba(239, 41, 41, 0.28),
+            0 5px 14px rgba(0, 0, 0, 0.32);
+        }
+
+        .premium-image-crop .ReactCrop__drag-handle.ord-n,
+        .premium-image-crop .ReactCrop__drag-handle.ord-s {
+          width: 34px;
+          height: 10px;
+          border-radius: 999px;
+        }
+
+        .premium-image-crop .ReactCrop__drag-handle.ord-e,
+        .premium-image-crop .ReactCrop__drag-handle.ord-w {
+          width: 10px;
+          height: 34px;
+          border-radius: 999px;
+        }
+
+        .premium-image-crop .ReactCrop__rule-of-thirds-vt::before,
+        .premium-image-crop .ReactCrop__rule-of-thirds-vt::after,
+        .premium-image-crop .ReactCrop__rule-of-thirds-hz::before,
+        .premium-image-crop .ReactCrop__rule-of-thirds-hz::after {
+          background-color: rgba(255,255,255,0.58);
+          box-shadow: 0 0 8px rgba(255,255,255,0.18);
+        }
+
+        .premium-image-crop .ReactCrop__crop-selection:focus-visible {
+          box-shadow:
+            0 0 0 2px rgba(255,255,255,0.98),
+            0 0 0 5px var(--crop-accent-soft),
+            0 0 0 9999em rgba(0, 0, 0, 0.58);
+        }
+      `}</style>
+      <section className="flex h-[min(860px,95vh)] w-full max-w-[1210px] flex-col overflow-hidden rounded-[30px] bg-white shadow-2xl">
+        <header className="flex shrink-0 items-center justify-between border-b border-black/[0.06] px-5 py-4 sm:px-6">
+          <div>
+            <p className="text-[11px] font-medium uppercase tracking-[0.12em] text-red-600">
+              Editor de imagen ·{" "}
+              {editorStep === "crop"
+                ? "Paso 1 de 2"
+                : "Paso 2 de 2"}
+            </p>
+
+            <h2 className="mt-1 text-[21px] font-medium tracking-[-0.035em]">
+              {editorStep === "crop"
+                ? "Limpiar y recortar fotografía"
+                : "Centrar en el recuadro blanco"}
+            </h2>
+
+            <p className="mt-1 text-[11px] text-black/42">
+              {editorStep === "crop"
+                ? "Elimina restos de fondo ajustando libremente los bordes del recorte."
+                : "Cambia el tamaño y la posición hasta que el producto quede perfectamente centrado."}
+            </p>
+          </div>
+
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={saving}
+            className="flex h-10 w-10 items-center justify-center rounded-2xl bg-black/[0.035] text-black/55 transition hover:bg-red-50 hover:text-red-600 disabled:opacity-40"
+          >
+            <X size={19} />
+          </button>
+        </header>
+
+        <div className="grid min-h-0 flex-1 lg:grid-cols-[minmax(0,1fr)_310px]">
+          <div className="relative flex min-h-[440px] items-center justify-center overflow-auto bg-[#171717] p-5 sm:p-8">
+            {loadingImage && (
+              <div className="absolute inset-0 z-20 flex items-center justify-center bg-[#171717]">
+                <div className="text-center">
+                  <div className="mx-auto h-9 w-9 animate-spin rounded-full border-2 border-white/20 border-t-white" />
+                  <p className="mt-3 text-[11px] text-white/65">
+                    Preparando imagen...
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {imageError && (
+              <div className="absolute inset-0 z-20 flex items-center justify-center bg-[#171717] px-6">
+                <div className="max-w-[430px] rounded-[22px] border border-red-400/20 bg-red-500/10 p-5 text-center">
+                  <Camera size={28} className="mx-auto text-red-300" />
+                  <p className="mt-3 text-[13px] font-medium text-white">
+                    No se pudo cargar la imagen
+                  </p>
+                  <p className="mt-2 text-[10px] leading-5 text-white/55">
+                    {imageError}
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {editorStep === "crop" &&
+              editableImageUrl &&
+              !imageError && (
+                <div className="relative flex max-h-full max-w-full items-center justify-center rounded-[26px] border border-white/10 bg-white/[0.025] p-4 shadow-[0_30px_80px_rgba(0,0,0,0.35)] backdrop-blur-sm sm:p-5">
+                  <div className="pointer-events-none absolute inset-3 rounded-[20px] border border-white/[0.05]" />
+                  <ReactCrop
+                    crop={crop}
+                    onChange={(_, percentCrop) =>
+                      setCrop(percentCrop)
+                    }
+                    onComplete={(pixelCrop) =>
+                      setCompletedCrop(pixelCrop)
+                    }
+                    aspect={aspect}
+                    minWidth={30}
+                    minHeight={30}
+                    keepSelection
+                    ruleOfThirds
+                    className="premium-image-crop max-h-[630px] max-w-full overflow-visible"
+                  >
+                    <img
+                      ref={imageElementRef}
+                      src={editableImageUrl}
+                      alt="Imagen para recortar"
+                      onLoad={handleImageLoad}
+                      className="block max-h-[630px] max-w-full select-none object-contain"
+                      draggable={false}
+                    />
+                  </ReactCrop>
+                </div>
+              )}
+
+            {editorStep === "frame" &&
+              framedImageUrl && (
+                <div className="relative aspect-square h-[min(620px,70vh)] max-h-full max-w-full overflow-hidden rounded-[12px] bg-white shadow-[0_28px_90px_rgba(0,0,0,0.35)] ring-1 ring-white/15">
+                  <div className="absolute inset-0 bg-[linear-gradient(to_right,rgba(0,0,0,0.035)_1px,transparent_1px),linear-gradient(to_bottom,rgba(0,0,0,0.035)_1px,transparent_1px)] bg-[size:25%_25%]" />
+
+                  <div
+                    className="absolute inset-0 flex items-center justify-center"
+                    style={{
+                      transform: `translate(${frameOffsetX * 0.32}%, ${frameOffsetY * 0.32}%)`,
+                    }}
+                  >
+                    <img
+                      src={framedImageUrl}
+                      alt="Producto centrado"
+                      className="max-h-full max-w-full select-none object-contain"
+                      draggable={false}
+                      style={{
+                        transform: `scale(${frameScale})`,
+                        transformOrigin: "center",
+                      }}
+                    />
+                  </div>
+
+                  <div className="pointer-events-none absolute left-1/2 top-0 h-full w-px bg-red-500/25" />
+                  <div className="pointer-events-none absolute left-0 top-1/2 h-px w-full bg-red-500/25" />
+                  <div className="pointer-events-none absolute inset-[8%] rounded-lg border border-dashed border-black/10" />
+                </div>
+              )}
+
+            <div className="pointer-events-none absolute bottom-4 left-1/2 z-10 -translate-x-1/2 rounded-full border border-white/10 bg-black/72 px-4 py-2 text-[9px] font-medium text-white/80 shadow-[0_12px_30px_rgba(0,0,0,0.28)] backdrop-blur-xl">
+              {editorStep === "crop"
+                ? "Ajusta las esquinas y bordes para eliminar los restos"
+                : "Usa tamaño y posición para centrar el producto"}
+            </div>
+          </div>
+
+          <aside className="min-h-0 overflow-y-auto border-l border-black/[0.06] bg-white p-5">
+            {editorStep === "crop" ? (
+              <>
+                <div>
+                  <p className="text-[12px] font-medium">
+                    Forma del recorte
+                  </p>
+
+                  <p className="mt-1 text-[9px] leading-4 text-black/40">
+                    Usa el modo Libre para limpiar con precisión cualquier borde o esquina.
+                  </p>
+
+                  <div className="mt-3 grid grid-cols-2 gap-2">
+                    {[
+                      {
+                        label: "Libre",
+                        value: undefined,
+                      },
+                      { label: "1:1", value: 1 },
+                      { label: "4:5", value: 4 / 5 },
+                      { label: "3:4", value: 3 / 4 },
+                    ].map((option) => (
+                      <button
+                        key={option.label}
+                        type="button"
+                        onClick={() =>
+                          applyAspect(option.value)
+                        }
+                        disabled={editorBlocked}
+                        className={`h-10 rounded-xl text-[10px] font-medium transition ${
+                          aspect === option.value
+                            ? "bg-red-600 text-white"
+                            : "border border-black/[0.08] bg-white text-black/60 hover:bg-red-50 hover:text-red-600"
+                        } disabled:cursor-not-allowed disabled:opacity-45`}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="mt-5 rounded-[18px] border border-black/[0.06] bg-black/[0.025] p-3.5">
+                  <div className="flex items-center gap-2">
+                    <Crop
+                      size={15}
+                      className="text-red-600"
+                    />
+                    <p className="text-[11px] font-medium">
+                      Limpieza precisa
+                    </p>
+                  </div>
+
+                  <p className="mt-2 text-[9px] leading-5 text-black/48">
+                    Ajusta los bordes y controladores hasta conservar únicamente el área limpia del producto.
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={resetCrop}
+                  disabled={editorBlocked}
+                  className="mt-5 inline-flex h-10 w-full items-center justify-center gap-2 rounded-xl border border-black/[0.08] text-[11px] font-medium text-black/60 transition hover:bg-black/[0.03] disabled:opacity-40"
+                >
+                  <RotateCcw size={14} />
+                  Restablecer selección
+                </button>
+              </>
+            ) : (
+              <>
+                <div className="rounded-[18px] border border-emerald-100 bg-emerald-50 p-3.5">
+                  <p className="text-[10px] font-medium text-emerald-700">
+                    Lienzo final 1:1
+                  </p>
+                  <p className="mt-1 text-[9px] leading-5 text-black/48">
+                    El archivo se guardará en un recuadro blanco de 1200 × 1200 px, ideal para las tarjetas del catálogo.
+                  </p>
+                </div>
+
+                <CropControl
+                  className="mt-5"
+                  icon={ZoomIn}
+                  leftIcon={ZoomOut}
+                  label="Tamaño del producto"
+                  value={frameScale}
+                  min={0.35}
+                  max={1.25}
+                  step={0.01}
+                  onChange={setFrameScale}
+                  suffix={`${Math.round(
+                    frameScale * 100
+                  )}%`}
+                  disabled={editorBlocked}
+                />
+
+                <CropControl
+                  className="mt-5"
+                  icon={ChevronRight}
+                  leftIcon={ChevronLeft}
+                  label="Posición horizontal"
+                  value={frameOffsetX}
+                  min={-100}
+                  max={100}
+                  step={1}
+                  onChange={setFrameOffsetX}
+                  suffix={
+                    frameOffsetX === 0
+                      ? "Centro"
+                      : String(frameOffsetX)
+                  }
+                  disabled={editorBlocked}
+                />
+
+                <CropControl
+                  className="mt-5"
+                  icon={ChevronRight}
+                  leftIcon={ChevronLeft}
+                  label="Posición vertical"
+                  value={frameOffsetY}
+                  min={-100}
+                  max={100}
+                  step={1}
+                  onChange={setFrameOffsetY}
+                  suffix={
+                    frameOffsetY === 0
+                      ? "Centro"
+                      : String(frameOffsetY)
+                  }
+                  disabled={editorBlocked}
+                />
+
+                <button
+                  type="button"
+                  onClick={resetFrame}
+                  disabled={editorBlocked}
+                  className="mt-5 inline-flex h-10 w-full items-center justify-center gap-2 rounded-xl border border-black/[0.08] text-[11px] font-medium text-black/60 transition hover:bg-black/[0.03] disabled:opacity-40"
+                >
+                  <RotateCcw size={14} />
+                  Centrar automáticamente
+                </button>
+              </>
+            )}
+
+            <div className="mt-5 rounded-[18px] bg-red-50 p-3.5">
+              <p className="text-[10px] font-medium text-red-700">
+                Edición no destructiva
+              </p>
+              <p className="mt-1 text-[9px] leading-5 text-black/48">
+                La imagen original se conserva hasta que confirmes los cambios y actualices el producto.
+              </p>
+            </div>
+          </aside>
+        </div>
+
+        <footer className="flex shrink-0 items-center justify-between gap-2 border-t border-black/[0.06] bg-white px-5 py-4 sm:px-6">
+          <button
+            type="button"
+            onClick={() => {
+              if (editorStep === "frame") {
+                setEditorStep("crop");
+                return;
+              }
+
+              onClose();
+            }}
+            disabled={saving || preparingFrame}
+            className="h-11 rounded-2xl border border-black/[0.08] px-5 text-[12px] font-medium text-black/65 transition hover:bg-black/[0.03] disabled:opacity-40"
+          >
+            {editorStep === "frame"
+              ? "Volver al recorte"
+              : "Cancelar"}
+          </button>
+
+          {editorStep === "crop" ? (
+            <button
+              type="button"
+              onClick={continueToFrame}
+              disabled={
+                editorBlocked ||
+                !completedCrop?.width ||
+                !completedCrop?.height
+              }
+              className="inline-flex h-11 items-center justify-center gap-2 rounded-2xl bg-red-600 px-6 text-[12px] font-medium text-white shadow-lg shadow-red-600/20 transition hover:bg-red-700 disabled:opacity-50"
+            >
+              <ChevronRight size={16} />
+              {preparingFrame
+                ? "Preparando..."
+                : "Continuar y centrar"}
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={saveFinalImage}
+              disabled={editorBlocked}
+              className="inline-flex h-11 items-center justify-center gap-2 rounded-2xl bg-red-600 px-6 text-[12px] font-medium text-white shadow-lg shadow-red-600/20 transition hover:bg-red-700 disabled:opacity-50"
+            >
+              <Check size={16} />
+              {saving
+                ? "Guardando imagen..."
+                : "Aplicar recorte y encuadre"}
+            </button>
+          )}
+        </footer>
+      </section>
+    </div>
+  );
+}
+
+function CropControl({
+  className = "",
+  icon: Icon,
+  leftIcon: LeftIcon,
+  label,
+  value,
+  min,
+  max,
+  step,
+  onChange,
+  suffix = "",
+  disabled = false,
+}) {
+  return (
+    <div className={className}>
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <Icon size={14} className="text-red-600" />
+          <p className="text-[12px] font-medium">{label}</p>
+        </div>
+        <span className="text-[10px] text-black/40">{suffix || Number(value).toFixed(2)}</span>
+      </div>
+      <div className="mt-3 flex items-center gap-3">
+        {LeftIcon && <LeftIcon size={14} className="text-black/35" />}
+        <input
+          type="range"
+          min={min}
+          max={max}
+          step={step}
+          value={value}
+          disabled={disabled}
+          onChange={(event) => onChange(Number(event.target.value))}
+          className="h-1.5 w-full cursor-pointer accent-red-600 disabled:cursor-not-allowed disabled:opacity-40"
+        />
+        <Icon size={14} className="text-black/35" />
       </div>
     </div>
   );

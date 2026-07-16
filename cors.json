@@ -1,0 +1,19 @@
+[
+  {
+    "origin": [
+      "http://localhost:5173",
+      "https://masterc.dalotech.site",
+      "https://mastercaps.dalotech.site"
+    ],
+    "method": [
+      "GET",
+      "HEAD"
+    ],
+    "responseHeader": [
+      "Content-Type",
+      "Content-Length",
+      "ETag"
+    ],
+    "maxAgeSeconds": 3600
+  }
+]
