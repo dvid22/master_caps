@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Barcode,
+  ArrowDown,
+  ArrowUp,
   Camera,
   Check,
   ChevronLeft,
@@ -9,6 +11,7 @@ import {
   Edit3,
   ExternalLink,
   Eye,
+  GripVertical,
   ImagePlus,
   Images,
   Package,
@@ -103,6 +106,30 @@ function normalizeSize(value) {
   }
 
   return normalized;
+}
+
+function normalizeProductName(value) {
+  return String(value || "")
+    .replace(/\s+/g, " ")
+    .trimStart()
+    .toLocaleUpperCase("es-CO");
+}
+
+function reorderItems(items, fromIndex, toIndex) {
+  if (
+    fromIndex === toIndex ||
+    fromIndex < 0 ||
+    toIndex < 0 ||
+    fromIndex >= items.length ||
+    toIndex >= items.length
+  ) {
+    return items;
+  }
+
+  const nextItems = [...items];
+  const [movedItem] = nextItems.splice(fromIndex, 1);
+  nextItems.splice(toIndex, 0, movedItem);
+  return nextItems;
 }
 
 function getTotalStock(product) {
@@ -527,6 +554,9 @@ export default function InventoryPage() {
   });
   const [cropEditor, setCropEditor] = useState(null);
   const [savingCrop, setSavingCrop] = useState(false);
+  const [normalizingNames, setNormalizingNames] = useState(false);
+  const [nameNormalizationProgress, setNameNormalizationProgress] = useState({ current: 0, total: 0 });
+  const [draggedGalleryItem, setDraggedGalleryItem] = useState(null);
 
   const productsPerPage = 8;
 
@@ -645,7 +675,10 @@ export default function InventoryPage() {
   }, [search, categoryFilter, sizeFilter, stockFilter]);
 
   function updateForm(field, value) {
-    setForm((current) => ({ ...current, [field]: value }));
+    setForm((current) => ({
+      ...current,
+      [field]: field === "name" ? normalizeProductName(value) : value,
+    }));
   }
 
   function updateVariant(variantId, field, value) {
@@ -682,6 +715,80 @@ export default function InventoryPage() {
         ),
       };
     });
+  }
+
+  function moveExistingGalleryImage(imageId, direction) {
+    setExistingImages((current) => {
+      const cover = current.find((image) => image.type === "cover") || current[0] || null;
+      const gallery = current.filter((image) => image.id !== cover?.id);
+      const fromIndex = gallery.findIndex((image) => image.id === imageId);
+      if (fromIndex < 0) return current;
+      const toIndex = Math.min(Math.max(fromIndex + direction, 0), gallery.length - 1);
+      const reordered = reorderItems(gallery, fromIndex, toIndex);
+      const ordered = cover ? [cover, ...reordered] : reordered;
+      return ordered.map((image, index) => ({
+        ...image,
+        type: index === 0 ? "cover" : "gallery",
+        sortOrder: index,
+      }));
+    });
+  }
+
+  function moveNewGalleryImage(imageId, direction) {
+    setGalleryFiles((current) => {
+      const fromIndex = current.findIndex((image) => image.id === imageId);
+      if (fromIndex < 0) return current;
+      const toIndex = Math.min(Math.max(fromIndex + direction, 0), current.length - 1);
+      return reorderItems(current, fromIndex, toIndex);
+    });
+  }
+
+  function movePendingGalleryImage(imageId, direction) {
+    setPendingGalleryFiles((current) => {
+      const fromIndex = current.findIndex((image) => image.id === imageId);
+      if (fromIndex < 0) return current;
+      const toIndex = Math.min(Math.max(fromIndex + direction, 0), current.length - 1);
+      return reorderItems(current, fromIndex, toIndex);
+    });
+  }
+
+  function handleGalleryDragStart(group, imageId) {
+    setDraggedGalleryItem({ group, imageId });
+  }
+
+  function handleGalleryDrop(group, targetId) {
+    if (!draggedGalleryItem || draggedGalleryItem.group !== group || draggedGalleryItem.imageId === targetId) {
+      setDraggedGalleryItem(null);
+      return;
+    }
+
+    const setter = group === "existing"
+      ? setExistingImages
+      : group === "new"
+        ? setGalleryFiles
+        : setPendingGalleryFiles;
+
+    setter((current) => {
+      if (group === "existing") {
+        const cover = current.find((image) => image.type === "cover") || current[0] || null;
+        const gallery = current.filter((image) => image.id !== cover?.id);
+        const fromIndex = gallery.findIndex((image) => image.id === draggedGalleryItem.imageId);
+        const toIndex = gallery.findIndex((image) => image.id === targetId);
+        const reordered = reorderItems(gallery, fromIndex, toIndex);
+        const ordered = cover ? [cover, ...reordered] : reordered;
+        return ordered.map((image, index) => ({
+          ...image,
+          type: index === 0 ? "cover" : "gallery",
+          sortOrder: index,
+        }));
+      }
+
+      const fromIndex = current.findIndex((image) => image.id === draggedGalleryItem.imageId);
+      const toIndex = current.findIndex((image) => image.id === targetId);
+      return reorderItems(current, fromIndex, toIndex);
+    });
+
+    setDraggedGalleryItem(null);
   }
 
   function clearMediaPreviews() {
@@ -1232,7 +1339,7 @@ export default function InventoryPage() {
     setCodeTouched(true);
 
     setForm({
-      name: product.name || "",
+      name: normalizeProductName(product.name),
       code: product.code || "",
       categoryId: product.categoryId || "",
       categoryName: product.categoryName || "",
@@ -1303,7 +1410,7 @@ export default function InventoryPage() {
   async function handleSubmit(event) {
     event.preventDefault();
 
-    const name = form.name.trim();
+    const name = normalizeProductName(form.name).trim();
 
     const code =
       !editingProduct && !codeTouched && form.code === suggestedCode
@@ -1394,7 +1501,11 @@ export default function InventoryPage() {
       const mediaPayload = {
         coverFile,
         galleryFiles: galleryFiles.map((image) => image.file),
-        retainedImages: existingImages,
+        retainedImages: existingImages.map((image, index) => ({
+          ...image,
+          type: index === 0 ? "cover" : "gallery",
+          sortOrder: index,
+        })),
         removedImagePaths,
       };
 
@@ -1628,6 +1739,12 @@ export default function InventoryPage() {
           processingImages={processingImages}
           imageProcessingProgress={imageProcessingProgress}
           openCropEditor={openCropEditor}
+          moveExistingGalleryImage={moveExistingGalleryImage}
+          moveNewGalleryImage={moveNewGalleryImage}
+          movePendingGalleryImage={movePendingGalleryImage}
+          handleGalleryDragStart={handleGalleryDragStart}
+          handleGalleryDrop={handleGalleryDrop}
+          draggedGalleryItem={draggedGalleryItem}
         />
       )}
 
@@ -2107,6 +2224,12 @@ function ProductFormModal({
   processingImages,
   imageProcessingProgress,
   openCropEditor,
+  moveExistingGalleryImage,
+  moveNewGalleryImage,
+  movePendingGalleryImage,
+  handleGalleryDragStart,
+  handleGalleryDrop,
+  draggedGalleryItem,
 }) {
   const [step, setStep] = useState(1);
   const totalSteps = 4;
@@ -2324,7 +2447,8 @@ function ProductFormModal({
                     label="Nombre del producto"
                     value={form.name}
                     onChange={(value) => updateForm("name", value)}
-                    placeholder="Ej: Camiseta oversize negra"
+                    placeholder="Ej: CAMISETA OVERSIZE NEGRA"
+                    helper="Se formatea automáticamente en mayúsculas."
                   />
 
                   <InputField
@@ -2405,7 +2529,7 @@ function ProductFormModal({
               <section className="mx-auto max-w-[980px]">
                 <StepHeading
                   title="Imágenes del producto"
-                  description="Primero sube la foto. Luego decides si quieres quitar el fondo o conservar la imagen original."
+                  description="Sube, edita y organiza las imágenes en el orden exacto en que deseas mostrarlas."
                 />
 
                 {processingImages && (
@@ -2550,7 +2674,7 @@ function ProductFormModal({
                           Galería
                         </p>
                         <p className="mt-1 text-[11px] text-black/45">
-                          {totalImages} de {MAX_PRODUCT_IMAGES} imágenes
+                          {totalImages} de {MAX_PRODUCT_IMAGES} imágenes · arrastra o usa las flechas para ordenar
                         </p>
                       </div>
 
@@ -2580,6 +2704,15 @@ function ProductFormModal({
                           key={image.id}
                           imageUrl={image.url}
                           isCover={image.type === "cover" && !coverFile && !pendingCoverFile}
+                          orderLabel={image.type === "cover" ? "Portada" : `Posición ${Math.max(existingImages.findIndex((item) => item.id === image.id), 1)}`}
+                          canMoveBackward={image.type !== "cover" && existingImages.findIndex((item) => item.id === image.id) > 1}
+                          canMoveForward={image.type !== "cover" && existingImages.findIndex((item) => item.id === image.id) < existingImages.length - 1}
+                          onMoveBackward={() => moveExistingGalleryImage(image.id, -1)}
+                          onMoveForward={() => moveExistingGalleryImage(image.id, 1)}
+                          draggable={image.type !== "cover"}
+                          dragging={draggedGalleryItem?.group === "existing" && draggedGalleryItem?.imageId === image.id}
+                          onDragStart={() => handleGalleryDragStart("existing", image.id)}
+                          onDrop={() => handleGalleryDrop("existing", image.id)}
                           onSetCover={() => makeExistingImageCover(image.id)}
                           onEdit={() =>
                             openCropEditor({
@@ -2598,6 +2731,15 @@ function ProductFormModal({
                           key={image.id}
                           imageUrl={image.preview}
                           isCover={false}
+                          orderLabel={`Nueva ${galleryFiles.findIndex((item) => item.id === image.id) + 1}`}
+                          canMoveBackward={galleryFiles.findIndex((item) => item.id === image.id) > 0}
+                          canMoveForward={galleryFiles.findIndex((item) => item.id === image.id) < galleryFiles.length - 1}
+                          onMoveBackward={() => moveNewGalleryImage(image.id, -1)}
+                          onMoveForward={() => moveNewGalleryImage(image.id, 1)}
+                          draggable
+                          dragging={draggedGalleryItem?.group === "new" && draggedGalleryItem?.imageId === image.id}
+                          onDragStart={() => handleGalleryDragStart("new", image.id)}
+                          onDrop={() => handleGalleryDrop("new", image.id)}
                           onSetCover={() => makeNewGalleryImageCover(image.id)}
                           onEdit={() =>
                             openCropEditor({
@@ -2616,6 +2758,15 @@ function ProductFormModal({
                         <PendingGalleryImageItem
                           key={image.id}
                           imageUrl={image.preview}
+                          orderLabel={`Pendiente ${pendingGalleryFiles.findIndex((item) => item.id === image.id) + 1}`}
+                          canMoveBackward={pendingGalleryFiles.findIndex((item) => item.id === image.id) > 0}
+                          canMoveForward={pendingGalleryFiles.findIndex((item) => item.id === image.id) < pendingGalleryFiles.length - 1}
+                          onMoveBackward={() => movePendingGalleryImage(image.id, -1)}
+                          onMoveForward={() => movePendingGalleryImage(image.id, 1)}
+                          draggable
+                          dragging={draggedGalleryItem?.group === "pending" && draggedGalleryItem?.imageId === image.id}
+                          onDragStart={() => handleGalleryDragStart("pending", image.id)}
+                          onDrop={() => handleGalleryDrop("pending", image.id)}
                           onRemoveBackground={() =>
                             processPendingGalleryImage(
                               image.id,
@@ -2978,6 +3129,15 @@ function BackgroundDecisionCard({
 
 function PendingGalleryImageItem({
   imageUrl,
+  orderLabel,
+  canMoveBackward,
+  canMoveForward,
+  onMoveBackward,
+  onMoveForward,
+  draggable = false,
+  dragging = false,
+  onDragStart,
+  onDrop,
   onRemoveBackground,
   onKeepBackground,
   onEdit,
@@ -2985,7 +3145,15 @@ function PendingGalleryImageItem({
   disabled = false,
 }) {
   return (
-    <div className="group relative overflow-hidden rounded-2xl bg-black/[0.025] ring-1 ring-orange-200">
+    <div
+      draggable={draggable}
+      onDragStart={onDragStart}
+      onDragOver={(event) => event.preventDefault()}
+      onDrop={onDrop}
+      className={`group relative overflow-hidden rounded-2xl bg-black/[0.025] ring-1 ring-orange-200 transition ${
+        dragging ? "scale-[0.97] opacity-45" : ""
+      }`}
+    >
       <div className="relative aspect-square">
         <img
           src={imageUrl}
@@ -2993,8 +3161,9 @@ function PendingGalleryImageItem({
           className="h-full w-full bg-white object-contain p-2"
         />
 
-        <span className="absolute left-1.5 top-1.5 rounded-lg bg-orange-500 px-2 py-1 text-[9px] text-white">
-          Pendiente
+        <span className="absolute left-1.5 top-1.5 inline-flex items-center gap-1 rounded-lg bg-orange-500 px-2 py-1 text-[9px] text-white">
+          <GripVertical size={10} />
+          {orderLabel || "Pendiente"}
         </span>
 
         <div className="absolute right-1.5 top-1.5 flex gap-1">
@@ -3017,6 +3186,15 @@ function PendingGalleryImageItem({
             <Trash2 size={12} />
           </button>
         </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-1 border-t border-orange-100 bg-white p-1.5">
+        <button type="button" onClick={onMoveBackward} disabled={!canMoveBackward || disabled} className="inline-flex h-7 items-center justify-center gap-1 rounded-lg bg-black/[0.04] text-[8px] text-black/60 transition hover:bg-red-50 hover:text-red-600 disabled:opacity-25">
+          <ArrowUp size={11} /> Antes
+        </button>
+        <button type="button" onClick={onMoveForward} disabled={!canMoveForward || disabled} className="inline-flex h-7 items-center justify-center gap-1 rounded-lg bg-black/[0.04] text-[8px] text-black/60 transition hover:bg-red-50 hover:text-red-600 disabled:opacity-25">
+          Después <ArrowDown size={11} />
+        </button>
       </div>
 
       <div className="grid grid-cols-2 gap-1 border-t border-orange-100 bg-white p-1.5">
@@ -3045,13 +3223,30 @@ function PendingGalleryImageItem({
 function GalleryImageItem({
   imageUrl,
   isCover,
+  orderLabel,
+  canMoveBackward,
+  canMoveForward,
+  onMoveBackward,
+  onMoveForward,
+  draggable = false,
+  dragging = false,
+  onDragStart,
+  onDrop,
   onSetCover,
   onEdit,
   onRemove,
   isNew = false,
 }) {
   return (
-    <div className="group relative aspect-square overflow-hidden rounded-2xl bg-black/[0.025] ring-1 ring-black/[0.06]">
+    <div
+      draggable={draggable}
+      onDragStart={onDragStart}
+      onDragOver={(event) => event.preventDefault()}
+      onDrop={onDrop}
+      className={`group relative aspect-square overflow-hidden rounded-2xl bg-black/[0.025] ring-1 ring-black/[0.06] transition ${
+        dragging ? "scale-[0.97] opacity-45 ring-2 ring-red-300" : ""
+      }`}
+    >
       <img
         src={imageUrl}
         alt="Imagen del producto"
@@ -3067,39 +3262,25 @@ function GalleryImageItem({
         </span>
       )}
 
+      {!isCover && (
+        <span className="absolute left-1.5 top-1.5 inline-flex items-center gap-1 rounded-lg bg-black/70 px-2 py-1 text-[8px] text-white backdrop-blur">
+          <GripVertical size={10} />
+          {orderLabel || "Galería"}
+        </span>
+      )}
+
       {isNew && (
         <span className="absolute right-1.5 top-1.5 rounded-lg bg-white/90 px-2 py-1 text-[9px] text-black">
           Nueva
         </span>
       )}
 
-      <div className="absolute inset-x-1.5 bottom-1.5 grid grid-cols-3 gap-1 opacity-0 transition group-hover:opacity-100">
-        <button
-          type="button"
-          onClick={onSetCover}
-          className="flex h-7 items-center justify-center rounded-lg bg-white/95 text-black transition hover:text-red-600"
-          title="Usar como portada"
-        >
-          <Star size={12} />
-        </button>
-
-        <button
-          type="button"
-          onClick={onEdit}
-          className="flex h-7 items-center justify-center rounded-lg bg-white/95 text-black transition hover:text-red-600"
-          title="Recortar imagen"
-        >
-          <Crop size={12} />
-        </button>
-
-        <button
-          type="button"
-          onClick={onRemove}
-          className="flex h-7 items-center justify-center rounded-lg bg-white/95 text-red-600 transition hover:bg-red-50"
-          title="Eliminar imagen"
-        >
-          <Trash2 size={12} />
-        </button>
+      <div className="absolute inset-x-1.5 bottom-1.5 grid grid-cols-5 gap-1 opacity-0 transition group-hover:opacity-100">
+        <button type="button" onClick={onMoveBackward} disabled={!canMoveBackward || isCover} className="flex h-7 items-center justify-center rounded-lg bg-white/95 text-black transition hover:text-red-600 disabled:opacity-30" title="Mover antes"><ArrowUp size={12} /></button>
+        <button type="button" onClick={onMoveForward} disabled={!canMoveForward || isCover} className="flex h-7 items-center justify-center rounded-lg bg-white/95 text-black transition hover:text-red-600 disabled:opacity-30" title="Mover después"><ArrowDown size={12} /></button>
+        <button type="button" onClick={onSetCover} className="flex h-7 items-center justify-center rounded-lg bg-white/95 text-black transition hover:text-red-600" title="Usar como portada"><Star size={12} /></button>
+        <button type="button" onClick={onEdit} className="flex h-7 items-center justify-center rounded-lg bg-white/95 text-black transition hover:text-red-600" title="Recortar imagen"><Crop size={12} /></button>
+        <button type="button" onClick={onRemove} className="flex h-7 items-center justify-center rounded-lg bg-white/95 text-red-600 transition hover:bg-red-50" title="Eliminar imagen"><Trash2 size={12} /></button>
       </div>
     </div>
   );
@@ -3959,6 +4140,7 @@ function InputField({
   disabled = false,
   min,
   compact = false,
+  helper = "",
 }) {
   const numericInput = type === "number";
 
@@ -3990,6 +4172,9 @@ function InputField({
         }`}
         placeholder={placeholder}
       />
+      {helper && (
+        <span className="mt-1.5 block text-[9px] text-black/38">{helper}</span>
+      )}
     </label>
   );
 }

@@ -253,7 +253,10 @@ export default function SalesPage() {
         variants.some((variant) => variant.size === sizeFilter);
 
       const matchesStock =
-        stockFilter === "all" || stockStatus.filter === stockFilter;
+        stockFilter === "all" ||
+        (stockFilter === "available" && stock > 0) ||
+        (stockFilter === "low" && stock > 0 && stock <= 3) ||
+        (stockFilter === "empty" && stock <= 0);
 
       return matchesSearch && matchesCategory && matchesSize && matchesStock;
     });
@@ -686,8 +689,8 @@ export default function SalesPage() {
                 onChange={(event) => setStockFilter(event.target.value)}
                 className="h-11 rounded-2xl border border-black/[0.08] bg-white px-4 text-[13px] outline-none transition focus:border-red-600 focus:ring-4 focus:ring-red-600/10"
               >
-                <option value="available">Disponibles</option>
-                <option value="low">Stock bajo</option>
+                <option value="available">Disponibles (stock mayor a 0)</option>
+                <option value="low">Stock bajo (1 a 3)</option>
                 <option value="empty">Agotados</option>
                 <option value="all">Todos</option>
               </select>
