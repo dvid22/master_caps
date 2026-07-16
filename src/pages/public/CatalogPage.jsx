@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useLocation, useParams, useSearchParams } from "react-router-dom";
 import {
   CalendarClock,
   Camera,
@@ -54,6 +54,8 @@ function getTotalStock(product) {
 
 export default function CatalogPage() {
   const { storeId = "master-caps" } = useParams();
+  const location = useLocation();
+  const [searchParams, setSearchParams] = useSearchParams();
 
   const [products, setProducts] = useState([]);
   const [categories, setCategories] = useState([]);
@@ -61,15 +63,16 @@ export default function CatalogPage() {
     defaultReservationDays: 7,
   });
 
-  const [search, setSearch] = useState("");
-  const [categoryFilter, setCategoryFilter] = useState("all");
-  const [sizeFilter, setSizeFilter] = useState("all");
+  const [search, setSearch] = useState(() => searchParams.get("q") || "");
+  const [categoryFilter, setCategoryFilter] = useState(() => searchParams.get("categoria") || "all");
+  const [sizeFilter, setSizeFilter] = useState(() => searchParams.get("talla") || "all");
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [cartOpen, setCartOpen] = useState(false);
 
   const cart = useReservationCart(storeId);
 
   const [loading, setLoading] = useState(true);
+  const restorationDoneRef = useRef(false);
 
   useEffect(() => {
     setLoading(true);
@@ -115,6 +118,64 @@ export default function CatalogPage() {
       document.body.style.overflow = previousOverflow;
     };
   }, [mobileSidebarOpen, cartOpen]);
+
+  useEffect(() => {
+    const nextParams = new URLSearchParams();
+
+    if (categoryFilter !== "all") {
+      nextParams.set("categoria", categoryFilter);
+    }
+
+    if (sizeFilter !== "all") {
+      nextParams.set("talla", sizeFilter);
+    }
+
+    const cleanSearch = search.trim();
+
+    if (cleanSearch) {
+      nextParams.set("q", cleanSearch);
+    }
+
+    setSearchParams(nextParams, { replace: true });
+  }, [categoryFilter, sizeFilter, search, setSearchParams]);
+
+  useEffect(() => {
+    if (loading || restorationDoneRef.current) return;
+
+    restorationDoneRef.current = true;
+
+    const savedScrollY = Number(
+      location.state?.catalogNavigation?.scrollY ||
+        sessionStorage.getItem(
+          `catalog-scroll:${storeId}:${location.search}`
+        ) ||
+        0
+    );
+
+    if (savedScrollY > 0) {
+      requestAnimationFrame(() => {
+        window.scrollTo({
+          top: savedScrollY,
+          behavior: "auto",
+        });
+      });
+    }
+  }, [loading, location.search, location.state, storeId]);
+
+  useEffect(() => {
+    const storageKey = `catalog-scroll:${storeId}:${location.search}`;
+
+    const saveScroll = () => {
+      sessionStorage.setItem(storageKey, String(window.scrollY));
+    };
+
+    window.addEventListener("scroll", saveScroll, { passive: true });
+
+    return () => {
+      window.removeEventListener("scroll", saveScroll);
+      saveScroll();
+    };
+  }, [location.search, storeId]);
 
   const availableSizes = useMemo(() => {
     const sizes = products.flatMap((product) =>
@@ -362,6 +423,10 @@ export default function CatalogPage() {
                     key={product.id}
                     product={product}
                     storeId={storeId}
+                    catalogSearch={location.search}
+                    categoryFilter={categoryFilter}
+                    sizeFilter={sizeFilter}
+                    search={search}
                   />
                 ))}
               </div>
@@ -516,7 +581,14 @@ function MobileSidebar(props) {
   );
 }
 
-function ProductCard({ product, storeId }) {
+function ProductCard({
+  product,
+  storeId,
+  catalogSearch,
+  categoryFilter,
+  sizeFilter,
+  search,
+}) {
   const variants = getAvailableVariants(product);
   const totalStock = getTotalStock(product);
   const coverImage = getProductCoverImage(product);
@@ -525,7 +597,15 @@ function ProductCard({ product, storeId }) {
   return (
     <article className="group overflow-hidden rounded-[22px] border border-black/[0.055] bg-white shadow-[0_14px_40px_rgba(0,0,0,0.045)] transition duration-300 hover:-translate-y-1 hover:shadow-[0_26px_70px_rgba(0,0,0,0.09)] sm:rounded-[26px]">
       <Link
-        to={`/catalogo/${storeId}/apartar/${product.id}`}
+        to={`/catalogo/${storeId}/apartar/${product.id}${catalogSearch || ""}`}
+        state={{
+          catalogNavigation: {
+            categoryFilter,
+            sizeFilter,
+            search,
+            scrollY: window.scrollY,
+          },
+        }}
         className="block"
       >
         <div className="relative aspect-[4/4.7] overflow-hidden bg-black/[0.025] sm:aspect-[4/4.2]">

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import {
   ArrowLeft,
   CalendarClock,
@@ -35,8 +35,21 @@ function getProductVariants(product) {
 export default function ReserveProductPage() {
   const { storeId = "master-caps", productId } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
 
   const cart = useReservationCart(storeId);
+
+  const catalogUrl = `/catalogo/${storeId}${location.search || ""}`;
+  const catalogNavigationState =
+    location.state?.catalogNavigation || null;
+
+  function returnToCatalog() {
+    navigate(catalogUrl, {
+      state: catalogNavigationState
+        ? { catalogNavigation: catalogNavigationState }
+        : undefined,
+    });
+  }
 
   const [products, setProducts] = useState([]);
   const [reservationSettings, setReservationSettings] = useState({
@@ -286,7 +299,7 @@ export default function ReserveProductPage() {
     const added = addSelectedToCart({ openDrawer: false });
 
     if (added) {
-      navigate(`/catalogo/${storeId}/checkout`);
+      navigate(`/catalogo/${storeId}/checkout${location.search || ""}`);
     }
   }
 
@@ -312,12 +325,13 @@ export default function ReserveProductPage() {
             La prenda que intentas consultar no existe o fue eliminada.
           </p>
 
-          <Link
-            to={`/catalogo/${storeId}`}
+          <button
+            type="button"
+            onClick={returnToCatalog}
             className="mt-6 inline-flex h-12 w-full items-center justify-center rounded-2xl bg-red-600 px-5 text-[14px] font-medium text-white shadow-lg shadow-red-600/20 transition hover:bg-red-700"
           >
             Volver al catálogo
-          </Link>
+          </button>
         </section>
       </main>
     );
@@ -354,13 +368,14 @@ export default function ReserveProductPage() {
 
       <main className="min-h-screen bg-white text-black">
         <header className="sticky top-0 z-40 flex h-[72px] items-center justify-between gap-4 border-b border-black/[0.06] bg-white/95 px-4 backdrop-blur-xl sm:px-6 lg:px-8">
-          <Link
-            to={`/catalogo/${storeId}`}
+          <button
+            type="button"
+            onClick={returnToCatalog}
             className="inline-flex h-10 items-center gap-2 rounded-xl border border-black/[0.08] bg-white px-4 text-[13px] font-medium transition hover:border-red-200 hover:bg-red-50 hover:text-red-600"
           >
             <ArrowLeft size={16} />
             Volver
-          </Link>
+          </button>
 
           <div className="flex items-center gap-3">
             <img
