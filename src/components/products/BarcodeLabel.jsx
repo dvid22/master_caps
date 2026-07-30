@@ -18,32 +18,47 @@ const DEFAULT_STORE = {
 };
 
 const PRESETS = {
-  compact: {
-    id: "compact",
-    label: "Compacta",
-    description: "Ideal para etiquetas pequeñas",
-    width: "50mm",
-    minHeight: "30mm",
-    barcodeHeight: 42,
-    barcodeWidth: 1.45,
+  dual30x20: {
+    id: "dual30x20",
+    label: "Doble 30 × 20 mm",
+    description: "Dos etiquetas por fila · rollo Jaltech",
+    pageWidth: "64mm",
+    width: "30mm",
+    height: "20mm",
+    columns: 2,
+    columnGap: "2mm",
+    rowGap: "0mm",
+    barcodeHeight: 22,
+    barcodeWidth: 0.68,
+    fontSize: "6.2px",
+  },
+  single30x20: {
+    id: "single30x20",
+    label: "Individual 30 × 20 mm",
+    description: "Una etiqueta por fila",
+    pageWidth: "30mm",
+    width: "30mm",
+    height: "20mm",
+    columns: 1,
+    columnGap: "0mm",
+    rowGap: "0mm",
+    barcodeHeight: 22,
+    barcodeWidth: 0.68,
+    fontSize: "6.2px",
   },
   thermal58: {
     id: "thermal58",
     label: "Térmica 58 mm",
-    description: "Una etiqueta por línea",
+    description: "Una etiqueta grande por fila",
+    pageWidth: "58mm",
     width: "58mm",
-    minHeight: "38mm",
+    height: "38mm",
+    columns: 1,
+    columnGap: "0mm",
+    rowGap: "0mm",
     barcodeHeight: 52,
     barcodeWidth: 1.65,
-  },
-  thermal80: {
-    id: "thermal80",
-    label: "Térmica 80 mm",
-    description: "Mayor legibilidad",
-    width: "80mm",
-    minHeight: "46mm",
-    barcodeHeight: 64,
-    barcodeWidth: 1.9,
+    fontSize: "10px",
   },
 };
 
@@ -138,18 +153,317 @@ function createInitialSelections(product) {
   }, {});
 }
 
+
+function printLabelsInIsolatedFrame({
+  labelsMarkup,
+  preset,
+}) {
+  return new Promise((resolve, reject) => {
+    let iframe = null;
+    let cleanupTimer = null;
+    let resolved = false;
+
+    const cleanup = () => {
+      if (resolved) return;
+      resolved = true;
+
+      if (cleanupTimer) {
+        window.clearTimeout(cleanupTimer);
+      }
+
+      window.setTimeout(() => {
+        iframe?.remove();
+        resolve();
+      }, 250);
+    };
+
+    try {
+      iframe = document.createElement("iframe");
+
+      iframe.setAttribute("aria-hidden", "true");
+      iframe.setAttribute("title", "Impresión de etiquetas");
+      iframe.style.position = "fixed";
+      iframe.style.left = "0";
+      iframe.style.top = "0";
+      iframe.style.width = preset.pageWidth;
+      iframe.style.height = "1px";
+      iframe.style.border = "0";
+      iframe.style.opacity = "0";
+      iframe.style.pointerEvents = "none";
+      iframe.style.zIndex = "-1";
+
+      document.body.appendChild(iframe);
+
+      const frameWindow = iframe.contentWindow;
+      const frameDocument = iframe.contentDocument;
+
+      if (!frameWindow || !frameDocument) {
+        throw new Error(
+          "El navegador no permitió preparar las etiquetas."
+        );
+      }
+
+      frameDocument.open();
+      frameDocument.write(`
+        <!doctype html>
+        <html lang="es">
+          <head>
+            <meta charset="utf-8" />
+            <meta
+              name="viewport"
+              content="width=device-width, initial-scale=1"
+            />
+            <title>Etiquetas de producto</title>
+
+            <style>
+              @page {
+                size: ${preset.pageWidth} auto;
+                margin: 0;
+              }
+
+              * {
+                box-sizing: border-box;
+              }
+
+              html,
+              body {
+                width: ${preset.pageWidth};
+                min-width: ${preset.pageWidth};
+                max-width: ${preset.pageWidth};
+                height: auto;
+                min-height: 0;
+                margin: 0;
+                padding: 0;
+                overflow: visible;
+                background: #ffffff;
+                color: #000000;
+              }
+
+              body {
+                display: block;
+                font-family:
+                  Arial,
+                  Helvetica,
+                  system-ui,
+                  sans-serif;
+              }
+
+              #barcode-label-print-area {
+                display: grid;
+                grid-template-columns: repeat(
+                  ${preset.columns},
+                  ${preset.width}
+                );
+                column-gap: ${preset.columnGap};
+                row-gap: ${preset.rowGap};
+                width: ${preset.pageWidth};
+                min-width: ${preset.pageWidth};
+                max-width: ${preset.pageWidth};
+                margin: 0;
+                padding: 0;
+                background: #ffffff;
+                align-items: start;
+                justify-content: center;
+              }
+
+              .barcode-print-label {
+                position: relative;
+                display: flex;
+                flex-direction: column;
+                align-items: stretch;
+                justify-content: center;
+                width: ${preset.width};
+                min-width: ${preset.width};
+                max-width: ${preset.width};
+                height: ${preset.height};
+                min-height: ${preset.height};
+                max-height: ${preset.height};
+                margin: 0;
+                padding: 1.65mm 0.9mm 0.65mm;
+                overflow: hidden;
+                break-inside: avoid;
+                page-break-inside: avoid;
+                background: #ffffff;
+                color: #000000;
+                border: 0;
+                border-radius: 0;
+                box-shadow: none;
+                transform: none;
+                text-align: center;
+                font-size: ${preset.fontSize};
+                line-height: 1.05;
+              }
+
+              .barcode-print-label svg {
+                display: block;
+                width: 100%;
+                max-width: 100%;
+                height: auto;
+                margin: 0 auto;
+                overflow: visible;
+              }
+
+              .barcode-print-label img {
+                display: block;
+                max-width: 100%;
+                object-fit: contain;
+              }
+
+              .barcode-label-name {
+                display: block;
+                max-width: 100%;
+                margin: 0 0 0.35mm;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+                font-size: 5.8px;
+                font-weight: 800;
+                line-height: 1;
+              }
+
+              .barcode-label-meta {
+                display: grid;
+                grid-template-columns: minmax(0, 1fr) auto;
+                align-items: baseline;
+                gap: 1mm;
+                width: 100%;
+                margin: 0 0 0.35mm;
+                font-size: 6.5px;
+                font-weight: 700;
+                line-height: 1;
+              }
+
+              .barcode-label-meta > span:first-child {
+                min-width: 0;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+                text-align: left;
+              }
+
+              .barcode-label-meta > strong {
+                white-space: nowrap;
+                text-align: right;
+              }
+
+              .barcode-label-code {
+                max-width: 100%;
+                margin: 0.25mm 0 0;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+                font-family:
+                  "Courier New",
+                  Courier,
+                  monospace;
+                font-size: 5.2px;
+                font-weight: 700;
+                letter-spacing: 0;
+                line-height: 1;
+              }
+
+              .barcode-label-store {
+                height: 2.5mm;
+                margin: 0 0 0.3mm;
+              }
+
+              .barcode-label-store img {
+                width: auto;
+                height: 2.5mm;
+                max-width: 16mm;
+                margin: 0 auto;
+                filter:
+                  grayscale(1)
+                  brightness(0)
+                  contrast(2.3);
+              }
+
+              @media print {
+                html,
+                body,
+                #barcode-label-print-area {
+                  width: ${preset.pageWidth} !important;
+                  min-width: ${preset.pageWidth} !important;
+                  max-width: ${preset.pageWidth} !important;
+                  height: auto !important;
+                  min-height: 0 !important;
+                  margin: 0 !important;
+                  padding: 0 !important;
+                  overflow: visible !important;
+                }
+
+                .barcode-print-label {
+                  width: ${preset.width} !important;
+                  min-width: ${preset.width} !important;
+                  max-width: ${preset.width} !important;
+                  height: ${preset.height} !important;
+                  min-height: ${preset.height} !important;
+                  max-height: ${preset.height} !important;
+                }
+              }
+            </style>
+          </head>
+
+          <body>
+            ${labelsMarkup}
+          </body>
+        </html>
+      `);
+      frameDocument.close();
+
+      const printNow = () => {
+        try {
+          frameWindow.addEventListener(
+            "afterprint",
+            cleanup,
+            { once: true }
+          );
+
+          frameWindow.focus();
+          frameWindow.print();
+
+          cleanupTimer = window.setTimeout(
+            cleanup,
+            5000
+          );
+        } catch (error) {
+          iframe?.remove();
+          reject(error);
+        }
+      };
+
+      /*
+       * No esperamos eventos de carga remotos: las etiquetas contienen
+       * SVG ya generado. Esto conserva el gesto del clic y evita que
+       * Edge bloquee silenciosamente window.print().
+       */
+      frameWindow.requestAnimationFrame(() => {
+        frameWindow.requestAnimationFrame(printNow);
+      });
+    } catch (error) {
+      iframe?.remove();
+      reject(error);
+    }
+  });
+}
+
+
 export default function BarcodeLabel({
   product,
   open = true,
   onClose,
   store = DEFAULT_STORE,
-  defaultPreset = "thermal58",
+  defaultPreset = "dual30x20",
 }) {
-  const [presetId, setPresetId] = useState(
-    PRESETS[defaultPreset] ? defaultPreset : "thermal58"
-  );
-  const [showStore, setShowStore] = useState(true);
-  const [showName, setShowName] = useState(true);
+  const [presetId, setPresetId] = useState(() => {
+    if (defaultPreset === "single30x20") {
+      return "single30x20";
+    }
+
+    return "dual30x20";
+  });
+  const [showStore, setShowStore] = useState(false);
+  const [showName, setShowName] = useState(false);
   const [showPrice, setShowPrice] = useState(true);
   const [showHumanCode, setShowHumanCode] = useState(true);
   const [printing, setPrinting] = useState(false);
@@ -245,14 +559,18 @@ export default function BarcodeLabel({
 
   function resetConfiguration() {
     setSelections(createInitialSelections(product));
-    setPresetId(PRESETS[defaultPreset] ? defaultPreset : "thermal58");
-    setShowStore(true);
-    setShowName(true);
+    setPresetId(
+      defaultPreset === "single30x20"
+        ? "single30x20"
+        : "dual30x20"
+    );
+    setShowStore(false);
+    setShowName(false);
     setShowPrice(true);
     setShowHumanCode(true);
   }
 
-  function handlePrint() {
+  async function handlePrint() {
     if (labels.length === 0) {
       alert("Selecciona al menos una etiqueta para imprimir.");
       return;
@@ -263,21 +581,32 @@ export default function BarcodeLabel({
       return;
     }
 
+    if (printing) return;
+
+    const printArea = document.getElementById(
+      "barcode-label-print-area"
+    );
+
+    if (!printArea) {
+      alert("No se encontró la vista previa de las etiquetas.");
+      return;
+    }
+
     try {
       setPrinting(true);
-      document.documentElement.style.setProperty(
-        "--barcode-label-width",
-        preset.width
-      );
 
-      window.setTimeout(() => {
-        window.print();
-        setPrinting(false);
-      }, 180);
+      await printLabelsInIsolatedFrame({
+        labelsMarkup: printArea.outerHTML,
+        preset,
+      });
     } catch (error) {
       console.error(error);
+      alert(
+        error?.message ||
+          "No se pudo abrir el diálogo de impresión."
+      );
+    } finally {
       setPrinting(false);
-      alert("No se pudo abrir el diálogo de impresión.");
     }
   }
 
@@ -286,46 +615,23 @@ export default function BarcodeLabel({
   return (
     <>
       <style>{`
-        @media print {
-          @page {
-            size: var(--barcode-label-width, 58mm) auto;
-            margin: 0;
-          }
+        #barcode-label-print-area {
+          display: grid;
+          align-items: start;
+          justify-content: start;
+        }
 
-          html,
-          body {
-            width: var(--barcode-label-width, 58mm) !important;
-            min-width: var(--barcode-label-width, 58mm) !important;
-            margin: 0 !important;
-            padding: 0 !important;
-            background: #ffffff !important;
-          }
+        .barcode-print-label {
+          overflow: hidden;
+          box-sizing: border-box;
+          background: #ffffff;
+          color: #000000;
+        }
 
-          body * {
-            visibility: hidden !important;
-          }
-
-          #barcode-label-print-area,
-          #barcode-label-print-area * {
-            visibility: visible !important;
-          }
-
-          #barcode-label-print-area {
-            position: absolute !important;
-            left: 0 !important;
-            top: 0 !important;
-            width: var(--barcode-label-width, 58mm) !important;
-            margin: 0 !important;
-            padding: 0 !important;
-            background: #ffffff !important;
-          }
-
-          .barcode-print-label {
-            break-inside: avoid !important;
-            page-break-inside: avoid !important;
-            box-shadow: none !important;
-            border-radius: 0 !important;
-          }
+        .barcode-print-label svg {
+          display: block;
+          max-width: 100%;
+          height: auto;
         }
       `}</style>
 
@@ -396,6 +702,19 @@ export default function BarcodeLabel({
                   ))}
                 </div>
               </section>
+
+              {preset.id === "dual30x20" && (
+                <div className="mt-4 rounded-[18px] border border-emerald-100 bg-emerald-50 p-3.5">
+                  <p className="text-[11px] font-medium text-emerald-700">
+                    Formato configurado para tu rollo
+                  </p>
+                  <p className="mt-1 text-[10px] leading-4 text-black/48">
+                    Dos columnas de 30 × 20 mm con separación central de 2 mm.
+                    Para máxima lectura se recomienda mostrar talla, precio,
+                    código de barras y código legible.
+                  </p>
+                </div>
+              )}
 
               <section className="mt-5 border-t border-black/[0.06] pt-5">
                 <div className="flex items-center justify-between gap-3">
@@ -568,7 +887,7 @@ export default function BarcodeLabel({
                   className="inline-flex h-12 items-center justify-center gap-2 rounded-2xl bg-red-600 px-4 text-[13px] font-medium text-white shadow-lg shadow-red-600/20 transition hover:bg-red-700 disabled:cursor-not-allowed disabled:bg-black/15 disabled:shadow-none"
                 >
                   <Printer size={16} />
-                  {printing ? "Preparando..." : "Imprimir etiquetas"}
+                  {printing ? "Abriendo impresión..." : "Imprimir etiquetas"}
                 </button>
 
                 <button
@@ -588,7 +907,7 @@ export default function BarcodeLabel({
                     Vista previa
                   </p>
                   <p className="mt-1 text-[11px] text-black/45">
-                    Cada bloque corresponde a una etiqueta.
+                    Formato físico real: dos etiquetas de 30 × 20 mm por fila.
                   </p>
                 </div>
 
@@ -613,7 +932,11 @@ export default function BarcodeLabel({
                   <div
                     id="barcode-label-print-area"
                     style={{
-                      width: preset.width,
+                      display: "grid",
+                      gridTemplateColumns: `repeat(${preset.columns}, ${preset.width})`,
+                      columnGap: preset.columnGap,
+                      rowGap: preset.rowGap,
+                      width: preset.pageWidth,
                       maxWidth: "100%",
                       background: "#ffffff",
                     }}
@@ -653,6 +976,7 @@ function PrintableLabel({
   showHumanCode,
 }) {
   const svgRef = useRef(null);
+  const compact30 = preset.id.includes("30x20");
 
   useEffect(() => {
     if (!svgRef.current || !label.barcode) return;
@@ -677,41 +1001,58 @@ function PrintableLabel({
     <article
       className="barcode-print-label"
       style={{
-        width: "100%",
-        minHeight: preset.minHeight,
+        width: preset.width,
+        minWidth: preset.width,
+        maxWidth: preset.width,
+        height: preset.height,
+        minHeight: preset.height,
+        maxHeight: preset.height,
         boxSizing: "border-box",
         breakInside: "avoid",
-        padding: "3mm",
+        padding: compact30
+          ? "1.65mm 0.9mm 0.65mm"
+          : "3mm",
+        overflow: "hidden",
         background: "#ffffff",
         color: "#000000",
-        borderBottom: "1px dashed #000000",
+        border: 0,
         fontFamily:
           'Arial, Helvetica, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+        fontSize: preset.fontSize,
+        lineHeight: 1.05,
         textAlign: "center",
       }}
     >
       {showStore && (
-        <header style={{ marginBottom: "2mm" }}>
+        <header
+          className="barcode-label-store"
+          style={{
+            height: compact30 ? "2.5mm" : "8mm",
+            marginBottom: compact30 ? "0.3mm" : "1mm",
+          }}
+        >
           {store.logoUrl ? (
             <img
               src={store.logoUrl}
               alt={store.name}
               style={{
                 display: "block",
-                width: preset.id === "compact" ? "19mm" : "24mm",
-                maxHeight: preset.id === "compact" ? "8mm" : "10mm",
+                width: "auto",
+                height: compact30 ? "2.5mm" : "7mm",
+                maxWidth: compact30 ? "16mm" : "24mm",
                 objectFit: "contain",
                 margin: "0 auto",
-                filter: "grayscale(1) contrast(1.35)",
+                filter:
+                  "grayscale(1) brightness(0) contrast(2.3)",
               }}
             />
           ) : (
             <p
               style={{
                 margin: 0,
-                fontSize: "10px",
+                fontSize: compact30 ? "5.2px" : "10px",
                 fontWeight: 800,
-                letterSpacing: "0.08em",
+                lineHeight: 1,
               }}
             >
               {store.name}
@@ -722,13 +1063,19 @@ function PrintableLabel({
 
       {showName && (
         <p
+          className="barcode-label-name"
           style={{
-            margin: "0 0 1mm",
+            display: "block",
+            maxWidth: "100%",
+            margin: compact30
+              ? "0 0 0.35mm"
+              : "0 0 1mm",
             overflow: "hidden",
             textOverflow: "ellipsis",
             whiteSpace: "nowrap",
-            fontSize: preset.id === "compact" ? "10px" : "11px",
-            fontWeight: 700,
+            fontSize: compact30 ? "5.8px" : "11px",
+            fontWeight: 800,
+            lineHeight: 1,
           }}
         >
           {product.name}
@@ -736,44 +1083,82 @@ function PrintableLabel({
       )}
 
       <div
+        className="barcode-label-meta"
         style={{
-          display: "flex",
-          justifyContent: "center",
-          gap: "3mm",
-          marginBottom: "1.5mm",
-          fontSize: preset.id === "compact" ? "9px" : "10px",
+          display: "grid",
+          gridTemplateColumns: "minmax(0, 1fr) auto",
+          alignItems: "baseline",
+          gap: compact30 ? "1mm" : "3mm",
+          width: "100%",
+          marginBottom: compact30 ? "0.35mm" : "1.5mm",
+          fontSize: compact30 ? "6.5px" : "10px",
+          fontWeight: 700,
+          lineHeight: 1,
         }}
       >
-        <span>
-          Talla: <strong>{label.variant.size}</strong>
+        <span
+          style={{
+            minWidth: 0,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            textAlign: "left",
+          }}
+        >
+          Talla {label.variant.size}
         </span>
 
-        {showPrice && <strong>{formatCurrency(product.salePrice)}</strong>}
+        {showPrice && (
+          <strong
+            style={{
+              whiteSpace: "nowrap",
+              textAlign: "right",
+            }}
+          >
+            {formatCurrency(product.salePrice)}
+          </strong>
+        )}
       </div>
 
       <div
         style={{
           display: "flex",
+          flex: compact30 ? "1 1 auto" : "0 0 auto",
+          alignItems: "center",
           justifyContent: "center",
+          width: "100%",
+          minHeight: 0,
           overflow: "hidden",
         }}
       >
         <svg
           ref={svgRef}
           aria-label={`Código de barras ${label.barcode}`}
-          style={{ display: "block", maxWidth: "100%", height: "auto" }}
+          style={{
+            display: "block",
+            width: "100%",
+            maxWidth: "100%",
+            height: "auto",
+            overflow: "visible",
+          }}
         />
       </div>
 
       {showHumanCode && (
         <p
+          className="barcode-label-code"
           style={{
-            margin: "1mm 0 0",
+            maxWidth: "100%",
+            margin: compact30 ? "0.15mm 0 0" : "1mm 0 0",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
             fontFamily:
               '"Courier New", Courier, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
-            fontSize: preset.id === "compact" ? "8px" : "9px",
+            fontSize: compact30 ? "5.2px" : "9px",
             fontWeight: 700,
-            letterSpacing: "0.08em",
+            letterSpacing: 0,
+            lineHeight: 1,
           }}
         >
           {label.barcode}
