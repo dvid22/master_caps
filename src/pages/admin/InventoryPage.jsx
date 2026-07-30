@@ -116,6 +116,13 @@ function normalizeProductName(value) {
     .toLocaleUpperCase("es-CO");
 }
 
+function normalizeCategoryName(value) {
+  return String(value || "")
+    .replace(/\s+/g, " ")
+    .trimStart()
+    .toLocaleUpperCase("es-CO");
+}
+
 function reorderItems(items, fromIndex, toIndex) {
   if (
     fromIndex === toIndex ||
@@ -587,7 +594,13 @@ export default function InventoryPage() {
     );
 
     const unsubscribeCategories = subscribeCategories(
-      (categoriesData) => setCategories(categoriesData),
+      (categoriesData) =>
+        setCategories(
+          categoriesData.map((category) => ({
+            ...category,
+            name: normalizeCategoryName(category.name),
+          }))
+        ),
       () => alert("No se pudieron escuchar las categorías en tiempo real."),
       STORE_ID
     );
@@ -678,7 +691,12 @@ export default function InventoryPage() {
   function updateForm(field, value) {
     setForm((current) => ({
       ...current,
-      [field]: field === "name" ? normalizeProductName(value) : value,
+      [field]:
+        field === "name"
+          ? normalizeProductName(value)
+          : field === "newCategoryName" || field === "categoryName"
+            ? normalizeCategoryName(value)
+            : value,
     }));
   }
 
@@ -1344,7 +1362,7 @@ export default function InventoryPage() {
       name: normalizeProductName(product.name),
       code: product.code || "",
       categoryId: product.categoryId || "",
-      categoryName: product.categoryName || "",
+      categoryName: normalizeCategoryName(product.categoryName),
       newCategoryName: "",
       costPrice: normalizeMoneyInputValue(product.costPrice),
       salePrice: normalizeMoneyInputValue(product.salePrice),
@@ -1473,7 +1491,7 @@ export default function InventoryPage() {
 
       if (form.newCategoryName.trim()) {
         selectedCategory = await getOrCreateCategory(
-          form.newCategoryName,
+          normalizeCategoryName(form.newCategoryName),
           STORE_ID
         );
       } else {
@@ -1492,7 +1510,7 @@ export default function InventoryPage() {
         name,
         code,
         categoryId: selectedCategory.id,
-        categoryName: selectedCategory.name,
+        categoryName: normalizeCategoryName(selectedCategory.name),
         costPrice,
         salePrice,
         profitMargin: profit.profitMargin,
@@ -1831,7 +1849,7 @@ function ProductCard({ product, onView, onPrintLabels, onEdit, onDelete }) {
               </p>
 
               <p className="mt-1 truncate text-[12px] text-black/50">
-                {product.categoryName || "Sin categoría"}
+                {normalizeCategoryName(product.categoryName) || "SIN CATEGORÍA"}
               </p>
             </div>
 
@@ -2068,7 +2086,10 @@ function ProductDetailModal({ product, onClose, onEdit, onPrintLabels }) {
               <DetailItem label="Código" value={product.code || "Sin código"} />
               <DetailItem
                 label="Categoría"
-                value={product.categoryName || "Sin categoría"}
+                value={
+                  normalizeCategoryName(product.categoryName) ||
+                  "SIN CATEGORÍA"
+                }
               />
               <DetailItem label="Estado" value={stockStatus.label} />
               <DetailItem

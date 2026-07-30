@@ -52,6 +52,13 @@ function getTotalStock(product) {
   );
 }
 
+function normalizeCategoryName(value) {
+  return String(value || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLocaleUpperCase("es-CO");
+}
+
 export default function CatalogPage() {
   const { storeId = "master-caps" } = useParams();
   const location = useLocation();
@@ -90,7 +97,13 @@ export default function CatalogPage() {
     );
 
     const unsubscribeCategories = subscribeCategories(
-      (categoriesData) => setCategories(categoriesData),
+      (categoriesData) =>
+        setCategories(
+          categoriesData.map((category) => ({
+            ...category,
+            name: normalizeCategoryName(category.name),
+          }))
+        ),
       () => alert("No se pudieron cargar las categorías del catálogo."),
       storeId
     );
@@ -388,7 +401,7 @@ export default function CatalogPage() {
                 categoryFilter === "all"
                   ? "Todas las categorías"
                   : categories.find((category) => category.id === categoryFilter)
-                      ?.name || "Categoría"
+                      ?.name || "CATEGORÍA"
               }
             />
 
@@ -517,7 +530,7 @@ function CatalogSidebar(props) {
               key={category.id}
               active={categoryFilter === category.id}
               icon={ShoppingBag}
-              label={category.name}
+              label={normalizeCategoryName(category.name)}
               onClick={() => onCategoryChange(category.id)}
             />
           ))}
@@ -636,7 +649,7 @@ function ProductCard({
 
           <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/55 via-black/10 to-transparent p-3 pt-12">
             <p className="line-clamp-1 text-[11px] text-white/75">
-              {product.categoryName || "Colección"}
+              {normalizeCategoryName(product.categoryName) || "COLECCIÓN"}
             </p>
             <h3 className="mt-0.5 line-clamp-2 text-[14px] font-medium leading-tight text-white sm:text-[16px]">
               {product.name}
