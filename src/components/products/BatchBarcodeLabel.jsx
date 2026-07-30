@@ -464,7 +464,7 @@ function printLabelsInIsolatedFrame(labelsMarkup) {
                   "Courier New",
                   Courier,
                   monospace;
-                font-size: 5.2px;
+                font-size: 5.5px;
                 font-weight: 700;
                 letter-spacing: 0;
                 line-height: 1;
@@ -1403,7 +1403,7 @@ function PreviewLabel({
             whiteSpace: "nowrap",
             fontFamily:
               '"Courier New", Courier, monospace',
-            fontSize: "5.2px",
+            fontSize: "5.5px",
             fontWeight: 700,
             lineHeight: 1,
           }}

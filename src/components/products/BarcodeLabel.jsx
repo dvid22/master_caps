@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import JsBarcode from "jsbarcode";
 import {
+  AlertTriangle,
   Barcode,
   Check,
+  CheckCircle2,
   Minus,
   Plus,
   Printer,
@@ -409,7 +411,7 @@ function printLabelsInIsolatedFrame({
                   "Courier New",
                   Courier,
                   monospace;
-                font-size: 5.2px;
+                font-size: 5.5px;
                 font-weight: 700;
                 letter-spacing: 0;
                 line-height: 1;
@@ -520,6 +522,12 @@ export default function BarcodeLabel({
   const [showPrice, setShowPrice] = useState(true);
   const [showHumanCode, setShowHumanCode] = useState(true);
   const [printing, setPrinting] = useState(false);
+  const [registeringPrint, setRegisteringPrint] = useState(false);
+  const [reprintConfirmationOpen, setReprintConfirmationOpen] =
+    useState(false);
+  const [queuedPrintEntries, setQueuedPrintEntries] = useState([]);
+  const [printResultOpen, setPrintResultOpen] = useState(false);
+  const [printedEntries, setPrintedEntries] = useState([]);
   const [selections, setSelections] = useState(() =>
     createInitialSelections(product)
   );
@@ -656,6 +664,38 @@ export default function BarcodeLabel({
     setShowHumanCode(true);
   }
 
+  async function performPrint(printEntries) {
+    const printArea = document.getElementById(
+      "barcode-label-print-area"
+    );
+
+    if (!printArea) {
+      alert("No se encontró la vista previa de las etiquetas.");
+      return;
+    }
+
+    try {
+      setPrinting(true);
+      setReprintConfirmationOpen(false);
+
+      await printLabelsInIsolatedFrame({
+        labelsMarkup: printArea.outerHTML,
+        preset,
+      });
+
+      setPrintedEntries(printEntries);
+      setPrintResultOpen(true);
+    } catch (error) {
+      console.error(error);
+      alert(
+        error?.message ||
+          "No se pudo abrir el diálogo de impresión."
+      );
+    } finally {
+      setPrinting(false);
+    }
+  }
+
   async function handlePrint() {
     if (labels.length === 0) {
       alert("Selecciona al menos una etiqueta para imprimir.");
@@ -675,7 +715,7 @@ export default function BarcodeLabel({
       return;
     }
 
-    if (printing) return;
+    if (printing || registeringPrint) return;
 
     const printEntries = buildPrintEntries(
       labels,
@@ -693,56 +733,61 @@ export default function BarcodeLabel({
     );
 
     if (includesReprints) {
-      const shouldReprint = window.confirm(
-        "Una o más etiquetas seleccionadas ya están marcadas como impresas.\n\nPulsa Aceptar para reimprimirlas o Cancelar para volver sin imprimir."
-      );
-
-      if (!shouldReprint) {
-        return;
-      }
+      setQueuedPrintEntries(printEntries);
+      setReprintConfirmationOpen(true);
+      return;
     }
 
-    const printArea = document.getElementById(
-      "barcode-label-print-area"
-    );
+    await performPrint(printEntries);
+  }
 
-    if (!printArea) {
-      alert("No se encontró la vista previa de las etiquetas.");
+  async function confirmReprint() {
+    const entriesToPrint = [...queuedPrintEntries];
+
+    setQueuedPrintEntries([]);
+
+    await performPrint(entriesToPrint);
+  }
+
+  function cancelReprint() {
+    setQueuedPrintEntries([]);
+    setReprintConfirmationOpen(false);
+  }
+
+  function dismissPrintResult() {
+    setPrintedEntries([]);
+    setPrintResultOpen(false);
+  }
+
+  async function confirmPrintedLabels() {
+    if (printedEntries.length === 0 || registeringPrint) {
       return;
     }
 
     try {
-      setPrinting(true);
+      setRegisteringPrint(true);
 
-      await printLabelsInIsolatedFrame({
-        labelsMarkup: printArea.outerHTML,
-        preset,
-      });
+      const actor = getCurrentUserActor();
 
-      const printedCorrectly = window.confirm(
-        "¿Las etiquetas se imprimieron correctamente?\n\nPulsa Aceptar para registrarlas como impresas en el inventario."
+      await registerLabelPrintBatch(
+        printedEntries.map((entry) => ({
+          productId: entry.productId,
+          variantId: entry.variantId,
+          quantity: entry.quantity,
+        })),
+        actor
       );
 
-      if (printedCorrectly) {
-        const actor = getCurrentUserActor();
-
-        await registerLabelPrintBatch(
-          printEntries.map((entry) => ({
-            productId: entry.productId,
-            variantId: entry.variantId,
-            quantity: entry.quantity,
-          })),
-          actor
-        );
-      }
+      setPrintedEntries([]);
+      setPrintResultOpen(false);
     } catch (error) {
       console.error(error);
       alert(
         error?.message ||
-          "No se pudo abrir el diálogo de impresión."
+          "Las etiquetas se imprimieron, pero no se pudo guardar el estado."
       );
     } finally {
-      setPrinting(false);
+      setRegisteringPrint(false);
     }
   }
 
@@ -1088,6 +1133,83 @@ export default function BarcodeLabel({
           </div>
         </section>
       </div>
+
+      {reprintConfirmationOpen && (
+        <MiniPrintModal
+          icon={AlertTriangle}
+          tone="warning"
+          title="Estas etiquetas ya fueron impresas"
+          description="Una o más etiquetas seleccionadas ya aparecen registradas como impresas. Confirma si deseas generarlas nuevamente."
+          onClose={cancelReprint}
+          actions={
+            <>
+              <button
+                type="button"
+                onClick={cancelReprint}
+                disabled={printing}
+                className="h-11 rounded-2xl border border-black/[0.08] bg-white px-5 text-[12px] font-medium text-black/65 transition hover:bg-black/[0.03] disabled:opacity-45"
+              >
+                Volver
+              </button>
+
+              <button
+                type="button"
+                onClick={confirmReprint}
+                disabled={printing}
+                className="inline-flex h-11 items-center justify-center gap-2 rounded-2xl bg-red-600 px-5 text-[12px] font-medium text-white shadow-lg shadow-red-600/20 transition hover:bg-red-700 disabled:opacity-50"
+              >
+                <Printer size={15} />
+                {printing ? "Preparando..." : "Sí, reimprimir"}
+              </button>
+            </>
+          }
+        />
+      )}
+
+      {printResultOpen && (
+        <MiniPrintModal
+          icon={CheckCircle2}
+          tone="success"
+          title="¿Las etiquetas salieron correctamente?"
+          description="Confirma el resultado para guardar en el inventario cuáles etiquetas ya fueron impresas."
+          onClose={dismissPrintResult}
+          actions={
+            <>
+              <button
+                type="button"
+                onClick={dismissPrintResult}
+                disabled={registeringPrint}
+                className="h-11 rounded-2xl border border-black/[0.08] bg-white px-5 text-[12px] font-medium text-black/65 transition hover:bg-black/[0.03] disabled:opacity-45"
+              >
+                No registrar
+              </button>
+
+              <button
+                type="button"
+                onClick={confirmPrintedLabels}
+                disabled={registeringPrint}
+                className="inline-flex h-11 items-center justify-center gap-2 rounded-2xl bg-emerald-600 px-5 text-[12px] font-medium text-white shadow-lg shadow-emerald-600/20 transition hover:bg-emerald-700 disabled:opacity-50"
+              >
+                <CheckCircle2 size={15} />
+                {registeringPrint
+                  ? "Guardando..."
+                  : "Sí, registrar impresas"}
+              </button>
+            </>
+          }
+        >
+          <div className="rounded-[18px] bg-emerald-50 px-4 py-3">
+            <p className="text-[11px] font-medium text-emerald-700">
+              {printedEntries.reduce(
+                (total, entry) =>
+                  total + Number(entry.quantity || 0),
+                0
+              )}{" "}
+              etiqueta(s) listas para registrar.
+            </p>
+          </div>
+        </MiniPrintModal>
+      )}
     </>
   );
 }
@@ -1284,7 +1406,7 @@ function PrintableLabel({
             whiteSpace: "nowrap",
             fontFamily:
               '"Courier New", Courier, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
-            fontSize: compact30 ? "5.2px" : "9px",
+            fontSize: compact30 ? "5.8px" : "11px",
             fontWeight: 700,
             letterSpacing: 0,
             lineHeight: 1,
@@ -1321,5 +1443,75 @@ function ToggleOption({ label, checked, onChange }) {
         />
       </span>
     </label>
+  );
+}
+
+function MiniPrintModal({
+  icon: Icon,
+  tone = "success",
+  title,
+  description,
+  onClose,
+  actions,
+  children,
+}) {
+  const toneClasses =
+    tone === "warning"
+      ? {
+          icon: "bg-amber-50 text-amber-700",
+          glow: "bg-amber-400/20",
+        }
+      : {
+          icon: "bg-emerald-50 text-emerald-600",
+          glow: "bg-emerald-400/20",
+        };
+
+  return (
+    <div className="fixed inset-0 z-[150] flex items-center justify-center bg-black/60 px-4 py-5 backdrop-blur-sm">
+      <section className="relative w-full max-w-[470px] overflow-hidden rounded-[28px] bg-white shadow-[0_30px_100px_rgba(0,0,0,0.28)] ring-1 ring-white/30">
+        <div
+          className={`pointer-events-none absolute -right-12 -top-12 h-36 w-36 rounded-full blur-3xl ${toneClasses.glow}`}
+        />
+
+        <header className="relative flex items-start justify-between gap-4 px-5 pb-3 pt-5 sm:px-6 sm:pt-6">
+          <div className="flex min-w-0 items-start gap-3.5">
+            <div
+              className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-[18px] ${toneClasses.icon}`}
+            >
+              <Icon size={22} />
+            </div>
+
+            <div className="min-w-0 pt-0.5">
+              <h3 className="text-[18px] font-medium tracking-[-0.03em] text-black">
+                {title}
+              </h3>
+
+              <p className="mt-1.5 text-[11px] leading-5 text-black/48">
+                {description}
+              </p>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-black/[0.035] text-black/50 transition hover:bg-black/[0.065] hover:text-black"
+            aria-label="Cerrar confirmación"
+          >
+            <X size={17} />
+          </button>
+        </header>
+
+        {children && (
+          <div className="relative px-5 py-3 sm:px-6">
+            {children}
+          </div>
+        )}
+
+        <footer className="relative flex flex-col-reverse gap-2 border-t border-black/[0.06] bg-[#fafafa] px-5 py-4 sm:flex-row sm:justify-end sm:px-6">
+          {actions}
+        </footer>
+      </section>
+    </div>
   );
 }
