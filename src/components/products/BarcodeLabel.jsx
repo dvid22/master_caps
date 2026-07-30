@@ -264,6 +264,8 @@ function printLabelsInIsolatedFrame({
                 background: #ffffff;
                 align-items: start;
                 justify-content: center;
+                transform: translateX(-0.5mm);
+                transform-origin: top left;
               }
 
               .barcode-print-label {
@@ -939,6 +941,8 @@ export default function BarcodeLabel({
                       width: preset.pageWidth,
                       maxWidth: "100%",
                       background: "#ffffff",
+                      transform: "translateX(-0.5mm)",
+                      transformOrigin: "top left",
                     }}
                   >
                     {labels.map((label) => (
