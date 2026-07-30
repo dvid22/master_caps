@@ -729,18 +729,7 @@ export default function BarcodeLabel({
                 </div>
               </section>
 
-              {preset.id === "dual30x20" && (
-                <div className="mt-4 rounded-[18px] border border-emerald-100 bg-emerald-50 p-3.5">
-                  <p className="text-[11px] font-medium text-emerald-700">
-                    Formato configurado para tu rollo
-                  </p>
-                  <p className="mt-1 text-[10px] leading-4 text-black/48">
-                    Dos columnas de 30 × 20 mm con separación central de 2 mm.
-                    Para máxima lectura se recomienda mostrar talla, precio,
-                    código de barras y código legible.
-                  </p>
-                </div>
-              )}
+            
 
               <section className="mt-5 border-t border-black/[0.06] pt-5">
                 <div className="flex items-center justify-between gap-3">
@@ -874,11 +863,7 @@ export default function BarcodeLabel({
                 </p>
 
                 <div className="mt-3 grid gap-2">
-                  <ToggleOption
-                    label="Identidad de la tienda"
-                    checked={showStore}
-                    onChange={setShowStore}
-                  />
+                 
                   <ToggleOption
                     label="Nombre del producto"
                     checked={showName}
@@ -1167,7 +1152,7 @@ function PrintableLabel({
       >
         <svg
           ref={svgRef}
-          aria-label={`Código de barras ${label.barcode}`}
+          aria-label={`Código de barras ${product.code || label.barcode}`}
           style={{
             display: "block",
             width: compact30 ? "26mm" : "48mm",
@@ -1195,7 +1180,7 @@ function PrintableLabel({
             lineHeight: 1,
           }}
         >
-          {label.barcode}
+          {product.code || label.barcode}
         </p>
       )}
     </article>
