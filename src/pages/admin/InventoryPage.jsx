@@ -75,6 +75,7 @@ const createInitialVariants = () => [
     id: createVariantId(),
     size: "Talla única",
     stock: "1",
+    barcode: "",
   },
 ];
 
@@ -699,6 +700,7 @@ export default function InventoryPage() {
           id: createVariantId(),
           size: "",
           stock: "0",
+          barcode: "",
         },
       ],
     }));
@@ -1350,6 +1352,7 @@ export default function InventoryPage() {
         id: variant.id || createVariantId(),
         size: variant.size || "Talla única",
         stock: String(variant.stock || 0),
+        barcode: String(variant.barcode || ""),
       })),
     });
 
@@ -1380,6 +1383,7 @@ export default function InventoryPage() {
       id: variant.id || createVariantId(),
       size: normalizeSize(variant.size),
       stock: Number(variant.stock || 0),
+      barcode: String(variant.barcode || "").trim(),
     }));
 
     const invalidStock = normalizedVariants.some(
@@ -1692,7 +1696,7 @@ export default function InventoryPage() {
           product={labelProduct}
           open={Boolean(labelProduct)}
           onClose={() => setLabelProduct(null)}
-          defaultPreset="thermal58"
+          defaultPreset="dual30x20"
           store={{
             name: "MASTER CAPS",
             logoUrl: "/logo.png",

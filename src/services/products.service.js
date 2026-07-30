@@ -19,6 +19,7 @@ import {
 
 import { db, storage } from "../firebase/firebase";
 import { STORE_ID } from "./categories.service";
+import { ensureVariantBarcodes } from "./barcode.service";
 
 /**
  * Cantidad máxima recomendada de imágenes por producto.
@@ -134,7 +135,8 @@ function normalizeStock(value) {
 export function normalizeProductVariants(
   variants,
   legacySize = "",
-  legacyStock = 0
+  legacyStock = 0,
+  barcodeContext = {}
 ) {
   const sourceVariants =
     Array.isArray(variants) && variants.length > 0
@@ -143,6 +145,7 @@ export function normalizeProductVariants(
           {
             size: legacySize || "Talla única",
             stock: legacyStock,
+            barcode: "",
           },
         ];
 
@@ -154,6 +157,7 @@ export function normalizeProductVariants(
     );
 
     const stock = normalizeStock(variant?.stock);
+    const barcode = String(variant?.barcode || "").trim();
 
     const existingVariant = groupedVariants.get(size);
 
@@ -161,6 +165,7 @@ export function normalizeProductVariants(
       groupedVariants.set(size, {
         ...existingVariant,
         stock: existingVariant.stock + stock,
+        barcode: existingVariant.barcode || barcode,
       });
 
       return;
@@ -175,10 +180,14 @@ export function normalizeProductVariants(
           .replace(/[^a-z0-9-_]/g, "")}`,
       size,
       stock,
+      barcode,
     });
   });
 
-  return Array.from(groupedVariants.values());
+  return ensureVariantBarcodes(
+    Array.from(groupedVariants.values()),
+    barcodeContext
+  );
 }
 
 export function calculateProductTotalStock(variants) {
@@ -208,11 +217,12 @@ export function getVariantBySize(product, size) {
   ).find((variant) => variant.size === normalizedSize);
 }
 
-function buildVariantsPayload(productData = {}) {
+function buildVariantsPayload(productData = {}, barcodeContext = {}) {
   const variants = normalizeProductVariants(
     productData.variants,
     productData.size,
-    productData.stock
+    productData.stock,
+    barcodeContext
   );
 
   const totalStock = variants.reduce(
@@ -686,7 +696,11 @@ function buildImagesPayload(images) {
 /* -------------------------------------------------------------------------- */
 
 function normalizeProductDocument(product) {
-  const variantsPayload = buildVariantsPayload(product);
+  const variantsPayload = buildVariantsPayload(product, {
+    productId: product?.id,
+    productCode: product?.code,
+    storeId: product?.storeId || STORE_ID,
+  });
   const imagesPayload = buildImagesPayload(getProductImages(product));
 
   return {
@@ -782,7 +796,6 @@ export async function createProduct(
   const productRef = doc(productsRef);
 
   const normalizedMedia = normalizeMediaInput(mediaInput);
-  const variantsPayload = buildVariantsPayload(productData);
 
   const totalNewImages =
     Number(Boolean(normalizedMedia.coverFile)) +
@@ -853,6 +866,12 @@ export async function createProduct(
           updatedAt: serverTimestamp(),
         });
       }
+
+      const variantsPayload = buildVariantsPayload(productData, {
+        productId: productRef.id,
+        productCode: finalCode,
+        storeId,
+      });
 
       transaction.set(productRef, {
         ...productData,
@@ -935,7 +954,6 @@ export async function updateProduct(
 
   const storeId = productData?.storeId || STORE_ID;
   const normalizedMedia = normalizeMediaInput(mediaInput);
-  const variantsPayload = buildVariantsPayload(productData);
 
   const productRef = doc(db, "products", productId);
   const productSnapshot = await getDoc(productRef);
@@ -1101,6 +1119,19 @@ export async function updateProduct(
           updatedAt: serverTimestamp(),
         });
       }
+
+      const variantsPayload = buildVariantsPayload(
+        {
+          ...transactionProduct,
+          ...productData,
+          code: newCode,
+        },
+        {
+          productId,
+          productCode: newCode,
+          storeId,
+        }
+      );
 
       transaction.update(productRef, {
         ...productData,

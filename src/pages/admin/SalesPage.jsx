@@ -38,6 +38,10 @@ import {
 import { formatCurrency, toNumber } from "../../utils/money";
 import { getCurrentUserActor } from "../../services/auth.service";
 import ThermalReceipt from "../../components/sales/ThermalReceipt";
+import {
+  getVariantBarcodeAliases,
+  normalizeScannerBarcode,
+} from "../../services/barcode.service";
 
 const emptyCheckout = {
   customerName: "",
@@ -100,7 +104,7 @@ function getStockStatus(stock) {
 }
 
 function normalizeScannerValue(value) {
-  return String(value || "").trim().toUpperCase();
+  return normalizeScannerBarcode(value);
 }
 
 function makeCartKey(productId, variantId) {
@@ -410,32 +414,60 @@ export default function SalesPage() {
 
     if (!scannedCode) return null;
 
-    const exactProduct = products.find(
+    const variantMatches = [];
+
+    for (const product of products) {
+      const variants = getProductVariants(product);
+
+      for (let index = 0; index < variants.length; index += 1) {
+        const variant = variants[index];
+
+        const aliases = getVariantBarcodeAliases(
+          product,
+          variant,
+          index
+        ).map(normalizeScannerValue);
+
+        if (aliases.includes(scannedCode)) {
+          variantMatches.push({ product, variant });
+        }
+      }
+    }
+
+    if (variantMatches.length === 1) {
+      return variantMatches[0];
+    }
+
+    if (variantMatches.length > 1) {
+      return {
+        ambiguous: true,
+        scannedCode,
+        matches: variantMatches,
+      };
+    }
+
+    const productMatches = products.filter(
       (product) =>
         normalizeScannerValue(product.code) === scannedCode ||
         normalizeScannerValue(product.barcode) === scannedCode
     );
 
-    if (exactProduct) {
-      return { product: exactProduct, variant: null };
+    if (productMatches.length === 1) {
+      return {
+        product: productMatches[0],
+        variant: null,
+      };
     }
 
-    for (const product of products) {
-      const productCode = normalizeScannerValue(product.code);
-      const variants = getProductVariants(product);
-
-      for (const variant of variants) {
-        const variantSize = normalizeScannerValue(variant.size);
-        const possibleCodes = [
-          `MC-${productCode}-${variantSize}`,
-          `${productCode}-${variantSize}`,
-          normalizeScannerValue(variant.barcode),
-        ].filter(Boolean);
-
-        if (possibleCodes.includes(scannedCode)) {
-          return { product, variant };
-        }
-      }
+    if (productMatches.length > 1) {
+      return {
+        ambiguous: true,
+        scannedCode,
+        matches: productMatches.map((product) => ({
+          product,
+          variant: null,
+        })),
+      };
     }
 
     return null;
@@ -462,6 +494,21 @@ export default function SalesPage() {
       setScannerStatus({
         type: "error",
         message: `No se encontró el código ${scannedCode}`,
+      });
+      return;
+    }
+
+    if (match.ambiguous) {
+      console.error(
+        "Código asociado a más de una variante:",
+        match
+      );
+
+      setScannerStatus({
+        type: "error",
+        message:
+          `El código ${scannedCode} está duplicado. ` +
+          "No se agregó ningún producto por seguridad.",
       });
       return;
     }

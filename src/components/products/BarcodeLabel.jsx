@@ -11,6 +11,10 @@ import {
   Tag,
   X,
 } from "lucide-react";
+import {
+  resolveVariantBarcode,
+  validateVariantBarcode,
+} from "../../services/barcode.service";
 
 const DEFAULT_STORE = {
   name: "MASTER CAPS",
@@ -35,12 +39,12 @@ const PRESETS = {
   single30x20: {
     id: "single30x20",
     label: "Individual 30 × 20 mm",
-    description: "Una etiqueta por fila",
-    pageWidth: "30mm",
+    description: "Una etiqueta usando el rollo doble Jaltech",
+    pageWidth: "64mm",
     width: "30mm",
     height: "20mm",
-    columns: 1,
-    columnGap: "0mm",
+    columns: 2,
+    columnGap: "2mm",
     rowGap: "0mm",
     barcodeHeight: 22,
     barcodeWidth: 0.68,
@@ -66,14 +70,6 @@ function safeText(value) {
   return String(value || "").trim();
 }
 
-function normalizeCodePart(value) {
-  return safeText(value)
-    .toUpperCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/\s+/g, "-")
-    .replace(/[^A-Z0-9-_]/g, "");
-}
 
 function normalizeSize(value) {
   const cleanValue = safeText(value);
@@ -114,21 +110,8 @@ function getProductVariants(product) {
   ];
 }
 
-function buildVariantBarcode(product, variant) {
-  if (variant?.barcode) {
-    return normalizeCodePart(variant.barcode);
-  }
-
-  const productCode = normalizeCodePart(product?.code);
-  const sizeCode = normalizeCodePart(variant?.size);
-
-  if (!productCode) return "";
-
-  if (!sizeCode || sizeCode === "TALLA-UNICA") {
-    return `MC-${productCode}-UNICA`;
-  }
-
-  return `MC-${productCode}-${sizeCode}`;
+function buildVariantBarcode(product, variant, variantIndex = 0) {
+  return resolveVariantBarcode(product, variant, variantIndex);
 }
 
 function formatCurrency(value) {
@@ -298,8 +281,8 @@ function printLabelsInIsolatedFrame({
 
               .barcode-print-label svg {
                 display: block;
-                width: 100%;
-                max-width: 100%;
+                width: ${preset.id.includes("30x20") ? "26mm" : "48mm"};
+                max-width: ${preset.id.includes("30x20") ? "26mm" : "48mm"};
                 height: auto;
                 margin: 0 auto;
                 overflow: visible;
@@ -487,7 +470,7 @@ export default function BarcodeLabel({
   const labels = useMemo(() => {
     const result = [];
 
-    variants.forEach((variant) => {
+    variants.forEach((variant, variantIndex) => {
       const selection = selections[variant.id];
       if (!selection?.selected) return;
 
@@ -496,7 +479,11 @@ export default function BarcodeLabel({
         Math.max(Math.trunc(Number(selection.quantity || 0)), 0),
         stock
       );
-      const barcode = buildVariantBarcode(product, variant);
+      const barcode = buildVariantBarcode(
+        product,
+        variant,
+        variantIndex
+      );
 
       for (let index = 0; index < quantity; index += 1) {
         result.push({
@@ -509,6 +496,35 @@ export default function BarcodeLabel({
 
     return result;
   }, [variants, selections, product]);
+
+  const printableLabels = useMemo(() => {
+    const isThirtyByTwenty =
+      preset.id === "dual30x20" ||
+      preset.id === "single30x20";
+
+    if (
+      !isThirtyByTwenty ||
+      labels.length === 0 ||
+      labels.length % 2 === 0
+    ) {
+      return labels;
+    }
+
+    return [
+      ...labels,
+      {
+        key: "empty-physical-position",
+        empty: true,
+        variant: {
+          id: "empty",
+          size: "",
+          stock: 0,
+          barcode: "",
+        },
+        barcode: "",
+      },
+    ];
+  }, [labels, preset.id]);
 
   function updateQuantity(variant, nextQuantity) {
     const stock = Math.max(Number(variant.stock || 0), 0);
@@ -578,8 +594,16 @@ export default function BarcodeLabel({
       return;
     }
 
-    if (labels.some((label) => !label.barcode)) {
-      alert("El producto debe tener un código para generar sus etiquetas.");
+    const invalidLabel = labels.find(
+      (label) => !validateVariantBarcode(label.barcode).valid
+    );
+
+    if (invalidLabel) {
+      alert(
+        `No se pudo preparar el código de barras ${
+          invalidLabel.barcode || "sin valor"
+        }.`
+      );
       return;
     }
 
@@ -739,7 +763,7 @@ export default function BarcodeLabel({
                 </div>
 
                 <div className="mt-3 space-y-2">
-                  {variants.map((variant) => {
+                  {variants.map((variant, variantIndex) => {
                     const selection = selections[variant.id] || {
                       selected: false,
                       quantity: 0,
@@ -831,8 +855,11 @@ export default function BarcodeLabel({
 
                         {selection.selected && (
                           <p className="mt-2 truncate rounded-xl bg-white px-3 py-2 font-mono text-[9px] text-black/55 ring-1 ring-black/[0.05]">
-                            {buildVariantBarcode(product, variant) ||
-                              "Producto sin código"}
+                            {buildVariantBarcode(
+                              product,
+                              variant,
+                              variantIndex
+                            ) || "Producto sin código"}
                           </p>
                         )}
                       </article>
@@ -945,7 +972,7 @@ export default function BarcodeLabel({
                       transformOrigin: "top left",
                     }}
                   >
-                    {labels.map((label) => (
+                    {printableLabels.map((label) => (
                       <PrintableLabel
                         key={label.key}
                         product={product}
@@ -956,6 +983,7 @@ export default function BarcodeLabel({
                         showName={showName}
                         showPrice={showPrice}
                         showHumanCode={showHumanCode}
+                        empty={Boolean(label.empty)}
                       />
                     ))}
                   </div>
@@ -978,19 +1006,20 @@ function PrintableLabel({
   showName,
   showPrice,
   showHumanCode,
+  empty = false,
 }) {
   const svgRef = useRef(null);
   const compact30 = preset.id.includes("30x20");
 
   useEffect(() => {
-    if (!svgRef.current || !label.barcode) return;
+    if (empty || !svgRef.current || !label.barcode) return;
 
     try {
       JsBarcode(svgRef.current, label.barcode, {
         format: "CODE128",
         lineColor: "#000000",
         background: "#ffffff",
-        width: preset.barcodeWidth,
+        width: 2,
         height: preset.barcodeHeight,
         displayValue: false,
         margin: 0,
@@ -999,7 +1028,7 @@ function PrintableLabel({
     } catch (error) {
       console.error("No se pudo generar el código de barras:", error);
     }
-  }, [label.barcode, preset]);
+  }, [empty, label.barcode, preset]);
 
   return (
     <article
@@ -1025,6 +1054,7 @@ function PrintableLabel({
         fontSize: preset.fontSize,
         lineHeight: 1.05,
         textAlign: "center",
+        visibility: empty ? "hidden" : "visible",
       }}
     >
       {showStore && (
@@ -1140,8 +1170,8 @@ function PrintableLabel({
           aria-label={`Código de barras ${label.barcode}`}
           style={{
             display: "block",
-            width: "100%",
-            maxWidth: "100%",
+            width: compact30 ? "26mm" : "48mm",
+            maxWidth: compact30 ? "26mm" : "48mm",
             height: "auto",
             overflow: "visible",
           }}
