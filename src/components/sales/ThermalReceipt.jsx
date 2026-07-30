@@ -646,9 +646,9 @@ export default function ThermalReceipt({
         }
       `}</style>
 
-      <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/55 px-3 py-4 backdrop-blur-sm sm:px-5 sm:py-6">
-        <section className="flex max-h-[94vh] w-full max-w-[980px] flex-col overflow-hidden rounded-[30px] bg-[#f7f7f8] shadow-2xl">
-          <header className="flex items-center justify-between border-b border-black/[0.06] bg-white px-5 py-4 sm:px-6">
+      <div className="fixed inset-0 z-[100] overflow-y-auto bg-black/55 px-3 py-3 backdrop-blur-sm sm:px-5 sm:py-5">
+        <section className="mx-auto flex min-h-0 w-full max-w-[980px] flex-col overflow-hidden rounded-[22px] bg-[#f7f7f8] shadow-2xl sm:rounded-[30px] lg:max-h-[calc(100vh-40px)]">
+          <header className="flex shrink-0 items-center justify-between border-b border-black/[0.06] bg-white px-4 py-3 sm:px-6 sm:py-4">
             <div className="flex min-w-0 items-center gap-3">
               <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-red-50 text-red-600">
                 <ReceiptText size={21} />
@@ -675,8 +675,8 @@ export default function ThermalReceipt({
             </button>
           </header>
 
-          <div className="grid min-h-0 flex-1 gap-0 overflow-hidden lg:grid-cols-[320px_1fr]">
-            <aside className="border-b border-black/[0.06] bg-white p-5 lg:border-b-0 lg:border-r">
+          <div className="grid min-h-0 flex-1 gap-0 overflow-y-auto lg:grid-cols-[300px_minmax(0,1fr)] lg:overflow-hidden">
+            <aside className="border-b border-black/[0.06] bg-white p-4 sm:p-5 lg:min-h-0 lg:overflow-y-auto lg:border-b-0 lg:border-r">
               <div>
                 <div className="flex items-center gap-2">
                   <Settings2 size={16} className="text-black/45" />
@@ -723,7 +723,7 @@ export default function ThermalReceipt({
                 </button>
               </div>
 
-              <div className="mt-5 rounded-[22px] bg-black/[0.025] p-4">
+              <div className="mt-4 rounded-[20px] bg-black/[0.025] p-3.5">
                 <div className="flex items-center gap-2">
                   <CheckCircle2 size={16} className="text-emerald-600" />
 
@@ -751,19 +751,9 @@ export default function ThermalReceipt({
                 </div>
               </div>
 
-              <div className="mt-5 rounded-[22px] border border-amber-200 bg-amber-50 p-4">
-                <p className="text-[12px] font-medium text-amber-800">
-                  Configuración recomendada
-                </p>
+             
 
-                <p className="mt-2 text-[11px] leading-5 text-amber-700">
-                  En el cuadro de impresión usa escala 100%, márgenes
-                  predeterminados o ninguno y desactiva encabezados y pies de
-                  página del navegador.
-                </p>
-              </div>
-
-              <div className="mt-5 space-y-2">
+              <div className="sticky bottom-0 z-10 mt-4 space-y-2 border-t border-black/[0.05] bg-white/95 pt-3 backdrop-blur">
                 <button
                   type="button"
                   onClick={handlePrint}
@@ -786,9 +776,9 @@ export default function ThermalReceipt({
               </div>
             </aside>
 
-            <main className="min-h-0 overflow-y-auto p-5 sm:p-6">
-              <div className="mx-auto flex min-h-full items-start justify-center">
-                <div className="rounded-[24px] bg-white p-4 shadow-[0_18px_55px_rgba(0,0,0,0.08)] ring-1 ring-black/[0.06] sm:p-6">
+            <main className="min-h-0 overflow-auto p-3 sm:p-5 lg:p-6">
+              <div className="mx-auto flex min-h-full min-w-0 items-start justify-center overflow-x-auto">
+                <div className="shrink-0 rounded-[18px] bg-white p-3 shadow-[0_18px_55px_rgba(0,0,0,0.08)] ring-1 ring-black/[0.06] sm:rounded-[24px] sm:p-5 lg:p-6">
                   <div
                     id="thermal-receipt-print-area"
                     className={`bg-white text-black ${
@@ -1002,7 +992,7 @@ function ReceiptContent({ receipt, store, paperSize }) {
         )}
 
         <p style={{ margin: "8px 0 0", fontSize: "9px" }}>
-          Comprobante generado por el sistema de ventas
+          Ubaté Cundinamarca - Cra. 8 #10-51.
         </p>
       </footer>
     </article>

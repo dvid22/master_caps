@@ -448,7 +448,7 @@ export default function BarcodeLabel({
     return "dual30x20";
   });
   const [showStore, setShowStore] = useState(false);
-  const [showName, setShowName] = useState(false);
+  const [showName, setShowName] = useState(true);
   const [showPrice, setShowPrice] = useState(true);
   const [showHumanCode, setShowHumanCode] = useState(true);
   const [printing, setPrinting] = useState(false);
@@ -583,7 +583,7 @@ export default function BarcodeLabel({
         : "dual30x20"
     );
     setShowStore(false);
-    setShowName(false);
+    setShowName(true);
     setShowPrice(true);
     setShowHumanCode(true);
   }
