@@ -115,6 +115,121 @@ function normalizeStock(value) {
   return Math.max(Math.trunc(stock), 0);
 }
 
+function normalizePrintedLabels(value, stock) {
+  return Math.min(
+    normalizeStock(value),
+    normalizeStock(stock)
+  );
+}
+
+function normalizeLabelPrintDate(value) {
+  if (!value) return "";
+
+  if (typeof value === "string") {
+    return value;
+  }
+
+  if (typeof value?.toDate === "function") {
+    return value.toDate().toISOString();
+  }
+
+  if (typeof value?.seconds === "number") {
+    return new Date(value.seconds * 1000).toISOString();
+  }
+
+  const date = new Date(value);
+
+  return Number.isNaN(date.getTime())
+    ? ""
+    : date.toISOString();
+}
+
+function getVariantOperationalKey(variant) {
+  const id = String(variant?.id || "").trim();
+
+  if (id) {
+    return `id:${id}`;
+  }
+
+  return `size:${normalizeProductSize(
+    variant?.size || variant?.name || variant?.label
+  )}`;
+}
+
+function mergeVariantOperationalState(
+  incomingVariants,
+  previousVariants
+) {
+  const source = Array.isArray(incomingVariants)
+    ? incomingVariants
+    : [];
+
+  const previous = Array.isArray(previousVariants)
+    ? previousVariants
+    : [];
+
+  const previousByKey = new Map(
+    previous.map((variant) => [
+      getVariantOperationalKey(variant),
+      variant,
+    ])
+  );
+
+  const previousBySize = new Map(
+    previous.map((variant) => [
+      normalizeProductSize(variant?.size),
+      variant,
+    ])
+  );
+
+  return source.map((variant) => {
+    const previousVariant =
+      previousByKey.get(getVariantOperationalKey(variant)) ||
+      previousBySize.get(normalizeProductSize(variant?.size)) ||
+      null;
+
+    if (!previousVariant) {
+      return variant;
+    }
+
+    return {
+      ...previousVariant,
+      ...variant,
+      barcode:
+        String(variant?.barcode || "").trim() ||
+        String(previousVariant?.barcode || "").trim(),
+      printedLabels:
+        variant?.printedLabels !== undefined
+          ? variant.printedLabels
+          : previousVariant?.printedLabels,
+      labelPrintTotal:
+        variant?.labelPrintTotal !== undefined
+          ? variant.labelPrintTotal
+          : previousVariant?.labelPrintTotal,
+      labelReprintTotal:
+        variant?.labelReprintTotal !== undefined
+          ? variant.labelReprintTotal
+          : previousVariant?.labelReprintTotal,
+      lastLabelPrintedAt:
+        variant?.lastLabelPrintedAt ||
+        previousVariant?.lastLabelPrintedAt ||
+        "",
+      lastLabelPrintedByUid:
+        variant?.lastLabelPrintedByUid ||
+        previousVariant?.lastLabelPrintedByUid ||
+        "",
+      lastLabelPrintedByName:
+        variant?.lastLabelPrintedByName ||
+        previousVariant?.lastLabelPrintedByName ||
+        "",
+      lastLabelPrintedByEmail:
+        variant?.lastLabelPrintedByEmail ||
+        previousVariant?.lastLabelPrintedByEmail ||
+        "",
+    };
+  });
+}
+
 /* -------------------------------------------------------------------------- */
 /*                                 VARIANTES                                   */
 /* -------------------------------------------------------------------------- */
@@ -146,6 +261,7 @@ export function normalizeProductVariants(
             size: legacySize || "Talla única",
             stock: legacyStock,
             barcode: "",
+            printedLabels: 0,
           },
         ];
 
@@ -158,20 +274,12 @@ export function normalizeProductVariants(
 
     const stock = normalizeStock(variant?.stock);
     const barcode = String(variant?.barcode || "").trim();
+    const printedLabels = normalizePrintedLabels(
+      variant?.printedLabels ?? variant?.labelsPrinted,
+      stock
+    );
 
-    const existingVariant = groupedVariants.get(size);
-
-    if (existingVariant) {
-      groupedVariants.set(size, {
-        ...existingVariant,
-        stock: existingVariant.stock + stock,
-        barcode: existingVariant.barcode || barcode,
-      });
-
-      return;
-    }
-
-    groupedVariants.set(size, {
+    const normalizedVariant = {
       id:
         String(variant?.id || "").trim() ||
         `variant-${index}-${size
@@ -181,7 +289,63 @@ export function normalizeProductVariants(
       size,
       stock,
       barcode,
-    });
+      printedLabels,
+      labelPrintTotal: normalizeStock(variant?.labelPrintTotal),
+      labelReprintTotal: normalizeStock(variant?.labelReprintTotal),
+      lastLabelPrintedAt: normalizeLabelPrintDate(
+        variant?.lastLabelPrintedAt
+      ),
+      lastLabelPrintedByUid: String(
+        variant?.lastLabelPrintedByUid || ""
+      ).trim(),
+      lastLabelPrintedByName: String(
+        variant?.lastLabelPrintedByName || ""
+      ).trim(),
+      lastLabelPrintedByEmail: String(
+        variant?.lastLabelPrintedByEmail || ""
+      ).trim(),
+    };
+
+    const existingVariant = groupedVariants.get(size);
+
+    if (existingVariant) {
+      const combinedStock =
+        existingVariant.stock + normalizedVariant.stock;
+
+      groupedVariants.set(size, {
+        ...existingVariant,
+        stock: combinedStock,
+        barcode:
+          existingVariant.barcode || normalizedVariant.barcode,
+        printedLabels: Math.min(
+          existingVariant.printedLabels +
+            normalizedVariant.printedLabels,
+          combinedStock
+        ),
+        labelPrintTotal:
+          existingVariant.labelPrintTotal +
+          normalizedVariant.labelPrintTotal,
+        labelReprintTotal:
+          existingVariant.labelReprintTotal +
+          normalizedVariant.labelReprintTotal,
+        lastLabelPrintedAt:
+          normalizedVariant.lastLabelPrintedAt ||
+          existingVariant.lastLabelPrintedAt,
+        lastLabelPrintedByUid:
+          normalizedVariant.lastLabelPrintedByUid ||
+          existingVariant.lastLabelPrintedByUid,
+        lastLabelPrintedByName:
+          normalizedVariant.lastLabelPrintedByName ||
+          existingVariant.lastLabelPrintedByName,
+        lastLabelPrintedByEmail:
+          normalizedVariant.lastLabelPrintedByEmail ||
+          existingVariant.lastLabelPrintedByEmail,
+      });
+
+      return;
+    }
+
+    groupedVariants.set(size, normalizedVariant);
   });
 
   return ensureVariantBarcodes(
@@ -217,9 +381,92 @@ export function getVariantBySize(product, size) {
   ).find((variant) => variant.size === normalizedSize);
 }
 
-function buildVariantsPayload(productData = {}, barcodeContext = {}) {
+export function getVariantLabelPrintState(variant) {
+  const stock = normalizeStock(variant?.stock);
+  const printed = normalizePrintedLabels(
+    variant?.printedLabels ?? variant?.labelsPrinted,
+    stock
+  );
+
+  return {
+    stock,
+    printed,
+    pending: Math.max(stock - printed, 0),
+    fullyPrinted: stock > 0 && printed >= stock,
+    partiallyPrinted: printed > 0 && printed < stock,
+    lastPrintedAt: normalizeLabelPrintDate(
+      variant?.lastLabelPrintedAt
+    ),
+    lastPrintedByName: String(
+      variant?.lastLabelPrintedByName || ""
+    ).trim(),
+  };
+}
+
+export function getProductLabelPrintSummary(product) {
   const variants = normalizeProductVariants(
-    productData.variants,
+    product?.variants,
+    product?.size,
+    product?.stock,
+    {
+      productId: product?.id,
+      productCode: product?.code,
+      storeId: product?.storeId || STORE_ID,
+    }
+  );
+
+  const summary = variants.reduce(
+    (result, variant) => {
+      const state = getVariantLabelPrintState(variant);
+
+      result.stock += state.stock;
+      result.printed += state.printed;
+      result.pending += state.pending;
+
+      if (
+        state.lastPrintedAt &&
+        (!result.lastPrintedAt ||
+          state.lastPrintedAt > result.lastPrintedAt)
+      ) {
+        result.lastPrintedAt = state.lastPrintedAt;
+        result.lastPrintedByName =
+          state.lastPrintedByName || "";
+      }
+
+      return result;
+    },
+    {
+      stock: 0,
+      printed: 0,
+      pending: 0,
+      lastPrintedAt: "",
+      lastPrintedByName: "",
+    }
+  );
+
+  return {
+    ...summary,
+    fullyPrinted:
+      summary.stock > 0 && summary.pending === 0,
+    partiallyPrinted:
+      summary.printed > 0 && summary.pending > 0,
+    neverPrinted: summary.printed === 0,
+  };
+}
+
+function buildVariantsPayload(
+  productData = {},
+  barcodeContext = {},
+  previousVariants = []
+) {
+  const variantsWithOperationalState =
+    mergeVariantOperationalState(
+      productData.variants,
+      previousVariants
+    );
+
+  const variants = normalizeProductVariants(
+    variantsWithOperationalState,
     productData.size,
     productData.stock,
     barcodeContext
@@ -1130,7 +1377,8 @@ export async function updateProduct(
           productId,
           productCode: newCode,
           storeId,
-        }
+        },
+        transactionProduct.variants
       );
 
       transaction.update(productRef, {
@@ -1164,6 +1412,198 @@ export async function updateProduct(
 
     throw error;
   }
+}
+
+/* -------------------------------------------------------------------------- */
+/*                      REGISTRO DE IMPRESIÓN DE ETIQUETAS                     */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Registra etiquetas realmente impresas.
+ *
+ * entries:
+ * [
+ *   {
+ *     productId: "product-id",
+ *     variantId: "variant-id",
+ *     quantity: 3
+ *   }
+ * ]
+ *
+ * La cantidad pendiente se calcula contra el stock actual. Si quantity
+ * supera las pendientes, el excedente se registra como reimpresión sin
+ * aumentar la cantidad de unidades marcadas como etiquetadas.
+ */
+export async function registerLabelPrintBatch(
+  entries,
+  actor = null
+) {
+  const cleanEntries = (Array.isArray(entries) ? entries : [])
+    .map((entry) => ({
+      productId: String(entry?.productId || "").trim(),
+      variantId: String(entry?.variantId || "").trim(),
+      quantity: normalizeStock(entry?.quantity),
+    }))
+    .filter(
+      (entry) =>
+        entry.productId &&
+        entry.variantId &&
+        entry.quantity > 0
+    );
+
+  if (cleanEntries.length === 0) {
+    throw new Error(
+      "No se recibieron etiquetas válidas para registrar."
+    );
+  }
+
+  const entriesByProduct = new Map();
+
+  cleanEntries.forEach((entry) => {
+    const current =
+      entriesByProduct.get(entry.productId) || [];
+
+    current.push(entry);
+    entriesByProduct.set(entry.productId, current);
+  });
+
+  const printedAt = new Date().toISOString();
+
+  await runTransaction(db, async (transaction) => {
+    const productRecords = [];
+
+    for (const [
+      productId,
+      productEntries,
+    ] of entriesByProduct.entries()) {
+      const productRef = doc(db, "products", productId);
+      const productSnap = await transaction.get(productRef);
+
+      if (!productSnap.exists()) {
+        throw new Error(
+          "Uno de los productos seleccionados ya no existe."
+        );
+      }
+
+      productRecords.push({
+        productId,
+        productRef,
+        productEntries,
+        product: {
+          id: productSnap.id,
+          ...productSnap.data(),
+        },
+      });
+    }
+
+    productRecords.forEach(
+      ({
+        productRef,
+        productEntries,
+        product,
+      }) => {
+        const variants = normalizeProductVariants(
+          product.variants,
+          product.size,
+          product.stock,
+          {
+            productId: product.id,
+            productCode: product.code,
+            storeId: product.storeId || STORE_ID,
+          }
+        );
+
+        const requestedByVariant = new Map();
+
+        productEntries.forEach((entry) => {
+          requestedByVariant.set(
+            entry.variantId,
+            (requestedByVariant.get(entry.variantId) || 0) +
+              entry.quantity
+          );
+        });
+
+        let totalPrintedNow = 0;
+        let totalReprintedNow = 0;
+
+        const nextVariants = variants.map((variant) => {
+          const requested = normalizeStock(
+            requestedByVariant.get(variant.id)
+          );
+
+          if (requested <= 0) {
+            return variant;
+          }
+
+          const state = getVariantLabelPrintState(variant);
+          const newlyPrinted = Math.min(
+            requested,
+            state.pending
+          );
+          const reprinted = Math.max(
+            requested - newlyPrinted,
+            0
+          );
+
+          totalPrintedNow += newlyPrinted;
+          totalReprintedNow += reprinted;
+
+          return {
+            ...variant,
+            printedLabels: Math.min(
+              state.stock,
+              state.printed + newlyPrinted
+            ),
+            labelPrintTotal:
+              normalizeStock(variant.labelPrintTotal) +
+              requested,
+            labelReprintTotal:
+              normalizeStock(variant.labelReprintTotal) +
+              reprinted,
+            lastLabelPrintedAt: printedAt,
+            lastLabelPrintedByUid: actor?.uid || "",
+            lastLabelPrintedByName: actor?.name || "",
+            lastLabelPrintedByEmail: actor?.email || "",
+          };
+        });
+
+        const summary = nextVariants.reduce(
+          (result, variant) => {
+            const state =
+              getVariantLabelPrintState(variant);
+
+            result.printed += state.printed;
+            result.pending += state.pending;
+
+            return result;
+          },
+          {
+            printed: 0,
+            pending: 0,
+          }
+        );
+
+        transaction.update(productRef, {
+          variants: nextVariants,
+          labelsPrintedTotal: summary.printed,
+          labelsPendingTotal: summary.pending,
+          lastLabelsPrintedAt: serverTimestamp(),
+          lastLabelsPrintedIso: printedAt,
+          lastLabelsPrintedByUid: actor?.uid || "",
+          lastLabelsPrintedByName: actor?.name || "",
+          lastLabelsPrintedByEmail: actor?.email || "",
+          lastLabelPrintNewQuantity: totalPrintedNow,
+          lastLabelReprintQuantity: totalReprintedNow,
+          updatedAt: serverTimestamp(),
+        });
+      }
+    );
+  });
+
+  return {
+    printedAt,
+    entries: cleanEntries,
+  };
 }
 
 /* -------------------------------------------------------------------------- */

@@ -15,6 +15,11 @@ import {
   resolveVariantBarcode,
   validateVariantBarcode,
 } from "../../services/barcode.service";
+import {
+  getVariantLabelPrintState,
+  registerLabelPrintBatch,
+} from "../../services/products.service";
+import { getCurrentUserActor } from "../../services/auth.service";
 
 const DEFAULT_STORE = {
   name: "MASTER CAPS",
@@ -97,6 +102,26 @@ function getProductVariants(product) {
       size: normalizeSize(variant.size),
       stock: Math.max(Number(variant.stock || 0), 0),
       barcode: safeText(variant.barcode),
+      printedLabels: Math.max(
+        Number(
+          variant.printedLabels ??
+            variant.labelsPrinted ??
+            0
+        ),
+        0
+      ),
+      labelPrintTotal: Math.max(
+        Number(variant.labelPrintTotal || 0),
+        0
+      ),
+      labelReprintTotal: Math.max(
+        Number(variant.labelReprintTotal || 0),
+        0
+      ),
+      lastLabelPrintedAt:
+        variant.lastLabelPrintedAt || "",
+      lastLabelPrintedByName:
+        variant.lastLabelPrintedByName || "",
     }));
   }
 
@@ -106,6 +131,26 @@ function getProductVariants(product) {
       size: normalizeSize(product?.size),
       stock: Math.max(Number(product?.stock || 0), 0),
       barcode: safeText(product?.barcode),
+      printedLabels: Math.max(
+        Number(
+          product?.printedLabels ??
+            product?.labelsPrinted ??
+            0
+        ),
+        0
+      ),
+      labelPrintTotal: Math.max(
+        Number(product?.labelPrintTotal || 0),
+        0
+      ),
+      labelReprintTotal: Math.max(
+        Number(product?.labelReprintTotal || 0),
+        0
+      ),
+      lastLabelPrintedAt:
+        product?.lastLabelPrintedAt || "",
+      lastLabelPrintedByName:
+        product?.lastLabelPrintedByName || "",
     },
   ];
 }
@@ -136,6 +181,29 @@ function createInitialSelections(product) {
   }, {});
 }
 
+
+function buildPrintEntries(labels, product) {
+  const entriesByVariant = new Map();
+
+  labels.forEach((label) => {
+    const variantId = label?.variant?.id;
+
+    if (!variantId) return;
+
+    const current =
+      entriesByVariant.get(variantId) || {
+        productId: product.id,
+        variantId,
+        quantity: 0,
+        variant: label.variant,
+      };
+
+    current.quantity += 1;
+    entriesByVariant.set(variantId, current);
+  });
+
+  return Array.from(entriesByVariant.values());
+}
 
 function printLabelsInIsolatedFrame({
   labelsMarkup,
@@ -609,6 +677,31 @@ export default function BarcodeLabel({
 
     if (printing) return;
 
+    const printEntries = buildPrintEntries(
+      labels,
+      product
+    );
+
+    const includesReprints = printEntries.some(
+      (entry) => {
+        const state = getVariantLabelPrintState(
+          entry.variant
+        );
+
+        return entry.quantity > state.pending;
+      }
+    );
+
+    if (includesReprints) {
+      const shouldReprint = window.confirm(
+        "Una o más etiquetas seleccionadas ya están marcadas como impresas.\n\nPulsa Aceptar para reimprimirlas o Cancelar para volver sin imprimir."
+      );
+
+      if (!shouldReprint) {
+        return;
+      }
+    }
+
     const printArea = document.getElementById(
       "barcode-label-print-area"
     );
@@ -625,6 +718,23 @@ export default function BarcodeLabel({
         labelsMarkup: printArea.outerHTML,
         preset,
       });
+
+      const printedCorrectly = window.confirm(
+        "¿Las etiquetas se imprimieron correctamente?\n\nPulsa Aceptar para registrarlas como impresas en el inventario."
+      );
+
+      if (printedCorrectly) {
+        const actor = getCurrentUserActor();
+
+        await registerLabelPrintBatch(
+          printEntries.map((entry) => ({
+            productId: entry.productId,
+            variantId: entry.variantId,
+            quantity: entry.quantity,
+          })),
+          actor
+        );
+      }
     } catch (error) {
       console.error(error);
       alert(

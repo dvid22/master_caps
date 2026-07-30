@@ -37,6 +37,7 @@ import {
   getNextProductCodePreview,
   getProductCoverImage,
   getProductImages,
+  getProductLabelPrintSummary,
   normalizeProductVariants,
   subscribeProducts,
   updateProduct,
@@ -50,6 +51,7 @@ import {
 
 import { getCurrentUserActor } from "../../services/auth.service";
 import BarcodeLabel from "../../components/products/BarcodeLabel";
+import BatchBarcodeLabel from "../../components/products/BatchBarcodeLabel";
 import ReactCrop, {
   centerCrop,
   makeAspectCrop,
@@ -538,6 +540,8 @@ export default function InventoryPage() {
   const [editingProduct, setEditingProduct] = useState(null);
   const [detailProduct, setDetailProduct] = useState(null);
   const [labelProduct, setLabelProduct] = useState(null);
+  const [batchSelectedProductIds, setBatchSelectedProductIds] = useState([]);
+  const [batchPrintOpen, setBatchPrintOpen] = useState(false);
   const [showForm, setShowForm] = useState(false);
 
   const [suggestedCode, setSuggestedCode] = useState("");
@@ -575,6 +579,14 @@ export default function InventoryPage() {
       (productsData) => {
         setProducts(productsData);
         setLoading(false);
+
+        setBatchSelectedProductIds((current) =>
+          current.filter((productId) =>
+            productsData.some(
+              (product) => product.id === productId
+            )
+          )
+        );
 
         setDetailProduct((current) => {
           if (!current) return null;
@@ -683,6 +695,18 @@ export default function InventoryPage() {
 
     return filteredProducts.slice(start, start + productsPerPage);
   }, [filteredProducts, page, totalPages]);
+
+  const batchSelectedProducts = useMemo(
+    () =>
+      batchSelectedProductIds
+        .map((productId) =>
+          products.find(
+            (product) => product.id === productId
+          )
+        )
+        .filter(Boolean),
+    [batchSelectedProductIds, products]
+  );
 
   useEffect(() => {
     setPage(1);
@@ -1557,6 +1581,38 @@ export default function InventoryPage() {
     }
   }
 
+  function toggleBatchProduct(product) {
+    if (getTotalStock(product) <= 0) return;
+
+    setBatchSelectedProductIds((current) =>
+      current.includes(product.id)
+        ? current.filter(
+            (productId) => productId !== product.id
+          )
+        : [...current, product.id]
+    );
+  }
+
+  function openBatchPrint() {
+    if (batchSelectedProducts.length === 0) {
+      alert(
+        "Selecciona al menos un producto con stock para imprimir por lote."
+      );
+      return;
+    }
+
+    setBatchPrintOpen(true);
+  }
+
+  function closeBatchPrint() {
+    setBatchPrintOpen(false);
+  }
+
+  function handleBatchPrinted() {
+    setBatchSelectedProductIds([]);
+    setBatchPrintOpen(false);
+  }
+
   async function handleDelete(product) {
     const confirmDelete = window.confirm(
       `¿Seguro que deseas eliminar "${product.name}"? También se eliminarán todas sus imágenes y variantes.`
@@ -1594,6 +1650,21 @@ export default function InventoryPage() {
             >
               <ExternalLink size={16} strokeWidth={1.9} />
               Publicar catálogo
+            </button>
+
+            <button
+              type="button"
+              onClick={openBatchPrint}
+              disabled={batchSelectedProducts.length === 0}
+              className="inline-flex h-11 items-center justify-center gap-2 rounded-2xl border border-red-100 bg-red-50 px-5 text-[13px] font-medium text-red-600 transition hover:border-red-200 hover:bg-red-100 disabled:cursor-not-allowed disabled:border-black/[0.06] disabled:bg-black/[0.025] disabled:text-black/30"
+            >
+              <Barcode size={16} strokeWidth={1.9} />
+              Imprimir lote
+              {batchSelectedProducts.length > 0 && (
+                <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-red-600 px-1.5 text-[9px] text-white">
+                  {batchSelectedProducts.length}
+                </span>
+              )}
             </button>
 
             <button
@@ -1675,6 +1746,12 @@ export default function InventoryPage() {
                     <ProductCard
                       key={product.id}
                       product={product}
+                      batchSelected={batchSelectedProductIds.includes(
+                        product.id
+                      )}
+                      onToggleBatch={() =>
+                        toggleBatchProduct(product)
+                      }
                       onView={() => setDetailProduct(product)}
                       onPrintLabels={() => setLabelProduct(product)}
                       onEdit={() => handleEdit(product)}
@@ -1719,6 +1796,19 @@ export default function InventoryPage() {
             name: "MASTER CAPS",
             logoUrl: "/logo.png",
             showStoreName: false,
+          }}
+        />
+      )}
+
+      {batchPrintOpen && batchSelectedProducts.length > 0 && (
+        <BatchBarcodeLabel
+          products={batchSelectedProducts}
+          open={batchPrintOpen}
+          onClose={closeBatchPrint}
+          onPrinted={handleBatchPrinted}
+          store={{
+            name: "MASTER CAPS",
+            logoUrl: "/logo.png",
           }}
         />
       )}
@@ -1809,15 +1899,84 @@ function EmptyInventory({ onCreate }) {
   );
 }
 
-function ProductCard({ product, onView, onPrintLabels, onEdit, onDelete }) {
+function ProductCard({
+  product,
+  batchSelected,
+  onToggleBatch,
+  onView,
+  onPrintLabels,
+  onEdit,
+  onDelete,
+}) {
   const stock = getTotalStock(product);
   const stockStatus = getStockStatus(stock);
   const coverImage = getProductCoverImage(product);
   const images = getProductImages(product);
   const sizes = getProductSizes(product);
+  const labelPrintSummary =
+    getProductLabelPrintSummary(product);
+
+  const labelStatus =
+    stock <= 0
+      ? {
+          label: "Sin stock",
+          className: "bg-black/[0.04] text-black/40",
+        }
+      : labelPrintSummary.fullyPrinted
+        ? {
+            label: "Etiquetas impresas",
+            className:
+              "bg-emerald-50 text-emerald-600",
+          }
+        : labelPrintSummary.partiallyPrinted
+          ? {
+              label: `${labelPrintSummary.pending} pendiente(s)`,
+              className:
+                "bg-amber-50 text-amber-700",
+            }
+          : {
+              label: "Sin imprimir",
+              className: "bg-red-50 text-red-600",
+            };
 
   return (
-    <article className="rounded-[24px] bg-white p-3 shadow-[0_14px_40px_rgba(0,0,0,0.035)] ring-1 ring-black/[0.06] transition hover:-translate-y-0.5 hover:shadow-[0_22px_60px_rgba(0,0,0,0.07)]">
+    <article
+      className={`rounded-[24px] bg-white p-3 shadow-[0_14px_40px_rgba(0,0,0,0.035)] ring-1 transition hover:-translate-y-0.5 hover:shadow-[0_22px_60px_rgba(0,0,0,0.07)] ${
+        batchSelected
+          ? "ring-2 ring-red-500"
+          : "ring-black/[0.06]"
+      }`}
+    >
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <button
+          type="button"
+          onClick={onToggleBatch}
+          disabled={stock <= 0}
+          className={`inline-flex h-8 items-center gap-2 rounded-xl border px-3 text-[10px] font-medium transition ${
+            batchSelected
+              ? "border-red-600 bg-red-600 text-white"
+              : "border-black/[0.08] bg-white text-black/55 hover:border-red-200 hover:bg-red-50 hover:text-red-600"
+          } disabled:cursor-not-allowed disabled:opacity-35`}
+        >
+          <span
+            className={`flex h-4 w-4 items-center justify-center rounded border ${
+              batchSelected
+                ? "border-white/30 bg-white/15 text-white"
+                : "border-black/15 text-transparent"
+            }`}
+          >
+            <Check size={11} />
+          </span>
+          Lote
+        </button>
+
+        <span
+          className={`rounded-full px-2.5 py-1 text-[9px] font-medium ${labelStatus.className}`}
+        >
+          {labelStatus.label}
+        </span>
+      </div>
+
       <div className="flex gap-3">
         <div className="relative flex h-[86px] w-[86px] shrink-0 items-center justify-center overflow-hidden rounded-[20px] bg-black/[0.025]">
           {coverImage.url ? (
