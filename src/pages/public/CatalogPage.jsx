@@ -54,94 +54,44 @@ const GLOBAL_CATALOG_GROUPS = [
   {
     id: "hombre",
     name: "HOMBRE",
-    imageBaseName: "hombre",
+    imageUrl:
+      "/images/store/hombre.webp",
     description:
       "Prendas, conjuntos y colecciones masculinas.",
   },
   {
     id: "accesorios",
     name: "ACCESORIOS",
-    imageBaseName: "accesosios",
+    imageUrl:
+      "/images/store/accesosios.webp",
     description:
       "Bolsos, billeteras y complementos.",
   },
   {
     id: "gorras",
     name: "GORRAS",
-    imageBaseName: "gorras",
+    imageUrl:
+      "/images/store/gorras.webp",
     description:
       "Gorras urbanas, deportivas y agropecuarias.",
   },
 ];
 
-function getGlobalGroupImageCandidates(
-  imageBaseName
-) {
-  const normalizedBaseNames =
-    imageBaseName === "accesosios"
-      ? ["accesorios", "accesosios"]
-      : [imageBaseName];
-
-  const extensions = [
-    "webp",
-    "png",
-    "jpg",
-    "jpeg",
-  ];
-
-  return normalizedBaseNames.flatMap(
-    (baseName) =>
-      extensions.map(
-        (extension) =>
-          `/images/store/${baseName}.${extension}`
-      )
-  );
-}
-
 function GlobalGroupImage({
-  imageBaseName,
+  src,
   alt,
   className,
   loading = "lazy",
   fetchPriority = "auto",
 }) {
-  const candidates = useMemo(
-    () =>
-      getGlobalGroupImageCandidates(
-        imageBaseName
-      ),
-    [imageBaseName]
-  );
-
-  const [candidateIndex, setCandidateIndex] =
-    useState(0);
-
-  useEffect(() => {
-    setCandidateIndex(0);
-  }, [imageBaseName]);
-
-  const currentSrc =
-    candidates[candidateIndex] ||
-    candidates[0];
-
   return (
     <img
-      key={`${imageBaseName}-${candidateIndex}`}
-      src={currentSrc}
+      src={src}
       alt={alt}
       loading={loading}
       decoding="async"
       fetchPriority={fetchPriority}
       draggable="false"
-      onError={() => {
-        setCandidateIndex(
-          (current) =>
-            current <
-            candidates.length - 1
-              ? current + 1
-              : current
-        );
-      }}
       className={className}
     />
   );
@@ -992,6 +942,7 @@ export default function CatalogPage() {
           return {
             ...group,
             products: groupProducts,
+            imageUrl: group.imageUrl,
           };
         }
       ).filter(
@@ -1192,6 +1143,9 @@ export default function CatalogPage() {
           slide.secondaryImage,
         ]
       ),
+      ...GLOBAL_CATALOG_GROUPS.map(
+        (group) => group.imageUrl
+      ),
       ...globalGroupShowcases
         .slice(0, 6)
         .map((category) => category.imageUrl),
@@ -1340,16 +1294,33 @@ export default function CatalogPage() {
     const category =
       categoryById.get(value);
 
-    if (
-      category?.parentCategoryId
-    ) {
-      setMainCategoryFilter(
-        category.parentCategoryId
+    const parentMainCategoryId =
+      safeText(
+        category?.parentCategoryId
       );
+
+    const parentMainCategory =
+      mainCategoryById.get(
+        parentMainCategoryId
+      );
+
+    if (parentMainCategory) {
+      setGlobalGroupFilter(
+        getGlobalGroupId(
+          parentMainCategory
+        )
+      );
+
+      setMainCategoryFilter(
+        parentMainCategory.id
+      );
+    } else {
+      setMainCategoryFilter("all");
     }
 
     setCategoryFilter(value);
     setSizeFilter("all");
+    setSearch("");
     setMobileMenuOpen(false);
     setFiltersOpen(false);
 
@@ -1948,9 +1919,7 @@ function CategoryShowcaseSection({
               >
                 <div className="relative aspect-[4/4.35] w-full overflow-hidden bg-white">
                   <GlobalGroupImage
-                    imageBaseName={
-                      category.imageBaseName
-                    }
+                    src={category.imageUrl}
                     alt={category.name}
                     loading={
                       categoryIndex < 2
@@ -2070,9 +2039,7 @@ function GlobalGroupLandingSection({
 
         <div className="mt-6 overflow-hidden bg-white">
           <GlobalGroupImage
-            imageBaseName={
-              group.imageBaseName
-            }
+            src={group.imageUrl}
             alt={group.name}
             loading="eager"
             fetchPriority="high"
@@ -3087,9 +3054,7 @@ function CatalogFooter() {
               © {new Date().getFullYear()} Master Caps
             </p>
 
-            <p>
-              Catálogo y disponibilidad en tiempo real
-            </p>
+           
           </div>
         </div>
       </footer>
@@ -3252,6 +3217,17 @@ function MobileCatalogMenu({
   const [menuGroup, setMenuGroup] =
     useState(initialGroup);
 
+  useEffect(() => {
+    setMenuGroup(
+      activeGlobalGroup !== "all"
+        ? activeGlobalGroup
+        : globalGroups[0]?.id || ""
+    );
+  }, [
+    activeGlobalGroup,
+    globalGroups,
+  ]);
+
   const visibleMainCategories =
     mainCategories.filter(
       (mainCategory) =>
@@ -3355,9 +3331,9 @@ function MobileCatalogMenu({
         <div className="shrink-0 border-b border-black/[0.08] bg-[#f5f5f5]">
           <div className="relative h-[150px] overflow-hidden">
             <GlobalGroupImage
-              imageBaseName={
-                selectedMenuGroup?.imageBaseName ||
-                "hombre"
+              src={
+                selectedMenuGroup?.imageUrl ||
+                GLOBAL_CATALOG_GROUPS[0].imageUrl
               }
               alt={
                 selectedMenuGroup?.name ||
