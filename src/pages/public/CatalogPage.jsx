@@ -6,6 +6,7 @@ import {
   useSearchParams,
 } from "react-router-dom";
 import {
+  ArrowLeft,
   ArrowRight,
   CalendarClock,
   Camera,
@@ -26,6 +27,7 @@ import {
 } from "lucide-react";
 
 import {
+  normalizeText,
   subscribeCategories,
 } from "../../services/categories.service";
 import {
@@ -47,6 +49,190 @@ const WHATSAPP_MESSAGE =
   "Hola Master Caps, quiero recibir asesoría sobre los productos del catálogo.";
 
 const HERO_AUTOPLAY_MS = 6500;
+
+const GLOBAL_CATALOG_GROUPS = [
+  {
+    id: "hombre",
+    name: "HOMBRE",
+    imageBaseName: "hombre",
+    description:
+      "Prendas, conjuntos y colecciones masculinas.",
+  },
+  {
+    id: "accesorios",
+    name: "ACCESORIOS",
+    imageBaseName: "accesosios",
+    description:
+      "Bolsos, billeteras y complementos.",
+  },
+  {
+    id: "gorras",
+    name: "GORRAS",
+    imageBaseName: "gorras",
+    description:
+      "Gorras urbanas, deportivas y agropecuarias.",
+  },
+];
+
+function getGlobalGroupImageCandidates(
+  imageBaseName
+) {
+  const normalizedBaseNames =
+    imageBaseName === "accesosios"
+      ? ["accesorios", "accesosios"]
+      : [imageBaseName];
+
+  const extensions = [
+    "webp",
+    "png",
+    "jpg",
+    "jpeg",
+  ];
+
+  return normalizedBaseNames.flatMap(
+    (baseName) =>
+      extensions.map(
+        (extension) =>
+          `/images/store/${baseName}.${extension}`
+      )
+  );
+}
+
+function GlobalGroupImage({
+  imageBaseName,
+  alt,
+  className,
+  loading = "lazy",
+  fetchPriority = "auto",
+}) {
+  const candidates = useMemo(
+    () =>
+      getGlobalGroupImageCandidates(
+        imageBaseName
+      ),
+    [imageBaseName]
+  );
+
+  const [candidateIndex, setCandidateIndex] =
+    useState(0);
+
+  useEffect(() => {
+    setCandidateIndex(0);
+  }, [imageBaseName]);
+
+  const currentSrc =
+    candidates[candidateIndex] ||
+    candidates[0];
+
+  return (
+    <img
+      key={`${imageBaseName}-${candidateIndex}`}
+      src={currentSrc}
+      alt={alt}
+      loading={loading}
+      decoding="async"
+      fetchPriority={fetchPriority}
+      draggable="false"
+      onError={() => {
+        setCandidateIndex(
+          (current) =>
+            current <
+            candidates.length - 1
+              ? current + 1
+              : current
+        );
+      }}
+      className={className}
+    />
+  );
+}
+
+function getGlobalGroupId(mainCategory) {
+  const normalizedName = normalizeText(
+    mainCategory?.name
+  );
+
+  if (
+    normalizedName.includes("gorra") ||
+    normalizedName.includes("cap")
+  ) {
+    return "gorras";
+  }
+
+  if (
+    normalizedName.includes("accesorio") ||
+    normalizedName.includes("billetera") ||
+    normalizedName.includes("bolso") ||
+    normalizedName.includes("reloj") ||
+    normalizedName.includes("gafa") ||
+    normalizedName.includes("correa") ||
+    normalizedName.includes("perfume")
+  ) {
+    return "accesorios";
+  }
+
+  return "hombre";
+}
+
+
+const STORE_HERO_SLIDES = [
+  {
+    id: "store-01",
+    image: "/images/store/mastercaps-tienda-01-1920.webp",
+    imageSrcSet:
+      "/images/store/mastercaps-tienda-01-1920.webp 1920w, /images/store/mastercaps-tienda-01-3840.webp 3840w",
+    secondaryImage: "/images/store/mastercaps-tienda-04.webp",
+    eyebrow: "TIENDA FÍSICA · UBATÉ",
+    title: "CONOCE MASTER CAPS",
+    description:
+      "Un espacio creado para descubrir moda, accesorios, gorras y piezas seleccionadas en un solo lugar.",
+  },
+  {
+    id: "store-02",
+    image: "/images/store/mastercaps-tienda-02-1920.webp",
+    imageSrcSet:
+      "/images/store/mastercaps-tienda-02-1920.webp 1920w, /images/store/mastercaps-tienda-02-3840.webp 3840w",
+    secondaryImage: "/images/store/mastercaps-tienda-05.webp",
+    eyebrow: "MODA Y ACCESORIOS",
+    title: "TODO TU ESTILO EN UN SOLO LUGAR",
+    description:
+      "Explora prendas, bolsos, relojes, gorras y colecciones disponibles en nuestra tienda.",
+  },
+  {
+    id: "store-03",
+    image: "/images/store/mastercaps-tienda-03-1920.webp",
+    imageSrcSet:
+      "/images/store/mastercaps-tienda-03-1920.webp 1920w, /images/store/mastercaps-tienda-03-3840.webp 3840w",
+    secondaryImage: "/images/store/mastercaps-tienda-01.webp",
+    eyebrow: "EXPERIENCIA MASTER CAPS",
+    title: "VISÍTANOS EN UBATÉ",
+    description:
+      "Conoce el espacio, descubre nuevas referencias y recibe atención personalizada.",
+  },
+  {
+    id: "store-04",
+    image: "/images/store/mastercaps-tienda-04-1920.webp",
+    imageSrcSet:
+      "/images/store/mastercaps-tienda-04-1920.webp 1920w, /images/store/mastercaps-tienda-04-3840.webp 3840w",
+    secondaryImage: "/images/store/mastercaps-tienda-02.webp",
+    eyebrow: "COLECCIONES SELECCIONADAS",
+    title: "GORRAS, ROPA Y ACCESORIOS",
+    description:
+      "Una selección amplia para combinar, regalar o renovar tu estilo.",
+  },
+  {
+    id: "store-05",
+    image: "/images/store/mastercaps-tienda-05-1920.webp",
+    imageSrcSet:
+      "/images/store/mastercaps-tienda-05-1920.webp 1920w, /images/store/mastercaps-tienda-05-3840.webp 3840w",
+    secondaryImage: "/images/store/mastercaps-tienda-03.webp",
+    eyebrow: "MASTER CAPS",
+    title: "DETALLES QUE MARCAN LA DIFERENCIA",
+    description:
+      "Encuentra diseños, colores y referencias para cada ocasión.",
+  },
+];
+
 
 function getProductVariants(product) {
   return normalizeProductVariants(
@@ -177,6 +363,15 @@ export default function CatalogPage() {
 
   const [search, setSearch] = useState(
     () => searchParams.get("q") || ""
+  );
+
+  const [
+    globalGroupFilter,
+    setGlobalGroupFilter,
+  ] = useState(
+    () =>
+      searchParams.get("grupo") ||
+      "all"
   );
 
   const [
@@ -366,6 +561,15 @@ export default function CatalogPage() {
       new URLSearchParams();
 
     if (
+      globalGroupFilter !== "all"
+    ) {
+      nextParams.set(
+        "grupo",
+        globalGroupFilter
+      );
+    }
+
+    if (
       mainCategoryFilter !== "all"
     ) {
       nextParams.set(
@@ -398,6 +602,7 @@ export default function CatalogPage() {
       replace: true,
     });
   }, [
+    globalGroupFilter,
     mainCategoryFilter,
     categoryFilter,
     sizeFilter,
@@ -492,6 +697,26 @@ export default function CatalogPage() {
       [mainCategories]
     );
 
+  const getProductGlobalGroup = useMemo(
+    () => (product) => {
+      const mainCategoryId =
+        getMainCategoryForProduct(
+          product,
+          categoryById
+        );
+
+      return getGlobalGroupId(
+        mainCategoryById.get(
+          mainCategoryId
+        )
+      );
+    },
+    [
+      categoryById,
+      mainCategoryById,
+    ]
+  );
+
   const availableProducts = useMemo(
     () =>
       products.filter(
@@ -501,39 +726,10 @@ export default function CatalogPage() {
     [products]
   );
 
-  const heroProducts = useMemo(() => {
-    const withImages =
-      availableProducts.filter(
-        productHasImage
-      );
-
-    const prioritized = [
-      ...withImages.filter(
-        (product) =>
-          getProductImages(product).length >
-          1
-      ),
-      ...withImages,
-    ];
-
-    const unique = [];
-    const ids = new Set();
-
-    prioritized.forEach((product) => {
-      if (
-        product?.id &&
-        !ids.has(product.id)
-      ) {
-        ids.add(product.id);
-        unique.push(product);
-      }
-    });
-
-    return unique.slice(0, 5);
-  }, [availableProducts]);
+  const heroSlides = STORE_HERO_SLIDES;
 
   useEffect(() => {
-    if (heroProducts.length <= 1) {
+    if (heroSlides.length <= 1) {
       return undefined;
     }
 
@@ -541,7 +737,7 @@ export default function CatalogPage() {
       () => {
         setHeroIndex((current) =>
           current >=
-          heroProducts.length - 1
+          heroSlides.length - 1
             ? 0
             : current + 1
         );
@@ -551,18 +747,18 @@ export default function CatalogPage() {
 
     return () =>
       window.clearInterval(timer);
-  }, [heroProducts.length]);
+  }, [heroSlides.length]);
 
   useEffect(() => {
     if (
       heroIndex >
-      heroProducts.length - 1
+      heroSlides.length - 1
     ) {
       setHeroIndex(0);
     }
   }, [
     heroIndex,
-    heroProducts.length,
+    heroSlides.length,
   ]);
 
   const productsForSizeFilter = useMemo(() => {
@@ -584,12 +780,23 @@ export default function CatalogPage() {
       );
     }
 
+    if (globalGroupFilter !== "all") {
+      return availableProducts.filter(
+        (product) =>
+          getProductGlobalGroup(
+            product
+          ) === globalGroupFilter
+      );
+    }
+
     return availableProducts;
   }, [
     availableProducts,
     categoryFilter,
     mainCategoryFilter,
+    globalGroupFilter,
     categoryById,
+    getProductGlobalGroup,
   ]);
 
   const availableSizes = useMemo(() => {
@@ -693,6 +900,12 @@ export default function CatalogPage() {
               .includes(cleanSearch)
           );
 
+        const matchesGlobalGroup =
+          globalGroupFilter === "all" ||
+          getProductGlobalGroup(
+            product
+          ) === globalGroupFilter;
+
         const matchesMainCategory =
           mainCategoryFilter === "all" ||
           productMainCategoryId ===
@@ -715,6 +928,7 @@ export default function CatalogPage() {
 
         return (
           matchesSearch &&
+          matchesGlobalGroup &&
           matchesMainCategory &&
           matchesSubcategory &&
           matchesSize
@@ -724,14 +938,24 @@ export default function CatalogPage() {
   }, [
     availableProducts,
     search,
+    globalGroupFilter,
     mainCategoryFilter,
     categoryFilter,
     sizeFilter,
     categoryById,
     mainCategoryById,
+    getProductGlobalGroup,
   ]);
 
   const isHomeView =
+    globalGroupFilter === "all" &&
+    mainCategoryFilter === "all" &&
+    categoryFilter === "all" &&
+    sizeFilter === "all" &&
+    !search.trim();
+
+  const isGlobalGroupLanding =
+    globalGroupFilter !== "all" &&
     mainCategoryFilter === "all" &&
     categoryFilter === "all" &&
     sizeFilter === "all" &&
@@ -753,9 +977,54 @@ export default function CatalogPage() {
       categoryFilter
     ) || null;
 
-  const categoryShowcases = useMemo(
+  const globalGroupShowcases = useMemo(
     () =>
-      mainCategories
+      GLOBAL_CATALOG_GROUPS.map(
+        (group) => {
+          const groupProducts =
+            availableProducts.filter(
+              (product) =>
+                getProductGlobalGroup(
+                  product
+                ) === group.id
+            );
+
+          return {
+            ...group,
+            products: groupProducts,
+          };
+        }
+      ).filter(
+        (group) =>
+          group.products.length > 0
+      ),
+    [
+      availableProducts,
+      getProductGlobalGroup,
+    ]
+  );
+
+  const selectedGlobalGroup =
+    GLOBAL_CATALOG_GROUPS.find(
+      (group) =>
+        group.id ===
+        globalGroupFilter
+    ) || null;
+
+  const selectedGlobalMainCategories =
+    useMemo(() => {
+      if (!isGlobalGroupLanding) {
+        return [];
+      }
+
+      return mainCategories
+        .filter(
+          (mainCategory) =>
+            getGlobalGroupId(
+              mainCategory
+            ) ===
+            globalGroupFilter
+        )
         .map((mainCategory) => {
           const categoryProducts =
             availableProducts.filter(
@@ -775,9 +1044,29 @@ export default function CatalogPage() {
                 )?.url
             );
 
+          const subcategories =
+            categories
+              .filter(
+                (category) =>
+                  safeText(
+                    category.parentCategoryId
+                  ) ===
+                  mainCategory.id
+              )
+              .filter(
+                (category) =>
+                  categoryProducts.some(
+                    (product) =>
+                      safeText(
+                        product.categoryId
+                      ) === category.id
+                  )
+              );
+
           return {
             ...mainCategory,
             products: categoryProducts,
+            subcategories,
             imageUrl:
               getProductCoverImage(
                 imageProduct
@@ -785,15 +1074,18 @@ export default function CatalogPage() {
           };
         })
         .filter(
-          (category) =>
-            category.products.length > 0
-        ),
-    [
+          (mainCategory) =>
+            mainCategory.products.length >
+            0
+        );
+    }, [
+      isGlobalGroupLanding,
       mainCategories,
       availableProducts,
       categoryById,
-    ]
-  );
+      categories,
+      globalGroupFilter,
+    ]);
 
   const selectedSubcategoryShowcases = useMemo(() => {
     if (!isMainCategoryLanding) {
@@ -894,14 +1186,13 @@ export default function CatalogPage() {
 
   useEffect(() => {
     const urls = [
-      ...heroProducts
-        .slice(0, 3)
-        .flatMap((product) =>
-          getProductImages(product)
-            .slice(0, 2)
-            .map((image) => image?.url)
-        ),
-      ...categoryShowcases
+      ...heroSlides.flatMap(
+        (slide) => [
+          slide.image,
+          slide.secondaryImage,
+        ]
+      ),
+      ...globalGroupShowcases
         .slice(0, 6)
         .map((category) => category.imageUrl),
       ...selectedSubcategoryShowcases
@@ -919,8 +1210,8 @@ export default function CatalogPage() {
       image.src = url;
     });
   }, [
-    heroProducts,
-    categoryShowcases,
+    heroSlides,
+    globalGroupShowcases,
     selectedSubcategoryShowcases,
   ]);
 
@@ -976,7 +1267,35 @@ export default function CatalogPage() {
       availableProducts,
     ]);
 
+  function selectGlobalGroup(value) {
+    setGlobalGroupFilter(value);
+    setMainCategoryFilter("all");
+    setCategoryFilter("all");
+    setSizeFilter("all");
+    setSearch("");
+    setMobileMenuOpen(false);
+    setFiltersOpen(false);
+
+    requestAnimationFrame(() => {
+      window.scrollTo({
+        top: 0,
+        behavior: "smooth",
+      });
+    });
+  }
+
   function selectMainCategory(value) {
+    const selectedMain =
+      mainCategoryById.get(value);
+
+    if (selectedMain) {
+      setGlobalGroupFilter(
+        getGlobalGroupId(
+          selectedMain
+        )
+      );
+    }
+
     const eligibleSubcategories =
       categories.filter(
         (category) => {
@@ -1045,6 +1364,7 @@ export default function CatalogPage() {
   }
 
   function clearFilters() {
+    setGlobalGroupFilter("all");
     setMainCategoryFilter("all");
     setCategoryFilter("all");
     setSizeFilter("all");
@@ -1052,32 +1372,32 @@ export default function CatalogPage() {
   }
 
   function previousHero() {
-    if (heroProducts.length <= 1) {
+    if (heroSlides.length <= 1) {
       return;
     }
 
     setHeroIndex((current) =>
       current <= 0
-        ? heroProducts.length - 1
+        ? heroSlides.length - 1
         : current - 1
     );
   }
 
   function nextHero() {
-    if (heroProducts.length <= 1) {
+    if (heroSlides.length <= 1) {
       return;
     }
 
     setHeroIndex((current) =>
       current >=
-      heroProducts.length - 1
+      heroSlides.length - 1
         ? 0
         : current + 1
     );
   }
 
-  const activeHeroProduct =
-    heroProducts[heroIndex] || null;
+  const activeHeroSlide =
+    heroSlides[heroIndex] || heroSlides[0];
 
   return (
     <>
@@ -1121,8 +1441,8 @@ export default function CatalogPage() {
 
         <CatalogHeader
           storeId={storeId}
-          mainCategories={mainCategories}
-          categories={categories}
+          globalGroups={GLOBAL_CATALOG_GROUPS}
+          activeGlobalGroup={globalGroupFilter}
           cart={cart}
           onOpenCart={() =>
             setCartOpen(true)
@@ -1133,11 +1453,8 @@ export default function CatalogPage() {
           onOpenSearch={() =>
             setSearchOpen(true)
           }
-          onSelectMainCategory={
-            selectMainCategory
-          }
-          onSelectSubcategory={
-            selectSubcategory
+          onSelectGlobalGroup={
+            selectGlobalGroup
           }
           onHome={clearFilters}
         />
@@ -1149,55 +1466,20 @@ export default function CatalogPage() {
             {isHomeView && (
               <>
                 <HeroSection
-                  product={
-                    activeHeroProduct
-                  }
+                  slide={activeHeroSlide}
                   index={heroIndex}
-                  total={
-                    heroProducts.length
-                  }
-                  categoryPath={
-                    activeHeroProduct
-                      ? getCategoryPath(
-                          activeHeroProduct,
-                          categoryById,
-                          mainCategoryById
-                        )
-                      : ""
-                  }
-                  storeId={storeId}
-                  onPrevious={
-                    previousHero
-                  }
+                  total={heroSlides.length}
+                  onPrevious={previousHero}
                   onNext={nextHero}
-                  onSelectSlide={
-                    setHeroIndex
-                  }
-                  onExplore={() => {
-                    if (
-                      activeHeroProduct
-                    ) {
-                      const mainId =
-                        getMainCategoryForProduct(
-                          activeHeroProduct,
-                          categoryById
-                        );
-
-                      if (mainId) {
-                        selectMainCategory(
-                          mainId
-                        );
-                      }
-                    }
-                  }}
+                  onSelectSlide={setHeroIndex}
                 />
 
                 <CategoryShowcaseSection
                   categories={
-                    categoryShowcases
+                    globalGroupShowcases
                   }
                   onSelect={
-                    selectMainCategory
+                    selectGlobalGroup
                   }
                 />
 
@@ -1207,6 +1489,22 @@ export default function CatalogPage() {
                   }
                 />
               </>
+            )}
+
+            {isGlobalGroupLanding && (
+              <GlobalGroupLandingSection
+                group={selectedGlobalGroup}
+                mainCategories={
+                  selectedGlobalMainCategories
+                }
+                onBack={clearFilters}
+                onSelectMainCategory={
+                  selectMainCategory
+                }
+                onSelectSubcategory={
+                  selectSubcategory
+                }
+              />
             )}
 
             {isMainCategoryLanding && (
@@ -1225,6 +1523,7 @@ export default function CatalogPage() {
             )}
 
             {!isHomeView &&
+              !isGlobalGroupLanding &&
               !isMainCategoryLanding && (
             <section
               id="catalog-products"
@@ -1325,6 +1624,12 @@ export default function CatalogPage() {
 
         {mobileMenuOpen && (
           <MobileCatalogMenu
+            globalGroups={
+              GLOBAL_CATALOG_GROUPS
+            }
+            activeGlobalGroup={
+              globalGroupFilter
+            }
             mainCategories={
               mainCategories
             }
@@ -1339,6 +1644,9 @@ export default function CatalogPage() {
               setMobileMenuOpen(false);
               setCartOpen(true);
             }}
+            onSelectGlobalGroup={
+              selectGlobalGroup
+            }
             onSelectMainCategory={
               selectMainCategory
             }
@@ -1425,22 +1733,15 @@ export default function CatalogPage() {
 }
 
 function CatalogHeader({
-  mainCategories,
-  categories,
+  globalGroups,
+  activeGlobalGroup,
   cart,
   onOpenCart,
   onOpenMenu,
   onOpenSearch,
-  onSelectMainCategory,
-  onSelectSubcategory,
+  onSelectGlobalGroup,
   onHome,
 }) {
-  const [categoriesMenuOpen, setCategoriesMenuOpen] = useState(false);
-
-  function closeCategoriesMenu() {
-    setCategoriesMenuOpen(false);
-  }
-
   return (
     <header className="sticky top-0 z-50 border-b border-black/[0.08] bg-white/95 backdrop-blur-xl">
       <div className="mx-auto flex min-h-[104px] max-w-[1800px] items-center justify-between gap-5 px-4 sm:min-h-[116px] sm:px-6 lg:min-h-[126px] lg:px-10 xl:px-16">
@@ -1469,105 +1770,28 @@ function CatalogHeader({
           />
         </button>
 
-        <nav className="hidden flex-1 items-center justify-center gap-8 lg:flex">
-          <button
-            type="button"
-            onClick={onHome}
-            className="text-[12px] font-medium uppercase tracking-[0.1em] transition hover:text-red-600 xl:text-[13px]"
-          >
-            Nuevo
-          </button>
-
-          <div
-            className="relative"
-            onMouseEnter={() => setCategoriesMenuOpen(true)}
-            onMouseLeave={() => setCategoriesMenuOpen(false)}
-          >
-            <button
-              type="button"
-              onClick={() => setCategoriesMenuOpen((current) => !current)}
-              aria-expanded={categoriesMenuOpen}
-              className="inline-flex items-center gap-2 text-[12px] font-medium uppercase tracking-[0.1em] transition hover:text-red-600 xl:text-[13px]"
-            >
-              Categorías
-              <ChevronDown
-                size={14}
-                className={`transition ${categoriesMenuOpen ? "rotate-180" : ""}`}
-              />
-            </button>
-
-            <div
-              className={`absolute left-1/2 top-full w-[820px] -translate-x-1/2 pt-5 transition duration-200 ${
-                categoriesMenuOpen
-                  ? "visible pointer-events-auto opacity-100"
-                  : "invisible pointer-events-none opacity-0"
-              }`}
-            >
-              <div className="max-h-[70vh] overflow-y-auto border border-black/[0.08] bg-white p-6 shadow-[0_26px_80px_rgba(0,0,0,0.14)]">
-                <div className="grid grid-cols-3 gap-x-8 gap-y-7">
-                {mainCategories.map(
-                  (mainCategory) => {
-                    const subcategories =
-                      categories.filter(
-                        (category) =>
-                          safeText(
-                            category.parentCategoryId
-                          ) ===
-                          mainCategory.id
-                      );
-
-                    return (
-                      <div
-                        key={mainCategory.id}
-                        className="min-w-0"
-                      >
-                        <button
-                          type="button"
-                          onClick={() => {
-                            closeCategoriesMenu();
-                            onSelectMainCategory(
-                              mainCategory.id
-                            );
-                          }}
-                          className="inline-flex items-center gap-2 border-b border-black pb-1 text-left text-[11px] font-medium uppercase tracking-[0.12em] transition hover:border-red-600 hover:text-red-600"
-                        >
-                          {mainCategory.name}
-                          <ArrowRight size={13} />
-                        </button>
-
-                        <div className="mt-3 space-y-2">
-                          {subcategories
-                            .slice(0, 6)
-                            .map(
-                              (subcategory) => (
-                                <button
-                                  key={
-                                    subcategory.id
-                                  }
-                                  type="button"
-                                  onClick={() => {
-                                    closeCategoriesMenu();
-                                    onSelectSubcategory(
-                                      subcategory.id
-                                    );
-                                  }}
-                                  className="block w-full truncate text-left text-[10px] uppercase tracking-[0.08em] text-black/50 transition hover:text-red-600"
-                                >
-                                  {
-                                    subcategory.name
-                                  }
-                                </button>
-                              )
-                            )}
-                        </div>
-                      </div>
-                    );
-                  }
-                )}
-                </div>
-              </div>
-            </div>
-          </div>
+        <nav className="hidden flex-1 items-center justify-center gap-10 lg:flex">
+          {globalGroups.map(
+            (group) => (
+              <button
+                key={group.id}
+                type="button"
+                onClick={() =>
+                  onSelectGlobalGroup(
+                    group.id
+                  )
+                }
+                className={`border-b-2 pb-2 text-[12px] font-medium uppercase tracking-[0.12em] transition xl:text-[13px] ${
+                  activeGlobalGroup ===
+                  group.id
+                    ? "border-black text-black"
+                    : "border-transparent text-black/65 hover:border-red-600 hover:text-red-600"
+                }`}
+              >
+                {group.name}
+              </button>
+            )
+          )}
         </nav>
 
         <div className="flex items-center gap-1 sm:gap-2">
@@ -1602,186 +1826,63 @@ function CatalogHeader({
 }
 
 function HeroSection({
-  product,
+  slide,
   index,
   total,
-  categoryPath,
-  storeId,
   onPrevious,
   onNext,
   onSelectSlide,
-  onExplore,
 }) {
-  const coverImage =
-    getProductCoverImage(product);
-
-  const secondImage =
-    getProductSecondaryImage(product);
-
   return (
-    <section className="bg-white px-3 pb-6 pt-3 sm:px-5 sm:pb-8 lg:px-8 lg:pt-5">
-      <div className="relative mx-auto max-w-[1800px] overflow-hidden border border-black/[0.08] bg-[#f3f1ee] shadow-[0_24px_80px_rgba(0,0,0,0.08)]">
-        <div className="grid min-h-[570px] lg:min-h-[690px] lg:grid-cols-[minmax(0,1.48fr)_minmax(360px,.72fr)]">
-          <div className="relative min-h-[570px] overflow-hidden bg-[#d9d5d0] lg:min-h-[690px]">
-            {coverImage?.url ? (
-              <img
-                src={coverImage.url}
-                alt={
-                  product?.name ||
-                  "Master Caps"
-                }
-                loading="eager"
-                decoding="async"
-                fetchPriority="high"
-                className="absolute inset-0 h-full w-full object-cover transition duration-700"
-              />
-            ) : (
-              <div className="absolute inset-0 bg-[linear-gradient(135deg,#d8d4cf,#f3f1ed)]" />
-            )}
+    <section className="bg-white px-3 pb-5 pt-3 sm:px-5 sm:pb-7 lg:px-8 lg:pt-5">
+      <div className="relative mx-auto max-w-[1800px] overflow-hidden bg-black/[0.03] shadow-[0_18px_55px_rgba(0,0,0,0.08)]">
+        <div className="relative aspect-[16/8.2] min-h-[300px] w-full overflow-hidden sm:min-h-[380px] lg:min-h-[470px] xl:min-h-[520px]">
+          <picture className="absolute inset-0 block h-full w-full">
+            <source
+              srcSet={slide.imageSrcSet}
+              sizes="100vw"
+              type="image/webp"
+            />
 
-            <div className="absolute inset-0 bg-[linear-gradient(90deg,rgba(0,0,0,.78)_0%,rgba(0,0,0,.46)_45%,rgba(0,0,0,.08)_100%)]" />
-            <div className="absolute inset-x-0 bottom-0 h-48 bg-gradient-to-t from-black/45 to-transparent" />
+            <img
+              src={slide.image}
+              srcSet={slide.imageSrcSet}
+              sizes="100vw"
+              alt={`Tienda Master Caps ${index + 1}`}
+              loading="eager"
+              decoding="async"
+              fetchPriority="high"
+              draggable="false"
+              className="h-full w-full select-none object-cover object-center [image-rendering:auto]"
+            />
+          </picture>
 
-            <div className="relative z-10 flex min-h-[570px] items-end px-6 pb-14 pt-16 sm:px-10 sm:pb-16 lg:min-h-[690px] lg:px-16 lg:pb-20 xl:px-20">
-              <div className="max-w-[700px] text-white">
-                <div className="inline-flex items-center gap-3 border border-white/30 bg-black/15 px-4 py-2 backdrop-blur-md">
-                  <span className="h-1.5 w-1.5 rounded-full bg-red-500" />
+          <div className="absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-black/30 to-transparent" />
 
-                  <p className="text-[9px] font-medium uppercase tracking-[0.24em] text-white/85 sm:text-[10px]">
-                    {categoryPath ||
-                      "NUEVA COLECCIÓN"}
-                  </p>
-                </div>
+          {total > 1 && (
+            <>
+              <button
+                type="button"
+                onClick={onPrevious}
+                className="absolute left-3 top-1/2 z-20 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full border border-white/35 bg-black/20 text-white backdrop-blur-md transition hover:bg-white hover:text-black sm:left-5 sm:h-11 sm:w-11"
+                aria-label="Imagen anterior"
+              >
+                <ChevronLeft size={19} />
+              </button>
 
-                <h1 className="mt-6 max-w-[680px] text-[42px] font-medium uppercase leading-[0.94] tracking-[-0.06em] sm:text-[60px] lg:text-[74px] xl:text-[82px]">
-                  {product?.name ||
-                    "MASTER CAPS"}
-                </h1>
+              <button
+                type="button"
+                onClick={onNext}
+                className="absolute right-3 top-1/2 z-20 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full border border-white/40 bg-white/90 text-black shadow-lg backdrop-blur-md transition hover:bg-red-600 hover:text-white sm:right-5 sm:h-11 sm:w-11"
+                aria-label="Imagen siguiente"
+              >
+                <ChevronRight size={19} />
+              </button>
 
-                <p className="mt-5 max-w-[520px] text-[13px] leading-6 text-white/78 sm:text-[15px] sm:leading-7">
-                  Productos con stock real, tallas disponibles y apartados seguros desde cualquier lugar.
-                </p>
-
-                {product && (
-                  <p className="mt-4 text-[22px] font-medium tracking-[-0.04em] sm:text-[26px]">
-                    {formatCurrency(
-                      product.salePrice
-                    )}
-                  </p>
-                )}
-
-                <div className="mt-8 flex flex-col gap-3 sm:flex-row">
-                  <button
-                    type="button"
-                    onClick={onExplore}
-                    className="inline-flex min-h-[52px] items-center justify-center gap-3 bg-white px-7 py-3 text-[10px] font-medium uppercase tracking-[0.18em] text-black transition hover:bg-red-600 hover:text-white"
-                  >
-                    Explorar colección
-                    <ArrowRight size={15} />
-                  </button>
-
-                  {product && (
-                    <Link
-                      to={`/catalogo/${storeId}/apartar/${product.id}`}
-                      className="inline-flex min-h-[52px] items-center justify-center border border-white/45 bg-black/10 px-7 py-3 text-[10px] font-medium uppercase tracking-[0.18em] text-white backdrop-blur-sm transition hover:bg-white hover:text-black"
-                    >
-                      Ver producto
-                    </Link>
-                  )}
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div className="relative hidden overflow-hidden bg-white lg:flex lg:flex-col">
-            <div className="flex items-center justify-between border-b border-black/[0.08] px-7 py-5">
-              <div>
-                <p className="text-[8px] font-medium uppercase tracking-[0.2em] text-black/38">
-                  Vista adicional
-                </p>
-
-                <p className="mt-1 text-[11px] font-medium uppercase tracking-[0.08em]">
-                  Detalles del producto
-                </p>
-              </div>
-
-              <span className="text-[10px] text-black/35">
-                {String(index + 1).padStart(
-                  2,
-                  "0"
-                )}{" "}
-                /{" "}
-                {String(total).padStart(
-                  2,
-                  "0"
-                )}
-              </span>
-            </div>
-
-            <div className="relative flex flex-1 items-center justify-center overflow-hidden p-8 xl:p-11">
-              {secondImage ? (
-                <img
-                  src={secondImage}
-                  alt={`${product?.name || "Producto"} vista secundaria`}
-                  loading="eager"
-                  decoding="async"
-                  fetchPriority="high"
-                  className="max-h-full max-w-full object-contain transition duration-700"
-                />
-              ) : coverImage?.url ? (
-                <img
-                  src={coverImage.url}
-                  alt={product?.name || "Producto"}
-                  loading="eager"
-                  decoding="async"
-                  className="max-h-full max-w-full object-contain"
-                />
-              ) : (
-                <Camera
-                  size={44}
-                  className="text-black/18"
-                />
-              )}
-            </div>
-
-            <div className="border-t border-black/[0.08] px-7 py-5">
-              <p className="line-clamp-1 text-[11px] font-medium uppercase tracking-[0.08em]">
-                {product?.name ||
-                  "Master Caps"}
-              </p>
-
-              <p className="mt-2 text-[9px] uppercase tracking-[0.14em] text-black/38">
-                Desliza para descubrir más
-              </p>
-            </div>
-          </div>
-        </div>
-
-        {total > 1 && (
-          <>
-            <button
-              type="button"
-              onClick={onPrevious}
-              className="absolute left-3 top-1/2 z-20 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full border border-white/30 bg-black/20 text-white backdrop-blur-md transition hover:bg-white hover:text-black sm:left-5 lg:h-12 lg:w-12"
-              aria-label="Producto anterior"
-            >
-              <ChevronLeft size={20} />
-            </button>
-
-            <button
-              type="button"
-              onClick={onNext}
-              className="absolute right-3 top-1/2 z-20 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full border border-white/45 bg-white/90 text-black shadow-lg backdrop-blur-md transition hover:bg-red-600 hover:text-white sm:right-5 lg:h-12 lg:w-12"
-              aria-label="Producto siguiente"
-            >
-              <ChevronRight size={20} />
-            </button>
-
-            <div className="absolute bottom-5 left-1/2 z-20 flex -translate-x-1/2 items-center gap-2 rounded-full border border-white/20 bg-black/20 px-3 py-2 backdrop-blur-md lg:left-[37%]">
-              {Array.from({
-                length: total,
-              }).map(
-                (_, slideIndex) => (
+              <div className="absolute bottom-4 left-1/2 z-20 flex -translate-x-1/2 items-center gap-2 rounded-full border border-white/20 bg-black/25 px-3 py-2 backdrop-blur-md">
+                {Array.from({
+                  length: total,
+                }).map((_, slideIndex) => (
                   <button
                     key={slideIndex}
                     type="button"
@@ -1790,18 +1891,18 @@ function HeroSection({
                         slideIndex
                       )
                     }
-                    className={`h-1.5 rounded-full transition-all ${
+                    className={`h-1.5 rounded-full transition-all duration-300 ${
                       slideIndex === index
-                        ? "w-8 bg-white"
+                        ? "w-7 bg-white"
                         : "w-1.5 bg-white/45 hover:bg-white/75"
                     }`}
-                    aria-label={`Ir al producto ${slideIndex + 1}`}
+                    aria-label={`Ir a imagen ${slideIndex + 1}`}
                   />
-                )
-              )}
-            </div>
-          </>
-        )}
+                ))}
+              </div>
+            </>
+          )}
+        </div>
       </div>
     </section>
   );
@@ -1816,7 +1917,7 @@ function CategoryShowcaseSection({
   }
 
   return (
-    <section className="px-4 py-16 sm:px-6 lg:px-10 xl:px-16">
+    <section id="catalog-categories" className="scroll-mt-28 px-4 py-16 sm:px-6 lg:px-10 xl:px-16">
       <div className="mx-auto max-w-[1800px]">
         <div className="mb-8 flex items-end justify-between gap-5">
           <div>
@@ -1846,20 +1947,23 @@ function CategoryShowcaseSection({
                 className="group flex min-h-[430px] w-[82vw] max-w-[340px] shrink-0 snap-start flex-col text-left sm:min-h-[470px] sm:w-auto sm:max-w-none"
               >
                 <div className="relative aspect-[4/4.35] w-full overflow-hidden bg-white">
-                  {category.imageUrl ? (
-                    <img
-                      src={category.imageUrl}
-                      alt={category.name}
-                      loading={categoryIndex < 2 ? "eager" : "lazy"}
-                      decoding="async"
-                      fetchPriority={categoryIndex === 0 ? "high" : "auto"}
-                      className="h-full w-full object-contain p-2 transition duration-500 group-hover:scale-[1.025] sm:p-3"
-                    />
-                  ) : (
-                    <div className="flex h-full w-full items-center justify-center bg-black/[0.025]">
-                      <Camera size={34} className="text-black/20" />
-                    </div>
-                  )}
+                  <GlobalGroupImage
+                    imageBaseName={
+                      category.imageBaseName
+                    }
+                    alt={category.name}
+                    loading={
+                      categoryIndex < 2
+                        ? "eager"
+                        : "lazy"
+                    }
+                    fetchPriority={
+                      categoryIndex === 0
+                        ? "high"
+                        : "auto"
+                    }
+                    className="h-full w-full object-contain p-2 transition duration-500 group-hover:scale-[1.025] sm:p-3"
+                  />
                 </div>
 
                 <div className="flex flex-1 flex-col border-t border-black/[0.09] bg-white px-1 pb-2 pt-4 text-black">
@@ -1878,6 +1982,312 @@ function CategoryShowcaseSection({
                 </div>
               </button>
             )
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function GlobalGroupLandingSection({
+  group,
+  mainCategories,
+  onBack,
+  onSelectMainCategory,
+  onSelectSubcategory,
+}) {
+  if (!group) {
+    return null;
+  }
+
+  const isDirectSubcategoryGroup =
+    group.id === "accesorios" ||
+    group.id === "gorras";
+
+  const groupSubcategories = [
+    ...new Map(
+      mainCategories
+        .flatMap(
+          (mainCategory) =>
+            (
+              mainCategory.subcategories ||
+              []
+            ).map(
+              (subcategory) => {
+                const imageProduct =
+                  mainCategory.products?.find(
+                    (product) =>
+                      safeText(
+                        product.categoryId
+                      ) ===
+                        subcategory.id &&
+                      getProductCoverImage(
+                        product
+                      )?.url
+                  );
+
+                return {
+                  ...subcategory,
+                  products:
+                    mainCategory.products?.filter(
+                      (product) =>
+                        safeText(
+                          product.categoryId
+                        ) ===
+                        subcategory.id
+                    ) || [],
+                  imageUrl:
+                    getProductCoverImage(
+                      imageProduct
+                    )?.url || "",
+                };
+              }
+            )
+        )
+        .map((subcategory) => [
+          subcategory.id,
+          subcategory,
+        ])
+    ).values(),
+  ].sort((left, right) =>
+    String(left.name).localeCompare(
+      String(right.name),
+      "es-CO"
+    )
+  );
+
+  return (
+    <section className="px-4 py-7 sm:px-6 lg:px-10 lg:py-12 xl:px-16">
+      <div className="mx-auto max-w-[1800px]">
+        <button
+          type="button"
+          onClick={onBack}
+          className="inline-flex items-center gap-2 text-[9px] font-medium uppercase tracking-[0.15em] text-black/48 transition hover:text-red-600"
+        >
+          <ArrowLeft size={14} />
+          Volver al inicio
+        </button>
+
+        <div className="mt-6 overflow-hidden bg-white">
+          <GlobalGroupImage
+            imageBaseName={
+              group.imageBaseName
+            }
+            alt={group.name}
+            loading="eager"
+            fetchPriority="high"
+            className="block h-auto w-full object-contain object-center"
+          />
+        </div>
+
+        {/* MÓVIL: SOLO TEXTO */}
+        <div className="mt-5 border-t border-black/[0.1] lg:hidden">
+          {isDirectSubcategoryGroup ? (
+            <>
+              {groupSubcategories.map(
+                (subcategory) => (
+                  <button
+                    key={subcategory.id}
+                    type="button"
+                    onClick={() =>
+                      onSelectSubcategory(
+                        subcategory.id
+                      )
+                    }
+                    className="flex min-h-[62px] w-full items-center justify-between gap-4 border-b border-black/[0.1] py-4 text-left"
+                  >
+                    <span className="text-[13px] font-medium uppercase tracking-[0.055em]">
+                      {subcategory.name}
+                    </span>
+
+                    <ChevronRight
+                      size={17}
+                      className="shrink-0"
+                    />
+                  </button>
+                )
+              )}
+
+              <button
+                type="button"
+                onClick={() => {
+                  const firstMain =
+                    mainCategories[0];
+
+                  if (firstMain) {
+                    onSelectMainCategory(
+                      firstMain.id
+                    );
+                  }
+                }}
+                className="mt-5 flex min-h-[52px] w-full items-center justify-center gap-2 bg-black px-4 text-[9px] font-medium uppercase tracking-[0.14em] text-white"
+              >
+                Ver todo {group.name}
+                <ArrowRight size={13} />
+              </button>
+            </>
+          ) : (
+            mainCategories.map(
+              (mainCategory) => (
+                <button
+                  key={mainCategory.id}
+                  type="button"
+                  onClick={() =>
+                    onSelectMainCategory(
+                      mainCategory.id
+                    )
+                  }
+                  className="flex min-h-[62px] w-full items-center justify-between gap-4 border-b border-black/[0.1] py-4 text-left"
+                >
+                  <span className="text-[13px] font-medium uppercase tracking-[0.055em]">
+                    {mainCategory.name}
+                  </span>
+
+                  <ChevronRight
+                    size={17}
+                    className="shrink-0"
+                  />
+                </button>
+              )
+            )
+          )}
+        </div>
+
+        {/* ESCRITORIO */}
+        <div className="mt-8 hidden lg:block">
+          {isDirectSubcategoryGroup ? (
+            <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
+              {groupSubcategories.map(
+                (
+                  subcategory,
+                  index
+                ) => (
+                  <button
+                    key={subcategory.id}
+                    type="button"
+                    onClick={() =>
+                      onSelectSubcategory(
+                        subcategory.id
+                      )
+                    }
+                    className="group overflow-hidden border border-black/[0.08] bg-white text-left"
+                  >
+                    <div className="relative aspect-[4/4.35] overflow-hidden bg-white">
+                      {subcategory.imageUrl ? (
+                        <img
+                          src={
+                            subcategory.imageUrl
+                          }
+                          alt={
+                            subcategory.name
+                          }
+                          loading={
+                            index < 3
+                              ? "eager"
+                              : "lazy"
+                          }
+                          decoding="async"
+                          className="h-full w-full object-contain p-3 transition duration-500 group-hover:scale-[1.025]"
+                        />
+                      ) : (
+                        <div className="flex h-full items-center justify-center bg-black/[0.025]">
+                          <Camera
+                            size={34}
+                            className="text-black/20"
+                          />
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="flex min-h-[112px] items-center justify-between gap-5 border-t border-black/[0.08] px-5 py-5">
+                      <div>
+                        <p className="text-[8px] uppercase tracking-[0.16em] text-black/38">
+                          {
+                            subcategory.products
+                              .length
+                          }{" "}
+                          producto(s)
+                        </p>
+
+                        <h2 className="mt-2 text-[21px] font-medium uppercase tracking-[-0.03em]">
+                          {subcategory.name}
+                        </h2>
+                      </div>
+
+                      <ArrowRight
+                        size={18}
+                        className="shrink-0 transition group-hover:translate-x-1 group-hover:text-red-600"
+                      />
+                    </div>
+                  </button>
+                )
+              )}
+            </div>
+          ) : (
+            <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
+              {mainCategories.map(
+                (mainCategory, index) => (
+                  <button
+                    key={mainCategory.id}
+                    type="button"
+                    onClick={() =>
+                      onSelectMainCategory(
+                        mainCategory.id
+                      )
+                    }
+                    className="group overflow-hidden border border-black/[0.08] bg-white text-left"
+                  >
+                    <div className="relative aspect-[16/10] overflow-hidden bg-black/[0.025]">
+                      {mainCategory.imageUrl ? (
+                        <img
+                          src={
+                            mainCategory.imageUrl
+                          }
+                          alt={
+                            mainCategory.name
+                          }
+                          loading={
+                            index < 3
+                              ? "eager"
+                              : "lazy"
+                          }
+                          decoding="async"
+                          className="h-full w-full object-contain p-3 transition duration-500 group-hover:scale-[1.025]"
+                        />
+                      ) : (
+                        <div className="flex h-full items-center justify-center">
+                          <Camera
+                            size={34}
+                            className="text-black/20"
+                          />
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="flex min-h-[112px] items-center justify-between gap-4 border-t border-black/[0.08] px-5 py-5">
+                      <div>
+                        <p className="text-[8px] uppercase tracking-[0.16em] text-black/38">
+                          {
+                            mainCategory.products
+                              .length
+                          }{" "}
+                          producto(s)
+                        </p>
+
+                        <h2 className="mt-2 text-[22px] font-medium uppercase tracking-[-0.035em]">
+                          {mainCategory.name}
+                        </h2>
+                      </div>
+
+                      <ArrowRight
+                        size={18}
+                        className="shrink-0 transition group-hover:translate-x-1 group-hover:text-red-600"
+                      />
+                    </div>
+                  </button>
+                )
+              )}
+            </div>
           )}
         </div>
       </div>
@@ -2822,17 +3232,62 @@ function CatalogLoading() {
 }
 
 function MobileCatalogMenu({
+  globalGroups,
+  activeGlobalGroup,
   mainCategories,
   categories,
   cartCount,
   onClose,
   onOpenCart,
+  onSelectGlobalGroup,
   onSelectMainCategory,
   onSelectSubcategory,
   onHome,
 }) {
-  const [expandedId, setExpandedId] =
-    useState("");
+  const initialGroup =
+    activeGlobalGroup !== "all"
+      ? activeGlobalGroup
+      : globalGroups[0]?.id || "";
+
+  const [menuGroup, setMenuGroup] =
+    useState(initialGroup);
+
+  const visibleMainCategories =
+    mainCategories.filter(
+      (mainCategory) =>
+        getGlobalGroupId(
+          mainCategory
+        ) === menuGroup
+    );
+
+  const selectedMenuGroup =
+    globalGroups.find(
+      (group) =>
+        group.id === menuGroup
+    );
+
+  const visibleSubcategories = [
+    ...new Map(
+      visibleMainCategories
+        .flatMap((mainCategory) =>
+          categories.filter(
+            (category) =>
+              safeText(
+                category.parentCategoryId
+              ) === mainCategory.id
+          )
+        )
+        .map((subcategory) => [
+          subcategory.id,
+          subcategory,
+        ])
+    ).values(),
+  ].sort((left, right) =>
+    String(left.name).localeCompare(
+      String(right.name),
+      "es-CO"
+    )
+  );
 
   return (
     <div className="fixed inset-0 z-[90] bg-black/50 backdrop-blur-sm lg:hidden">
@@ -2843,133 +3298,166 @@ function MobileCatalogMenu({
         aria-label="Cerrar menú"
       />
 
-      <aside className="relative flex h-full w-[90%] max-w-[420px] flex-col overflow-y-auto bg-white">
-        <div className="flex items-center justify-between border-b border-black/[0.08] px-5 py-4">
-          <img
-            src="/logo.png"
-            alt="Master Caps"
-            className="h-14 w-auto object-contain"
-          />
+      <aside className="relative flex h-full w-[92%] max-w-[430px] flex-col overflow-hidden bg-white shadow-[18px_0_60px_rgba(0,0,0,0.18)]">
+        {/* CABECERA FIJA */}
+        <div className="shrink-0 border-b border-black/[0.08] bg-white">
+          <div className="flex items-center justify-between px-5 py-4">
+            <button
+              type="button"
+              onClick={() => {
+                onHome();
+                onClose();
+              }}
+              aria-label="Ir al inicio"
+            >
+              <img
+                src="/logo.png"
+                alt="Master Caps"
+                className="h-16 w-auto object-contain"
+              />
+            </button>
 
-          <button
-            type="button"
-            onClick={onClose}
-            className="flex h-10 w-10 items-center justify-center"
-          >
-            <X size={21} />
-          </button>
+            <button
+              type="button"
+              onClick={onClose}
+              className="flex h-10 w-10 items-center justify-center"
+              aria-label="Cerrar menú"
+            >
+              <X size={21} />
+            </button>
+          </div>
+
+          <div className="grid grid-cols-3 border-t border-black/[0.06]">
+            {globalGroups.map(
+              (group) => (
+                <button
+                  key={group.id}
+                  type="button"
+                  onClick={() =>
+                    setMenuGroup(
+                      group.id
+                    )
+                  }
+                  className={`min-h-[48px] border-b-2 px-2 text-[8px] font-medium uppercase tracking-[0.07em] transition ${
+                    menuGroup === group.id
+                      ? "border-black text-black"
+                      : "border-transparent text-black/42"
+                  }`}
+                >
+                  {group.name}
+                </button>
+              )
+            )}
+          </div>
         </div>
 
-        <nav className="flex-1 px-5 py-5">
+        {/* IMAGEN COMPLETA Y FIJA */}
+        <div className="shrink-0 border-b border-black/[0.08] bg-[#f5f5f5]">
+          <div className="relative h-[150px] overflow-hidden">
+            <GlobalGroupImage
+              imageBaseName={
+                selectedMenuGroup?.imageBaseName ||
+                "hombre"
+              }
+              alt={
+                selectedMenuGroup?.name ||
+                menuGroup
+              }
+              loading="eager"
+              fetchPriority="high"
+              className="h-full w-full object-contain object-center"
+            />
+          </div>
+        </div>
+
+        {/* ÚNICA ZONA CON SCROLL */}
+        <nav className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-2 [scrollbar-width:thin] [scrollbar-color:rgba(0,0,0,0.18)_transparent]">
+          {menuGroup === "hombre"
+            ? visibleMainCategories.map(
+                (mainCategory) => (
+                  <button
+                    key={
+                      mainCategory.id
+                    }
+                    type="button"
+                    onClick={() => {
+                      onSelectMainCategory(
+                        mainCategory.id
+                      );
+                      onClose();
+                    }}
+                    className="flex min-h-[52px] w-full items-center justify-between gap-3 border-b border-black/[0.09] text-left"
+                  >
+                    <span className="text-[11px] font-medium uppercase tracking-[0.055em]">
+                      {
+                        mainCategory.name
+                      }
+                    </span>
+
+                    <ChevronRight
+                      size={15}
+                      className="shrink-0"
+                    />
+                  </button>
+                )
+              )
+            : visibleSubcategories.map(
+                (subcategory) => (
+                  <button
+                    key={
+                      subcategory.id
+                    }
+                    type="button"
+                    onClick={() => {
+                      onSelectSubcategory(
+                        subcategory.id
+                      );
+                      onClose();
+                    }}
+                    className="flex min-h-[52px] w-full items-center justify-between gap-3 border-b border-black/[0.09] text-left"
+                  >
+                    <span className="text-[11px] font-medium uppercase tracking-[0.055em]">
+                      {
+                        subcategory.name
+                      }
+                    </span>
+
+                    <ChevronRight
+                      size={15}
+                      className="shrink-0"
+                    />
+                  </button>
+                )
+              )}
+        </nav>
+
+        {/* BOTONES FIJOS INFERIORES */}
+        <div className="shrink-0 border-t border-black/[0.08] bg-white px-5 pb-[calc(16px+env(safe-area-inset-bottom))] pt-4 shadow-[0_-14px_35px_rgba(0,0,0,0.06)]">
           <button
             type="button"
             onClick={() => {
-              onHome();
+              onSelectGlobalGroup(
+                menuGroup
+              );
               onClose();
             }}
-            className="flex w-full items-center justify-between border-b border-black/[0.08] py-4 text-left text-[12px] font-medium uppercase tracking-[0.1em]"
+            className="inline-flex min-h-[50px] w-full items-center justify-center gap-2 bg-black px-4 text-[9px] font-medium uppercase tracking-[0.14em] text-white transition active:scale-[0.99]"
           >
-            Nuevo
-            <ArrowRight size={15} />
+            Ver todo{" "}
+            {
+              selectedMenuGroup?.name
+            }
+            <ArrowRight size={13} />
           </button>
 
-          {mainCategories.map(
-            (mainCategory) => {
-              const subcategories =
-                categories.filter(
-                  (category) =>
-                    safeText(
-                      category.parentCategoryId
-                    ) ===
-                    mainCategory.id
-                );
-
-              const expanded =
-                expandedId ===
-                mainCategory.id;
-
-              return (
-                <div
-                  key={mainCategory.id}
-                  className="border-b border-black/[0.08]"
-                >
-                  <div className="flex items-center">
-                    <button
-                      type="button"
-                      onClick={() =>
-                        onSelectMainCategory(
-                          mainCategory.id
-                        )
-                      }
-                      className="flex-1 py-4 text-left text-[12px] font-medium uppercase tracking-[0.1em]"
-                    >
-                      {mainCategory.name}
-                    </button>
-
-                    {subcategories.length >
-                      0 && (
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setExpandedId(
-                            expanded
-                              ? ""
-                              : mainCategory.id
-                          )
-                        }
-                        className="flex h-12 w-12 items-center justify-center"
-                      >
-                        <ChevronDown
-                          size={17}
-                          className={`transition ${
-                            expanded
-                              ? "rotate-180"
-                              : ""
-                          }`}
-                        />
-                      </button>
-                    )}
-                  </div>
-
-                  {expanded && (
-                    <div className="pb-3 pl-4">
-                      {subcategories.map(
-                        (subcategory) => (
-                          <button
-                            key={
-                              subcategory.id
-                            }
-                            type="button"
-                            onClick={() =>
-                              onSelectSubcategory(
-                                subcategory.id
-                              )
-                            }
-                            className="block w-full py-3 text-left text-[10px] uppercase tracking-[0.1em] text-black/55"
-                          >
-                            {
-                              subcategory.name
-                            }
-                          </button>
-                        )
-                      )}
-                    </div>
-                  )}
-                </div>
-              );
-            }
-          )}
-        </nav>
-
-        <div className="border-t border-black/[0.08] p-5">
           <button
             type="button"
             onClick={onOpenCart}
-            className="flex h-12 w-full items-center justify-between bg-black px-5 text-[11px] font-medium uppercase tracking-[0.14em] text-white"
+            className="mt-3 flex min-h-[50px] w-full items-center justify-between bg-black px-5 text-[10px] font-medium uppercase tracking-[0.14em] text-white transition active:scale-[0.99]"
           >
             <span className="inline-flex items-center gap-2">
               <ShoppingBag
-                size={17}
+                size={16}
               />
               Carrito
             </span>
