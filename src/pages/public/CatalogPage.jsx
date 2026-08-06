@@ -1,21 +1,36 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link, useLocation, useParams, useSearchParams } from "react-router-dom";
 import {
+  Link,
+  useLocation,
+  useParams,
+  useSearchParams,
+} from "react-router-dom";
+import {
+  ArrowRight,
   CalendarClock,
   Camera,
+  ChevronDown,
+  ChevronLeft,
   ChevronRight,
-  Grid3X3,
   Images,
+  MapPin,
   Menu,
   PackageSearch,
+  Plus,
   Search,
+  ShieldCheck,
   ShoppingBag,
   SlidersHorizontal,
-  Sparkles,
+  Truck,
   X,
 } from "lucide-react";
 
-import { subscribeCategories } from "../../services/categories.service";
+import {
+  subscribeCategories,
+} from "../../services/categories.service";
+import {
+  subscribeMainCategories,
+} from "../../services/mainCategories.service";
 import {
   getProductCoverImage,
   getProductImages,
@@ -30,6 +45,8 @@ import { subscribeReservationSettings } from "../../services/reservations.servic
 const WHATSAPP_NUMBER = "573118169948";
 const WHATSAPP_MESSAGE =
   "Hola Master Caps, quiero recibir asesoría sobre los productos del catálogo.";
+
+const HERO_AUTOPLAY_MS = 6500;
 
 function getProductVariants(product) {
   return normalizeProductVariants(
@@ -47,100 +64,328 @@ function getAvailableVariants(product) {
 
 function getTotalStock(product) {
   return getProductVariants(product).reduce(
-    (total, variant) => total + Number(variant.stock || 0),
+    (total, variant) =>
+      total + Number(variant.stock || 0),
     0
   );
 }
 
-function normalizeCategoryName(value) {
+function normalizeDisplayName(value) {
   return String(value || "")
     .replace(/\s+/g, " ")
     .trim()
     .toLocaleUpperCase("es-CO");
 }
 
-export default function CatalogPage() {
-  const { storeId = "master-caps" } = useParams();
-  const location = useLocation();
-  const [searchParams, setSearchParams] = useSearchParams();
+function safeText(value) {
+  return String(value ?? "").trim();
+}
 
-  const [products, setProducts] = useState([]);
-  const [categories, setCategories] = useState([]);
-  const [reservationSettings, setReservationSettings] = useState({
+function productHasImage(product) {
+  return Boolean(getProductCoverImage(product)?.url);
+}
+
+function getProductSecondaryImage(product) {
+  const images = getProductImages(product).filter(
+    (image) => Boolean(image?.url)
+  );
+
+  return images[1]?.url || images[0]?.url || "";
+}
+
+function getMainCategoryForProduct(
+  product,
+  categoryById
+) {
+  const subcategory = categoryById.get(
+    safeText(product?.categoryId)
+  );
+
+  return safeText(
+    subcategory?.parentCategoryId
+  );
+}
+
+function getMainCategoryNameForProduct(
+  product,
+  categoryById,
+  mainCategoryById
+) {
+  const mainCategoryId =
+    getMainCategoryForProduct(
+      product,
+      categoryById
+    );
+
+  return normalizeDisplayName(
+    mainCategoryById.get(mainCategoryId)?.name
+  );
+}
+
+function getCategoryPath(
+  product,
+  categoryById,
+  mainCategoryById
+) {
+  const subcategory = categoryById.get(
+    safeText(product?.categoryId)
+  );
+
+  const mainName =
+    getMainCategoryNameForProduct(
+      product,
+      categoryById,
+      mainCategoryById
+    );
+
+  const subcategoryName =
+    normalizeDisplayName(
+      subcategory?.name ||
+        product?.categoryName
+    );
+
+  return [mainName, subcategoryName]
+    .filter(Boolean)
+    .join(" / ");
+}
+
+export default function CatalogPage() {
+  const { storeId = "master-caps" } =
+    useParams();
+
+  const location = useLocation();
+  const [
+    searchParams,
+    setSearchParams,
+  ] = useSearchParams();
+
+  const [products, setProducts] =
+    useState([]);
+  const [categories, setCategories] =
+    useState([]);
+  const [
+    mainCategories,
+    setMainCategories,
+  ] = useState([]);
+
+  const [
+    reservationSettings,
+    setReservationSettings,
+  ] = useState({
     defaultReservationDays: 7,
   });
 
-  const [search, setSearch] = useState(() => searchParams.get("q") || "");
-  const [categoryFilter, setCategoryFilter] = useState(() => searchParams.get("categoria") || "all");
-  const [sizeFilter, setSizeFilter] = useState(() => searchParams.get("talla") || "all");
-  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
-  const [cartOpen, setCartOpen] = useState(false);
+  const [search, setSearch] = useState(
+    () => searchParams.get("q") || ""
+  );
+
+  const [
+    mainCategoryFilter,
+    setMainCategoryFilter,
+  ] = useState(
+    () =>
+      searchParams.get("principal") ||
+      "all"
+  );
+
+  const [
+    categoryFilter,
+    setCategoryFilter,
+  ] = useState(
+    () =>
+      searchParams.get("categoria") ||
+      "all"
+  );
+
+  const [sizeFilter, setSizeFilter] =
+    useState(
+      () =>
+        searchParams.get("talla") ||
+        "all"
+    );
+
+  const [mobileMenuOpen, setMobileMenuOpen] =
+    useState(false);
+  const [filtersOpen, setFiltersOpen] =
+    useState(false);
+  const [cartOpen, setCartOpen] =
+    useState(false);
+  const [searchOpen, setSearchOpen] =
+    useState(false);
+  const [heroIndex, setHeroIndex] =
+    useState(0);
 
   const cart = useReservationCart(storeId);
 
-  const [loading, setLoading] = useState(true);
-  const restorationDoneRef = useRef(false);
+  const [loading, setLoading] =
+    useState(true);
+
+  const restorationDoneRef =
+    useRef(false);
+  const productsReadyRef = useRef(false);
+  const categoriesReadyRef = useRef(false);
+  const mainCategoriesReadyRef =
+    useRef(false);
 
   useEffect(() => {
     setLoading(true);
 
-    const unsubscribeProducts = subscribeProducts(
-      (productsData) => {
-        setProducts(productsData);
+    function updateLoadingState() {
+      if (
+        productsReadyRef.current &&
+        categoriesReadyRef.current &&
+        mainCategoriesReadyRef.current
+      ) {
         setLoading(false);
-      },
-      () => {
-        setLoading(false);
-        alert("No se pudo cargar el catálogo en tiempo real.");
-      },
-      storeId
-    );
+      }
+    }
 
-    const unsubscribeCategories = subscribeCategories(
-      (categoriesData) =>
-        setCategories(
-          categoriesData.map((category) => ({
-            ...category,
-            name: normalizeCategoryName(category.name),
-          }))
-        ),
-      () => alert("No se pudieron cargar las categorías del catálogo."),
-      storeId
-    );
+    const unsubscribeProducts =
+      subscribeProducts(
+        (productsData) => {
+          setProducts(productsData);
+          productsReadyRef.current = true;
+          updateLoadingState();
+        },
+        () => {
+          productsReadyRef.current = true;
+          updateLoadingState();
+          alert(
+            "No se pudo cargar el catálogo en tiempo real."
+          );
+        },
+        storeId
+      );
 
-    const unsubscribeSettings = subscribeReservationSettings(
-      setReservationSettings,
-      () => {},
-      storeId
-    );
+    const unsubscribeCategories =
+      subscribeCategories(
+        (categoriesData) => {
+          setCategories(
+            categoriesData.map(
+              (category) => ({
+                ...category,
+                name: normalizeDisplayName(
+                  category.name
+                ),
+              })
+            )
+          );
+
+          categoriesReadyRef.current = true;
+          updateLoadingState();
+        },
+        () => {
+          categoriesReadyRef.current = true;
+          updateLoadingState();
+          alert(
+            "No se pudieron cargar las subcategorías del catálogo."
+          );
+        },
+        storeId
+      );
+
+    const unsubscribeMainCategories =
+      subscribeMainCategories(
+        (mainCategoriesData) => {
+          setMainCategories(
+            mainCategoriesData
+              .filter(
+                (category) =>
+                  category.isActive !== false
+              )
+              .map((category) => ({
+                ...category,
+                name: normalizeDisplayName(
+                  category.name
+                ),
+              }))
+          );
+
+          mainCategoriesReadyRef.current =
+            true;
+          updateLoadingState();
+        },
+        () => {
+          mainCategoriesReadyRef.current =
+            true;
+          updateLoadingState();
+          alert(
+            "No se pudieron cargar las categorías principales."
+          );
+        },
+        storeId,
+        {
+          includeArchived: false,
+        }
+      );
+
+    const unsubscribeSettings =
+      subscribeReservationSettings(
+        setReservationSettings,
+        () => {},
+        storeId
+      );
 
     return () => {
       unsubscribeProducts();
       unsubscribeCategories();
+      unsubscribeMainCategories();
       unsubscribeSettings();
     };
   }, [storeId]);
 
   useEffect(() => {
-    if (!mobileSidebarOpen && !cartOpen) return undefined;
+    if (
+      !mobileMenuOpen &&
+      !filtersOpen &&
+      !cartOpen &&
+      !searchOpen
+    ) {
+      return undefined;
+    }
 
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
+    const previousOverflow =
+      document.body.style.overflow;
+
+    document.body.style.overflow =
+      "hidden";
 
     return () => {
-      document.body.style.overflow = previousOverflow;
+      document.body.style.overflow =
+        previousOverflow;
     };
-  }, [mobileSidebarOpen, cartOpen]);
+  }, [
+    mobileMenuOpen,
+    filtersOpen,
+    cartOpen,
+    searchOpen,
+  ]);
 
   useEffect(() => {
-    const nextParams = new URLSearchParams();
+    const nextParams =
+      new URLSearchParams();
+
+    if (
+      mainCategoryFilter !== "all"
+    ) {
+      nextParams.set(
+        "principal",
+        mainCategoryFilter
+      );
+    }
 
     if (categoryFilter !== "all") {
-      nextParams.set("categoria", categoryFilter);
+      nextParams.set(
+        "categoria",
+        categoryFilter
+      );
     }
 
     if (sizeFilter !== "all") {
-      nextParams.set("talla", sizeFilter);
+      nextParams.set(
+        "talla",
+        sizeFilter
+      );
     }
 
     const cleanSearch = search.trim();
@@ -149,16 +394,30 @@ export default function CatalogPage() {
       nextParams.set("q", cleanSearch);
     }
 
-    setSearchParams(nextParams, { replace: true });
-  }, [categoryFilter, sizeFilter, search, setSearchParams]);
+    setSearchParams(nextParams, {
+      replace: true,
+    });
+  }, [
+    mainCategoryFilter,
+    categoryFilter,
+    sizeFilter,
+    search,
+    setSearchParams,
+  ]);
 
   useEffect(() => {
-    if (loading || restorationDoneRef.current) return;
+    if (
+      loading ||
+      restorationDoneRef.current
+    ) {
+      return;
+    }
 
     restorationDoneRef.current = true;
 
     const savedScrollY = Number(
-      location.state?.catalogNavigation?.scrollY ||
+      location.state
+        ?.catalogNavigation?.scrollY ||
         sessionStorage.getItem(
           `catalog-scroll:${storeId}:${location.search}`
         ) ||
@@ -173,76 +432,667 @@ export default function CatalogPage() {
         });
       });
     }
-  }, [loading, location.search, location.state, storeId]);
+  }, [
+    loading,
+    location.search,
+    location.state,
+    storeId,
+  ]);
 
   useEffect(() => {
-    const storageKey = `catalog-scroll:${storeId}:${location.search}`;
+    const storageKey =
+      `catalog-scroll:${storeId}:${location.search}`;
 
     const saveScroll = () => {
-      sessionStorage.setItem(storageKey, String(window.scrollY));
+      sessionStorage.setItem(
+        storageKey,
+        String(window.scrollY)
+      );
     };
 
-    window.addEventListener("scroll", saveScroll, { passive: true });
+    window.addEventListener(
+      "scroll",
+      saveScroll,
+      {
+        passive: true,
+      }
+    );
 
     return () => {
-      window.removeEventListener("scroll", saveScroll);
+      window.removeEventListener(
+        "scroll",
+        saveScroll
+      );
       saveScroll();
     };
   }, [location.search, storeId]);
 
-  const availableSizes = useMemo(() => {
-    const sizes = products.flatMap((product) =>
-      getAvailableVariants(product).map((variant) => variant.size)
+  const categoryById = useMemo(
+    () =>
+      new Map(
+        categories.map((category) => [
+          category.id,
+          category,
+        ])
+      ),
+    [categories]
+  );
+
+  const mainCategoryById =
+    useMemo(
+      () =>
+        new Map(
+          mainCategories.map(
+            (category) => [
+              category.id,
+              category,
+            ]
+          )
+        ),
+      [mainCategories]
     );
+
+  const availableProducts = useMemo(
+    () =>
+      products.filter(
+        (product) =>
+          getTotalStock(product) > 0
+      ),
+    [products]
+  );
+
+  const heroProducts = useMemo(() => {
+    const withImages =
+      availableProducts.filter(
+        productHasImage
+      );
+
+    const prioritized = [
+      ...withImages.filter(
+        (product) =>
+          getProductImages(product).length >
+          1
+      ),
+      ...withImages,
+    ];
+
+    const unique = [];
+    const ids = new Set();
+
+    prioritized.forEach((product) => {
+      if (
+        product?.id &&
+        !ids.has(product.id)
+      ) {
+        ids.add(product.id);
+        unique.push(product);
+      }
+    });
+
+    return unique.slice(0, 5);
+  }, [availableProducts]);
+
+  useEffect(() => {
+    if (heroProducts.length <= 1) {
+      return undefined;
+    }
+
+    const timer = window.setInterval(
+      () => {
+        setHeroIndex((current) =>
+          current >=
+          heroProducts.length - 1
+            ? 0
+            : current + 1
+        );
+      },
+      HERO_AUTOPLAY_MS
+    );
+
+    return () =>
+      window.clearInterval(timer);
+  }, [heroProducts.length]);
+
+  useEffect(() => {
+    if (
+      heroIndex >
+      heroProducts.length - 1
+    ) {
+      setHeroIndex(0);
+    }
+  }, [
+    heroIndex,
+    heroProducts.length,
+  ]);
+
+  const productsForSizeFilter = useMemo(() => {
+    if (categoryFilter !== "all") {
+      return availableProducts.filter(
+        (product) =>
+          safeText(product.categoryId) ===
+          categoryFilter
+      );
+    }
+
+    if (mainCategoryFilter !== "all") {
+      return availableProducts.filter(
+        (product) =>
+          getMainCategoryForProduct(
+            product,
+            categoryById
+          ) === mainCategoryFilter
+      );
+    }
+
+    return availableProducts;
+  }, [
+    availableProducts,
+    categoryFilter,
+    mainCategoryFilter,
+    categoryById,
+  ]);
+
+  const availableSizes = useMemo(() => {
+    const sizes =
+      productsForSizeFilter.flatMap(
+        (product) =>
+          getAvailableVariants(
+            product
+          ).map(
+            (variant) =>
+              safeText(variant.size)
+          )
+      );
 
     return [...new Set(sizes)]
       .filter(Boolean)
-      .sort((a, b) => String(a).localeCompare(String(b)));
-  }, [products]);
+      .sort((left, right) =>
+        String(left).localeCompare(
+          String(right),
+          "es-CO",
+          {
+            numeric: true,
+            sensitivity: "base",
+          }
+        )
+      );
+  }, [productsForSizeFilter]);
+
+  useEffect(() => {
+    if (
+      sizeFilter !== "all" &&
+      !availableSizes.includes(
+        sizeFilter
+      )
+    ) {
+      setSizeFilter("all");
+    }
+  }, [
+    availableSizes,
+    sizeFilter,
+  ]);
+
+  const filteredSubcategories =
+    useMemo(() => {
+      if (
+        mainCategoryFilter === "all"
+      ) {
+        return categories;
+      }
+
+      return categories.filter(
+        (category) =>
+          safeText(
+            category.parentCategoryId
+          ) === mainCategoryFilter
+      );
+    }, [
+      categories,
+      mainCategoryFilter,
+    ]);
 
   const visibleProducts = useMemo(() => {
-    const cleanSearch = search.trim().toLowerCase();
+    const cleanSearch = search
+      .trim()
+      .toLocaleLowerCase("es-CO");
 
-    return products.filter((product) => {
-      const variants = getAvailableVariants(product);
-      const stock = getTotalStock(product);
+    return availableProducts.filter(
+      (product) => {
+        const variants =
+          getAvailableVariants(product);
 
-      const matchesSearch =
-        !cleanSearch ||
-        String(product.name || "").toLowerCase().includes(cleanSearch) ||
-        String(product.code || "").toLowerCase().includes(cleanSearch) ||
-        String(product.categoryName || "").toLowerCase().includes(cleanSearch) ||
-        variants.some((variant) =>
-          String(variant.size || "").toLowerCase().includes(cleanSearch)
+        const productMainCategoryId =
+          getMainCategoryForProduct(
+            product,
+            categoryById
+          );
+
+        const categoryPath =
+          getCategoryPath(
+            product,
+            categoryById,
+            mainCategoryById
+          );
+
+        const matchesSearch =
+          !cleanSearch ||
+          safeText(product.name)
+            .toLocaleLowerCase("es-CO")
+            .includes(cleanSearch) ||
+          safeText(product.code)
+            .toLocaleLowerCase("es-CO")
+            .includes(cleanSearch) ||
+          categoryPath
+            .toLocaleLowerCase("es-CO")
+            .includes(cleanSearch) ||
+          variants.some((variant) =>
+            safeText(variant.size)
+              .toLocaleLowerCase(
+                "es-CO"
+              )
+              .includes(cleanSearch)
+          );
+
+        const matchesMainCategory =
+          mainCategoryFilter === "all" ||
+          productMainCategoryId ===
+            mainCategoryFilter;
+
+        const matchesSubcategory =
+          categoryFilter === "all" ||
+          safeText(
+            product.categoryId
+          ) === categoryFilter;
+
+        const matchesSize =
+          sizeFilter === "all" ||
+          variants.some(
+            (variant) =>
+              safeText(
+                variant.size
+              ) === sizeFilter
+          );
+
+        return (
+          matchesSearch &&
+          matchesMainCategory &&
+          matchesSubcategory &&
+          matchesSize
         );
+      }
+    );
+  }, [
+    availableProducts,
+    search,
+    mainCategoryFilter,
+    categoryFilter,
+    sizeFilter,
+    categoryById,
+    mainCategoryById,
+  ]);
 
-      const matchesCategory =
-        categoryFilter === "all" || product.categoryId === categoryFilter;
+  const isHomeView =
+    mainCategoryFilter === "all" &&
+    categoryFilter === "all" &&
+    sizeFilter === "all" &&
+    !search.trim();
 
-      const matchesSize =
-        sizeFilter === "all" ||
-        variants.some((variant) => variant.size === sizeFilter);
+  const isMainCategoryLanding =
+    mainCategoryFilter !== "all" &&
+    categoryFilter === "all" &&
+    sizeFilter === "all" &&
+    !search.trim();
 
-      return stock > 0 && matchesSearch && matchesCategory && matchesSize;
+  const selectedMainCategory =
+    mainCategoryById.get(
+      mainCategoryFilter
+    ) || null;
+
+  const selectedSubcategory =
+    categoryById.get(
+      categoryFilter
+    ) || null;
+
+  const categoryShowcases = useMemo(
+    () =>
+      mainCategories
+        .map((mainCategory) => {
+          const categoryProducts =
+            availableProducts.filter(
+              (product) =>
+                getMainCategoryForProduct(
+                  product,
+                  categoryById
+                ) ===
+                mainCategory.id
+            );
+
+          const imageProduct =
+            categoryProducts.find(
+              (product) =>
+                getProductCoverImage(
+                  product
+                )?.url
+            );
+
+          return {
+            ...mainCategory,
+            products: categoryProducts,
+            imageUrl:
+              getProductCoverImage(
+                imageProduct
+              )?.url || "",
+          };
+        })
+        .filter(
+          (category) =>
+            category.products.length > 0
+        ),
+    [
+      mainCategories,
+      availableProducts,
+      categoryById,
+    ]
+  );
+
+  const selectedSubcategoryShowcases = useMemo(() => {
+    if (!isMainCategoryLanding) {
+      return [];
+    }
+
+    return categories
+      .filter(
+        (category) =>
+          safeText(category.parentCategoryId) ===
+          mainCategoryFilter
+      )
+      .map((category) => {
+        const categoryProducts =
+          availableProducts.filter(
+            (product) =>
+              safeText(product.categoryId) ===
+              category.id
+          );
+
+        const imageProduct =
+          categoryProducts.find((product) =>
+            Boolean(
+              getProductCoverImage(product)?.url
+            )
+          );
+
+        return {
+          ...category,
+          products: categoryProducts,
+          imageUrl:
+            getProductCoverImage(imageProduct)
+              ?.url || "",
+        };
+      })
+      .filter(
+        (category) =>
+          category.products.length > 0
+      )
+      .sort((left, right) =>
+        safeText(left.name).localeCompare(
+          safeText(right.name),
+          "es-CO"
+        )
+      );
+  }, [
+    isMainCategoryLanding,
+    categories,
+    mainCategoryFilter,
+    availableProducts,
+  ]);
+
+
+
+  useEffect(() => {
+    if (
+      mainCategoryFilter === "all" ||
+      categoryFilter !== "all"
+    ) {
+      return;
+    }
+
+    const eligibleSubcategories =
+      categories.filter(
+        (category) => {
+          if (
+            safeText(
+              category.parentCategoryId
+            ) !== mainCategoryFilter
+          ) {
+            return false;
+          }
+
+          return availableProducts.some(
+            (product) =>
+              safeText(
+                product.categoryId
+              ) === category.id
+          );
+        }
+      );
+
+    if (
+      eligibleSubcategories.length === 1
+    ) {
+      setCategoryFilter(
+        eligibleSubcategories[0].id
+      );
+      setSizeFilter("all");
+    }
+  }, [
+    mainCategoryFilter,
+    categoryFilter,
+    categories,
+    availableProducts,
+  ]);
+
+
+  useEffect(() => {
+    const urls = [
+      ...heroProducts
+        .slice(0, 3)
+        .flatMap((product) =>
+          getProductImages(product)
+            .slice(0, 2)
+            .map((image) => image?.url)
+        ),
+      ...categoryShowcases
+        .slice(0, 6)
+        .map((category) => category.imageUrl),
+      ...selectedSubcategoryShowcases
+        .slice(0, 6)
+        .map((subcategory) => subcategory.imageUrl),
+    ]
+      .map((url) => safeText(url))
+      .filter(Boolean);
+
+    const uniqueUrls = [...new Set(urls)];
+
+    uniqueUrls.forEach((url) => {
+      const image = new Image();
+      image.decoding = "async";
+      image.src = url;
     });
-  }, [products, search, categoryFilter, sizeFilter]);
+  }, [
+    heroProducts,
+    categoryShowcases,
+    selectedSubcategoryShowcases,
+  ]);
 
-  function selectCategory(value) {
+  const latestProducts = useMemo(
+    () =>
+      [...availableProducts]
+        .sort((left, right) => {
+          const leftTime =
+            left.createdAt?.toMillis?.() ||
+            left.updatedAt?.toMillis?.() ||
+            0;
+
+          const rightTime =
+            right.createdAt?.toMillis?.() ||
+            right.updatedAt?.toMillis?.() ||
+            0;
+
+          return rightTime - leftTime;
+        })
+        .slice(0, 8),
+    [availableProducts]
+  );
+
+  const featuredSubcategories =
+    useMemo(() => {
+      return categories
+        .map((category) => {
+          const categoryProducts =
+            availableProducts.filter(
+              (product) =>
+                safeText(
+                  product.categoryId
+                ) === category.id
+            );
+
+          return {
+            ...category,
+            products: categoryProducts,
+          };
+        })
+        .filter(
+          (category) =>
+            category.products.length >= 2
+        )
+        .sort(
+          (left, right) =>
+            right.products.length -
+            left.products.length
+        )
+        .slice(0, 3);
+    }, [
+      categories,
+      availableProducts,
+    ]);
+
+  function selectMainCategory(value) {
+    const eligibleSubcategories =
+      categories.filter(
+        (category) => {
+          if (
+            safeText(
+              category.parentCategoryId
+            ) !== value
+          ) {
+            return false;
+          }
+
+          return availableProducts.some(
+            (product) =>
+              safeText(
+                product.categoryId
+              ) === category.id
+          );
+        }
+      );
+
+    setMainCategoryFilter(value);
+    setCategoryFilter(
+      eligibleSubcategories.length === 1
+        ? eligibleSubcategories[0].id
+        : "all"
+    );
+    setSizeFilter("all");
+    setMobileMenuOpen(false);
+    setFiltersOpen(false);
+
+    requestAnimationFrame(() => {
+      document
+        .getElementById("catalog-products")
+        ?.scrollIntoView({
+          behavior: "smooth",
+          block: "start",
+        });
+    });
+  }
+
+  function selectSubcategory(value) {
+    const category =
+      categoryById.get(value);
+
+    if (
+      category?.parentCategoryId
+    ) {
+      setMainCategoryFilter(
+        category.parentCategoryId
+      );
+    }
+
     setCategoryFilter(value);
-    setMobileSidebarOpen(false);
+    setSizeFilter("all");
+    setMobileMenuOpen(false);
+    setFiltersOpen(false);
+
+    requestAnimationFrame(() => {
+      document
+        .getElementById("catalog-products")
+        ?.scrollIntoView({
+          behavior: "smooth",
+          block: "start",
+        });
+    });
   }
 
-  function selectSize(value) {
-    setSizeFilter(value);
-    setMobileSidebarOpen(false);
+  function clearFilters() {
+    setMainCategoryFilter("all");
+    setCategoryFilter("all");
+    setSizeFilter("all");
+    setSearch("");
   }
+
+  function previousHero() {
+    if (heroProducts.length <= 1) {
+      return;
+    }
+
+    setHeroIndex((current) =>
+      current <= 0
+        ? heroProducts.length - 1
+        : current - 1
+    );
+  }
+
+  function nextHero() {
+    if (heroProducts.length <= 1) {
+      return;
+    }
+
+    setHeroIndex((current) =>
+      current >=
+      heroProducts.length - 1
+        ? 0
+        : current + 1
+    );
+  }
+
+  const activeHeroProduct =
+    heroProducts[heroIndex] || null;
 
   return (
     <>
       <style>{`
+        html {
+          scroll-behavior: smooth;
+        }
+
+        body {
+          background: #ffffff;
+        }
+
         * {
           scrollbar-width: thin;
-          scrollbar-color: rgba(0, 0, 0, 0.22) transparent;
+          scrollbar-color: rgba(0, 0, 0, 0.2) transparent;
         }
 
         *::-webkit-scrollbar {
@@ -255,495 +1105,2108 @@ export default function CatalogPage() {
         }
 
         *::-webkit-scrollbar-thumb {
-          background: rgba(0, 0, 0, 0.18);
+          background: rgba(0, 0, 0, 0.16);
           border-radius: 999px;
         }
 
         *::-webkit-scrollbar-thumb:hover {
-          background: rgba(239, 68, 68, 0.55);
+          background: rgba(220, 38, 38, 0.55);
         }
       `}</style>
 
-      <main className="min-h-screen bg-[radial-gradient(circle_at_top_right,_rgba(239,68,68,0.06),_transparent_30%),linear-gradient(180deg,#ffffff_0%,#fafafa_100%)] text-black">
-      <section className="min-h-screen w-full lg:grid lg:grid-cols-[310px_minmax(0,1fr)]">
-        <aside className="hidden border-r border-black/[0.06] bg-white/95 lg:sticky lg:top-0 lg:flex lg:h-screen lg:flex-col lg:overflow-y-auto lg:[scrollbar-gutter:stable]">
-          <CatalogSidebar
-            categories={categories}
-            availableSizes={availableSizes}
-            categoryFilter={categoryFilter}
-            sizeFilter={sizeFilter}
-            onCategoryChange={selectCategory}
-            onSizeChange={selectSize}
-            reservationDays={reservationSettings.defaultReservationDays}
-          />
-        </aside>
+      <main className="min-h-screen bg-white text-black">
+        <div className="bg-black px-4 py-2 text-center text-[10px] font-medium uppercase tracking-[0.18em] text-white sm:text-[11px]">
+          Envíos a todo Colombia · Aparta tus productos favoritos
+        </div>
 
-        <section className="min-w-0 px-4 pb-10 pt-4 sm:px-6 lg:px-7 lg:py-7">
-          <header className="sticky top-0 z-30 -mx-4 mb-5 border-b border-black/[0.05] bg-white/90 px-4 py-3 backdrop-blur-xl sm:-mx-6 sm:px-6 lg:static lg:mx-0 lg:border-0 lg:bg-transparent lg:p-0 lg:backdrop-blur-none">
-            <div className="flex items-center justify-between gap-3 lg:hidden">
-              <button
-                type="button"
-                onClick={() => setMobileSidebarOpen(true)}
-                className="flex h-11 w-11 items-center justify-center rounded-2xl border border-black/[0.08] bg-white shadow-[0_10px_30px_rgba(0,0,0,0.04)]"
-                aria-label="Abrir filtros"
-              >
-                <Menu size={20} />
-              </button>
-
-              <img
-                src="/logo.png"
-                alt="Master Caps"
-                className="h-14 w-auto object-contain"
-              />
-
-              <button
-                type="button"
-                onClick={() => setCartOpen(true)}
-                className="relative flex h-11 w-11 items-center justify-center rounded-2xl bg-red-50 text-red-600 transition hover:bg-red-100"
-                aria-label="Abrir carrito de apartados"
-              >
-                <ShoppingBag size={19} />
-
-                {cart.summary.totalItems > 0 && (
-                  <span className="absolute -right-1.5 -top-1.5 flex h-5 min-w-5 items-center justify-center rounded-full bg-red-600 px-1 text-[9px] font-medium text-white ring-2 ring-white">
-                    {cart.summary.totalItems}
-                  </span>
-                )}
-              </button>
-            </div>
-
-            <div className="hidden items-end justify-between gap-6 lg:flex">
-              <div>
-                <div className="inline-flex items-center gap-2 rounded-full bg-red-50 px-3 py-1.5 text-[11px] font-medium text-red-600">
-                  <Sparkles size={13} />
-                  Colección disponible
-                </div>
-
-                <h1 className="mt-3 text-[31px] font-medium tracking-[-0.05em]">
-                  Catálogo Master Caps
-                </h1>
-
-                <p className="mt-1 text-[13px] text-black/45">
-                  Explora cada producto, sus tallas y su galería completa.
-                </p>
-              </div>
-
-              <div className="flex items-stretch gap-3">
-                <div className="rounded-[22px] border border-black/[0.06] bg-white px-5 py-3 shadow-[0_12px_35px_rgba(0,0,0,0.035)]">
-                  <p className="text-[10px] uppercase tracking-[0.12em] text-black/35">
-                    Productos disponibles
-                  </p>
-
-                  <p className="mt-1 text-[22px] font-medium text-red-600">
-                    {visibleProducts.length}
-                  </p>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={() => setCartOpen(true)}
-                  className="group relative flex min-w-[210px] items-center gap-3 rounded-[22px] border border-black/[0.06] bg-white px-4 py-3 text-left shadow-[0_12px_35px_rgba(0,0,0,0.035)] transition hover:border-red-200 hover:bg-red-50"
-                >
-                  <div className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-red-50 text-red-600 transition group-hover:bg-red-600 group-hover:text-white">
-                    <ShoppingBag size={18} />
-
-                    {cart.summary.totalItems > 0 && (
-                      <span className="absolute -right-1.5 -top-1.5 flex h-5 min-w-5 items-center justify-center rounded-full bg-red-600 px-1 text-[9px] font-medium text-white ring-2 ring-white">
-                        {cart.summary.totalItems}
-                      </span>
-                    )}
-                  </div>
-
-                  <div className="min-w-0">
-                    <p className="text-[10px] uppercase tracking-[0.12em] text-black/35">
-                      Carrito
-                    </p>
-
-                    <p className="mt-1 truncate text-[13px] font-medium text-black">
-                      {cart.summary.uniqueItems > 0
-                        ? `${cart.summary.uniqueItems} producto(s)`
-                        : "Sin productos"}
-                    </p>
-                  </div>
-                </button>
-              </div>
-            </div>
-          </header>
-
-          <div className="grid gap-3 lg:mt-6 lg:grid-cols-[minmax(0,1fr)_auto]">
-            <label className="relative block">
-              <Search
-                size={18}
-                className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-black/35"
-              />
-
-              <input
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-                className="h-12 w-full rounded-2xl border border-black/[0.08] bg-white pl-11 pr-4 text-[13px] shadow-[0_12px_35px_rgba(0,0,0,0.025)] outline-none transition placeholder:text-black/35 focus:border-red-600 focus:ring-4 focus:ring-red-600/10"
-                placeholder="Buscar producto, código, categoría o talla..."
-              />
-            </label>
-
-            <button
-              type="button"
-              onClick={() => setMobileSidebarOpen(true)}
-              className="hidden h-12 items-center justify-center gap-2 rounded-2xl border border-black/[0.08] bg-white px-5 text-[13px] font-medium shadow-[0_12px_35px_rgba(0,0,0,0.025)] transition hover:bg-red-50 hover:text-red-600 md:inline-flex lg:hidden"
-            >
-              <SlidersHorizontal size={16} />
-              Filtros
-            </button>
-          </div>
-
-          <div className="mt-4 flex flex-wrap items-center gap-2">
-            <ActiveFilter
-              label={
-                categoryFilter === "all"
-                  ? "Todas las categorías"
-                  : categories.find((category) => category.id === categoryFilter)
-                      ?.name || "CATEGORÍA"
-              }
-            />
-
-            <ActiveFilter
-              label={sizeFilter === "all" ? "Todas las tallas" : `Talla ${sizeFilter}`}
-            />
-
-            <span className="ml-auto text-[12px] text-black/45">
-              {visibleProducts.length} resultado(s)
-            </span>
-          </div>
-
-          <section className="mt-5">
-            {loading ? (
-              <div className="rounded-[26px] border border-black/[0.05] bg-white p-12 text-center text-[13px] text-black/45 shadow-sm">
-                Cargando catálogo en tiempo real...
-              </div>
-            ) : visibleProducts.length === 0 ? (
-              <div className="rounded-[28px] border border-black/[0.05] bg-white p-12 text-center shadow-sm">
-                <PackageSearch size={38} className="mx-auto text-black/25" />
-                <h2 className="mt-4 text-[19px] font-medium">
-                  No encontramos productos
-                </h2>
-                <p className="mt-2 text-[13px] text-black/45">
-                  Ajusta la búsqueda, la categoría o la talla seleccionada.
-                </p>
-              </div>
-            ) : (
-              <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-3 2xl:grid-cols-4">
-                {visibleProducts.map((product) => (
-                  <ProductCard
-                    key={product.id}
-                    product={product}
-                    storeId={storeId}
-                    catalogSearch={location.search}
-                    categoryFilter={categoryFilter}
-                    sizeFilter={sizeFilter}
-                    search={search}
-                  />
-                ))}
-              </div>
-            )}
-          </section>
-        </section>
-      </section>
-
-      {mobileSidebarOpen && (
-        <MobileSidebar
+        <CatalogHeader
+          storeId={storeId}
+          mainCategories={mainCategories}
           categories={categories}
-          availableSizes={availableSizes}
-          categoryFilter={categoryFilter}
-          sizeFilter={sizeFilter}
-          onCategoryChange={selectCategory}
-          onSizeChange={selectSize}
-          reservationDays={reservationSettings.defaultReservationDays}
-          onClose={() => setMobileSidebarOpen(false)}
+          cart={cart}
+          onOpenCart={() =>
+            setCartOpen(true)
+          }
+          onOpenMenu={() =>
+            setMobileMenuOpen(true)
+          }
+          onOpenSearch={() =>
+            setSearchOpen(true)
+          }
+          onSelectMainCategory={
+            selectMainCategory
+          }
+          onSelectSubcategory={
+            selectSubcategory
+          }
+          onHome={clearFilters}
         />
-      )}
 
-      <ReservationCartDrawer
-        open={cartOpen}
-        onClose={() => setCartOpen(false)}
-        storeId={storeId}
-        cart={cart}
-      />
+        {loading ? (
+          <CatalogLoading />
+        ) : (
+          <>
+            {isHomeView && (
+              <>
+                <HeroSection
+                  product={
+                    activeHeroProduct
+                  }
+                  index={heroIndex}
+                  total={
+                    heroProducts.length
+                  }
+                  categoryPath={
+                    activeHeroProduct
+                      ? getCategoryPath(
+                          activeHeroProduct,
+                          categoryById,
+                          mainCategoryById
+                        )
+                      : ""
+                  }
+                  storeId={storeId}
+                  onPrevious={
+                    previousHero
+                  }
+                  onNext={nextHero}
+                  onSelectSlide={
+                    setHeroIndex
+                  }
+                  onExplore={() => {
+                    if (
+                      activeHeroProduct
+                    ) {
+                      const mainId =
+                        getMainCategoryForProduct(
+                          activeHeroProduct,
+                          categoryById
+                        );
 
-      <FixedWhatsAppButton />
+                      if (mainId) {
+                        selectMainCategory(
+                          mainId
+                        );
+                      }
+                    }
+                  }}
+                />
+
+                <CategoryShowcaseSection
+                  categories={
+                    categoryShowcases
+                  }
+                  onSelect={
+                    selectMainCategory
+                  }
+                />
+
+                <BenefitsSection
+                  reservationDays={
+                    reservationSettings.defaultReservationDays
+                  }
+                />
+              </>
+            )}
+
+            {isMainCategoryLanding && (
+              <SubcategoryLandingSection
+                mainCategory={
+                  selectedMainCategory
+                }
+                subcategories={
+                  selectedSubcategoryShowcases
+                }
+                onBack={clearFilters}
+                onSelect={
+                  selectSubcategory
+                }
+              />
+            )}
+
+            {!isHomeView &&
+              !isMainCategoryLanding && (
+            <section
+              id="catalog-products"
+              className={
+                isHomeView
+                  ? "border-t border-black/[0.08] px-4 py-14 sm:px-6 lg:px-10 xl:px-16"
+                  : "px-4 py-8 sm:px-6 lg:px-10 xl:px-16"
+              }
+            >
+              <CatalogToolbar
+                isHomeView={isHomeView}
+                search={search}
+                onSearchChange={
+                  setSearch
+                }
+                selectedMainCategory={
+                  selectedMainCategory
+                }
+                selectedSubcategory={
+                  selectedSubcategory
+                }
+                mainCategoryFilter={
+                  mainCategoryFilter
+                }
+                categoryFilter={
+                  categoryFilter
+                }
+                sizeFilter={
+                  sizeFilter
+                }
+                availableSizes={
+                  availableSizes
+                }
+                filteredSubcategories={
+                  filteredSubcategories
+                }
+                mainCategories={
+                  mainCategories
+                }
+                visibleCount={
+                  visibleProducts.length
+                }
+                onMainCategoryChange={
+                  selectMainCategory
+                }
+                onSubcategoryChange={
+                  selectSubcategory
+                }
+                onSizeChange={
+                  setSizeFilter
+                }
+                onOpenFilters={() =>
+                  setFiltersOpen(true)
+                }
+                onClearFilters={
+                  clearFilters
+                }
+              />
+
+              {visibleProducts.length ===
+              0 ? (
+                <EmptyCatalog
+                  onClear={clearFilters}
+                />
+              ) : (
+                <div className="mt-8 grid grid-cols-2 gap-x-3 gap-y-8 sm:gap-x-5 sm:gap-y-10 lg:grid-cols-3 xl:grid-cols-4">
+                  {visibleProducts.map(
+                    (product) => (
+                      <EditorialProductCard
+                        key={product.id}
+                        product={product}
+                        storeId={storeId}
+                        catalogSearch={
+                          location.search
+                        }
+                        categoryPath={getCategoryPath(
+                          product,
+                          categoryById,
+                          mainCategoryById
+                        )}
+                        navigationState={{
+                          mainCategoryFilter,
+                          categoryFilter,
+                          sizeFilter,
+                          search,
+                        }}
+                      />
+                    )
+                  )}
+                </div>
+              )}
+            </section>
+              )}
+          </>
+        )}
+
+        <CatalogFooter />
+
+        {mobileMenuOpen && (
+          <MobileCatalogMenu
+            mainCategories={
+              mainCategories
+            }
+            categories={categories}
+            cartCount={
+              cart.summary.totalItems
+            }
+            onClose={() =>
+              setMobileMenuOpen(false)
+            }
+            onOpenCart={() => {
+              setMobileMenuOpen(false);
+              setCartOpen(true);
+            }}
+            onSelectMainCategory={
+              selectMainCategory
+            }
+            onSelectSubcategory={
+              selectSubcategory
+            }
+            onHome={clearFilters}
+          />
+        )}
+
+        {filtersOpen && (
+          <CatalogFiltersDrawer
+            mainCategories={
+              mainCategories
+            }
+            categories={categories}
+            availableSizes={
+              availableSizes
+            }
+            mainCategoryFilter={
+              mainCategoryFilter
+            }
+            categoryFilter={
+              categoryFilter
+            }
+            sizeFilter={
+              sizeFilter
+            }
+            onMainCategoryChange={
+              selectMainCategory
+            }
+            onSubcategoryChange={
+              selectSubcategory
+            }
+            onSizeChange={
+              setSizeFilter
+            }
+            onClear={clearFilters}
+            onClose={() =>
+              setFiltersOpen(false)
+            }
+          />
+        )}
+
+        {searchOpen && (
+          <SearchOverlay
+            value={search}
+            onChange={setSearch}
+            onClose={() =>
+              setSearchOpen(false)
+            }
+            onSubmit={() => {
+              setSearchOpen(false);
+
+              requestAnimationFrame(
+                () => {
+                  document
+                    .getElementById(
+                      "catalog-products"
+                    )
+                    ?.scrollIntoView({
+                      behavior: "smooth",
+                      block: "start",
+                    });
+                }
+              );
+            }}
+          />
+        )}
+
+        <ReservationCartDrawer
+          open={cartOpen}
+          onClose={() =>
+            setCartOpen(false)
+          }
+          storeId={storeId}
+          cart={cart}
+        />
+
+        <FixedWhatsAppButton />
       </main>
     </>
   );
 }
 
-function CatalogSidebar(props) {
-  const {
-    categories,
-    availableSizes,
-    categoryFilter,
-    sizeFilter,
-    onCategoryChange,
-    onSizeChange,
-    reservationDays = 7,
-    onClose,
-    mobile = false,
-  } = props;
+function CatalogHeader({
+  mainCategories,
+  categories,
+  cart,
+  onOpenCart,
+  onOpenMenu,
+  onOpenSearch,
+  onSelectMainCategory,
+  onSelectSubcategory,
+  onHome,
+}) {
+  const [categoriesMenuOpen, setCategoriesMenuOpen] = useState(false);
+
+  function closeCategoriesMenu() {
+    setCategoriesMenuOpen(false);
+  }
 
   return (
-    <div className="flex min-h-full flex-col px-5 py-5 sm:px-6 lg:px-6 lg:py-7">
-      <div className="flex items-center justify-between border-b border-black/[0.06] pb-5">
-        <img
-          src="/logo.png"
-          alt="Master Caps"
-          className="h-24 w-auto object-contain lg:mx-auto lg:h-28"
-        />
+    <header className="sticky top-0 z-50 border-b border-black/[0.08] bg-white/95 backdrop-blur-xl">
+      <div className="mx-auto flex min-h-[104px] max-w-[1800px] items-center justify-between gap-5 px-4 sm:min-h-[116px] sm:px-6 lg:min-h-[126px] lg:px-10 xl:px-16">
+        <button
+          type="button"
+          onClick={onOpenMenu}
+          className="flex h-11 w-11 items-center justify-center lg:hidden"
+          aria-label="Abrir menú"
+        >
+          <Menu size={23} />
+        </button>
 
-        {mobile && (
+        <button
+          type="button"
+          onClick={onHome}
+          className="shrink-0"
+          aria-label="Ir al inicio"
+        >
+          <img
+            src="/logo.png"
+            alt="Master Caps"
+            loading="eager"
+            decoding="async"
+            fetchPriority="high"
+            className="h-[74px] w-auto object-contain sm:h-[88px] lg:h-[104px] xl:h-[112px]"
+          />
+        </button>
+
+        <nav className="hidden flex-1 items-center justify-center gap-8 lg:flex">
           <button
             type="button"
-            onClick={onClose}
-            className="flex h-10 w-10 items-center justify-center rounded-2xl bg-black/[0.035]"
+            onClick={onHome}
+            className="text-[12px] font-medium uppercase tracking-[0.1em] transition hover:text-red-600 xl:text-[13px]"
           >
-            <X size={19} />
+            Nuevo
           </button>
-        )}
-      </div>
 
-      <div className="mt-6 flex items-center justify-between">
-        <h2 className="text-[12px] font-medium uppercase tracking-[0.12em]">
-          Navegar catálogo
-        </h2>
-        <SlidersHorizontal size={16} className="text-black/45" />
-      </div>
+          <div
+            className="relative"
+            onMouseEnter={() => setCategoriesMenuOpen(true)}
+            onMouseLeave={() => setCategoriesMenuOpen(false)}
+          >
+            <button
+              type="button"
+              onClick={() => setCategoriesMenuOpen((current) => !current)}
+              aria-expanded={categoriesMenuOpen}
+              className="inline-flex items-center gap-2 text-[12px] font-medium uppercase tracking-[0.1em] transition hover:text-red-600 xl:text-[13px]"
+            >
+              Categorías
+              <ChevronDown
+                size={14}
+                className={`transition ${categoriesMenuOpen ? "rotate-180" : ""}`}
+              />
+            </button>
 
-      <div className="mt-6">
-        <p className="text-[12px] font-medium">Categorías</p>
+            <div
+              className={`absolute left-1/2 top-full w-[820px] -translate-x-1/2 pt-5 transition duration-200 ${
+                categoriesMenuOpen
+                  ? "visible pointer-events-auto opacity-100"
+                  : "invisible pointer-events-none opacity-0"
+              }`}
+            >
+              <div className="max-h-[70vh] overflow-y-auto border border-black/[0.08] bg-white p-6 shadow-[0_26px_80px_rgba(0,0,0,0.14)]">
+                <div className="grid grid-cols-3 gap-x-8 gap-y-7">
+                {mainCategories.map(
+                  (mainCategory) => {
+                    const subcategories =
+                      categories.filter(
+                        (category) =>
+                          safeText(
+                            category.parentCategoryId
+                          ) ===
+                          mainCategory.id
+                      );
 
-        <div className="mt-3 space-y-1.5">
-          <FilterButton
-            active={categoryFilter === "all"}
-            icon={Grid3X3}
-            label="Todas las categorías"
-            onClick={() => onCategoryChange("all")}
-          />
+                    return (
+                      <div
+                        key={mainCategory.id}
+                        className="min-w-0"
+                      >
+                        <button
+                          type="button"
+                          onClick={() => {
+                            closeCategoriesMenu();
+                            onSelectMainCategory(
+                              mainCategory.id
+                            );
+                          }}
+                          className="inline-flex items-center gap-2 border-b border-black pb-1 text-left text-[11px] font-medium uppercase tracking-[0.12em] transition hover:border-red-600 hover:text-red-600"
+                        >
+                          {mainCategory.name}
+                          <ArrowRight size={13} />
+                        </button>
 
-          {categories.map((category) => (
-            <FilterButton
-              key={category.id}
-              active={categoryFilter === category.id}
-              icon={ShoppingBag}
-              label={normalizeCategoryName(category.name)}
-              onClick={() => onCategoryChange(category.id)}
-            />
-          ))}
+                        <div className="mt-3 space-y-2">
+                          {subcategories
+                            .slice(0, 6)
+                            .map(
+                              (subcategory) => (
+                                <button
+                                  key={
+                                    subcategory.id
+                                  }
+                                  type="button"
+                                  onClick={() => {
+                                    closeCategoriesMenu();
+                                    onSelectSubcategory(
+                                      subcategory.id
+                                    );
+                                  }}
+                                  className="block w-full truncate text-left text-[10px] uppercase tracking-[0.08em] text-black/50 transition hover:text-red-600"
+                                >
+                                  {
+                                    subcategory.name
+                                  }
+                                </button>
+                              )
+                            )}
+                        </div>
+                      </div>
+                    );
+                  }
+                )}
+                </div>
+              </div>
+            </div>
+          </div>
+        </nav>
+
+        <div className="flex items-center gap-1 sm:gap-2">
+          <button
+            type="button"
+            onClick={onOpenSearch}
+            className="flex h-11 w-11 items-center justify-center transition hover:text-red-600"
+            aria-label="Buscar"
+          >
+            <Search size={21} />
+          </button>
+
+          <button
+            type="button"
+            onClick={onOpenCart}
+            className="relative flex h-11 w-11 items-center justify-center transition hover:text-red-600"
+            aria-label="Abrir carrito"
+          >
+            <ShoppingBag size={21} />
+
+            {cart.summary.totalItems >
+              0 && (
+              <span className="absolute right-0 top-0 flex h-5 min-w-5 items-center justify-center rounded-full bg-red-600 px-1 text-[9px] font-medium text-white ring-2 ring-white">
+                {cart.summary.totalItems}
+              </span>
+            )}
+          </button>
         </div>
       </div>
+    </header>
+  );
+}
 
-      <div className="mt-6 border-t border-black/[0.06] pt-5">
-        <div className="rounded-[20px] border border-red-100 bg-red-50/70 p-4">
-          <div className="flex items-center gap-2 text-red-600">
-            <CalendarClock size={16} />
-            <p className="text-[12px] font-medium">
-              Apartados por {reservationDays} día(s)
+function HeroSection({
+  product,
+  index,
+  total,
+  categoryPath,
+  storeId,
+  onPrevious,
+  onNext,
+  onSelectSlide,
+  onExplore,
+}) {
+  const coverImage =
+    getProductCoverImage(product);
+
+  const secondImage =
+    getProductSecondaryImage(product);
+
+  return (
+    <section className="bg-white px-3 pb-6 pt-3 sm:px-5 sm:pb-8 lg:px-8 lg:pt-5">
+      <div className="relative mx-auto max-w-[1800px] overflow-hidden border border-black/[0.08] bg-[#f3f1ee] shadow-[0_24px_80px_rgba(0,0,0,0.08)]">
+        <div className="grid min-h-[570px] lg:min-h-[690px] lg:grid-cols-[minmax(0,1.48fr)_minmax(360px,.72fr)]">
+          <div className="relative min-h-[570px] overflow-hidden bg-[#d9d5d0] lg:min-h-[690px]">
+            {coverImage?.url ? (
+              <img
+                src={coverImage.url}
+                alt={
+                  product?.name ||
+                  "Master Caps"
+                }
+                loading="eager"
+                decoding="async"
+                fetchPriority="high"
+                className="absolute inset-0 h-full w-full object-cover transition duration-700"
+              />
+            ) : (
+              <div className="absolute inset-0 bg-[linear-gradient(135deg,#d8d4cf,#f3f1ed)]" />
+            )}
+
+            <div className="absolute inset-0 bg-[linear-gradient(90deg,rgba(0,0,0,.78)_0%,rgba(0,0,0,.46)_45%,rgba(0,0,0,.08)_100%)]" />
+            <div className="absolute inset-x-0 bottom-0 h-48 bg-gradient-to-t from-black/45 to-transparent" />
+
+            <div className="relative z-10 flex min-h-[570px] items-end px-6 pb-14 pt-16 sm:px-10 sm:pb-16 lg:min-h-[690px] lg:px-16 lg:pb-20 xl:px-20">
+              <div className="max-w-[700px] text-white">
+                <div className="inline-flex items-center gap-3 border border-white/30 bg-black/15 px-4 py-2 backdrop-blur-md">
+                  <span className="h-1.5 w-1.5 rounded-full bg-red-500" />
+
+                  <p className="text-[9px] font-medium uppercase tracking-[0.24em] text-white/85 sm:text-[10px]">
+                    {categoryPath ||
+                      "NUEVA COLECCIÓN"}
+                  </p>
+                </div>
+
+                <h1 className="mt-6 max-w-[680px] text-[42px] font-medium uppercase leading-[0.94] tracking-[-0.06em] sm:text-[60px] lg:text-[74px] xl:text-[82px]">
+                  {product?.name ||
+                    "MASTER CAPS"}
+                </h1>
+
+                <p className="mt-5 max-w-[520px] text-[13px] leading-6 text-white/78 sm:text-[15px] sm:leading-7">
+                  Productos con stock real, tallas disponibles y apartados seguros desde cualquier lugar.
+                </p>
+
+                {product && (
+                  <p className="mt-4 text-[22px] font-medium tracking-[-0.04em] sm:text-[26px]">
+                    {formatCurrency(
+                      product.salePrice
+                    )}
+                  </p>
+                )}
+
+                <div className="mt-8 flex flex-col gap-3 sm:flex-row">
+                  <button
+                    type="button"
+                    onClick={onExplore}
+                    className="inline-flex min-h-[52px] items-center justify-center gap-3 bg-white px-7 py-3 text-[10px] font-medium uppercase tracking-[0.18em] text-black transition hover:bg-red-600 hover:text-white"
+                  >
+                    Explorar colección
+                    <ArrowRight size={15} />
+                  </button>
+
+                  {product && (
+                    <Link
+                      to={`/catalogo/${storeId}/apartar/${product.id}`}
+                      className="inline-flex min-h-[52px] items-center justify-center border border-white/45 bg-black/10 px-7 py-3 text-[10px] font-medium uppercase tracking-[0.18em] text-white backdrop-blur-sm transition hover:bg-white hover:text-black"
+                    >
+                      Ver producto
+                    </Link>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="relative hidden overflow-hidden bg-white lg:flex lg:flex-col">
+            <div className="flex items-center justify-between border-b border-black/[0.08] px-7 py-5">
+              <div>
+                <p className="text-[8px] font-medium uppercase tracking-[0.2em] text-black/38">
+                  Vista adicional
+                </p>
+
+                <p className="mt-1 text-[11px] font-medium uppercase tracking-[0.08em]">
+                  Detalles del producto
+                </p>
+              </div>
+
+              <span className="text-[10px] text-black/35">
+                {String(index + 1).padStart(
+                  2,
+                  "0"
+                )}{" "}
+                /{" "}
+                {String(total).padStart(
+                  2,
+                  "0"
+                )}
+              </span>
+            </div>
+
+            <div className="relative flex flex-1 items-center justify-center overflow-hidden p-8 xl:p-11">
+              {secondImage ? (
+                <img
+                  src={secondImage}
+                  alt={`${product?.name || "Producto"} vista secundaria`}
+                  loading="eager"
+                  decoding="async"
+                  fetchPriority="high"
+                  className="max-h-full max-w-full object-contain transition duration-700"
+                />
+              ) : coverImage?.url ? (
+                <img
+                  src={coverImage.url}
+                  alt={product?.name || "Producto"}
+                  loading="eager"
+                  decoding="async"
+                  className="max-h-full max-w-full object-contain"
+                />
+              ) : (
+                <Camera
+                  size={44}
+                  className="text-black/18"
+                />
+              )}
+            </div>
+
+            <div className="border-t border-black/[0.08] px-7 py-5">
+              <p className="line-clamp-1 text-[11px] font-medium uppercase tracking-[0.08em]">
+                {product?.name ||
+                  "Master Caps"}
+              </p>
+
+              <p className="mt-2 text-[9px] uppercase tracking-[0.14em] text-black/38">
+                Desliza para descubrir más
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {total > 1 && (
+          <>
+            <button
+              type="button"
+              onClick={onPrevious}
+              className="absolute left-3 top-1/2 z-20 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full border border-white/30 bg-black/20 text-white backdrop-blur-md transition hover:bg-white hover:text-black sm:left-5 lg:h-12 lg:w-12"
+              aria-label="Producto anterior"
+            >
+              <ChevronLeft size={20} />
+            </button>
+
+            <button
+              type="button"
+              onClick={onNext}
+              className="absolute right-3 top-1/2 z-20 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full border border-white/45 bg-white/90 text-black shadow-lg backdrop-blur-md transition hover:bg-red-600 hover:text-white sm:right-5 lg:h-12 lg:w-12"
+              aria-label="Producto siguiente"
+            >
+              <ChevronRight size={20} />
+            </button>
+
+            <div className="absolute bottom-5 left-1/2 z-20 flex -translate-x-1/2 items-center gap-2 rounded-full border border-white/20 bg-black/20 px-3 py-2 backdrop-blur-md lg:left-[37%]">
+              {Array.from({
+                length: total,
+              }).map(
+                (_, slideIndex) => (
+                  <button
+                    key={slideIndex}
+                    type="button"
+                    onClick={() =>
+                      onSelectSlide(
+                        slideIndex
+                      )
+                    }
+                    className={`h-1.5 rounded-full transition-all ${
+                      slideIndex === index
+                        ? "w-8 bg-white"
+                        : "w-1.5 bg-white/45 hover:bg-white/75"
+                    }`}
+                    aria-label={`Ir al producto ${slideIndex + 1}`}
+                  />
+                )
+              )}
+            </div>
+          </>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function CategoryShowcaseSection({
+  categories,
+  onSelect,
+}) {
+  if (categories.length === 0) {
+    return null;
+  }
+
+  return (
+    <section className="px-4 py-16 sm:px-6 lg:px-10 xl:px-16">
+      <div className="mx-auto max-w-[1800px]">
+        <div className="mb-8 flex items-end justify-between gap-5">
+          <div>
+            <p className="text-[10px] font-medium uppercase tracking-[0.22em] text-black/40">
+              Explora Master Caps
+            </p>
+
+            <h2 className="mt-2 text-[28px] font-medium uppercase tracking-[-0.04em] sm:text-[38px]">
+              Compra por categoría
+            </h2>
+          </div>
+
+          <p className="hidden max-w-[430px] text-right text-[12px] leading-6 text-black/45 md:block">
+            Navega por las categorías principales y encuentra cada producto organizado en su colección correspondiente.
+          </p>
+        </div>
+
+        <div className="-mx-4 flex snap-x snap-mandatory gap-4 overflow-x-auto px-4 pb-3 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden sm:mx-0 sm:grid sm:grid-cols-2 sm:overflow-visible sm:px-0 sm:pb-0 lg:grid-cols-3 2xl:grid-cols-4">
+          {categories.map(
+            (category, categoryIndex) => (
+              <button
+                key={category.id}
+                type="button"
+                onClick={() =>
+                  onSelect(category.id)
+                }
+                className="group flex min-h-[430px] w-[82vw] max-w-[340px] shrink-0 snap-start flex-col text-left sm:min-h-[470px] sm:w-auto sm:max-w-none"
+              >
+                <div className="relative aspect-[4/4.35] w-full overflow-hidden bg-white">
+                  {category.imageUrl ? (
+                    <img
+                      src={category.imageUrl}
+                      alt={category.name}
+                      loading={categoryIndex < 2 ? "eager" : "lazy"}
+                      decoding="async"
+                      fetchPriority={categoryIndex === 0 ? "high" : "auto"}
+                      className="h-full w-full object-contain p-2 transition duration-500 group-hover:scale-[1.025] sm:p-3"
+                    />
+                  ) : (
+                    <div className="flex h-full w-full items-center justify-center bg-black/[0.025]">
+                      <Camera size={34} className="text-black/20" />
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex flex-1 flex-col border-t border-black/[0.09] bg-white px-1 pb-2 pt-4 text-black">
+                  <p className="text-[9px] uppercase tracking-[0.18em] text-black/40">
+                    {category.products.length} producto(s)
+                  </p>
+
+                  <h3 className="mt-2 line-clamp-2 text-[23px] font-medium uppercase leading-tight tracking-[-0.035em]">
+                    {category.name}
+                  </h3>
+
+                  <span className="mt-auto inline-flex w-fit items-center gap-3 border-b border-black pb-1 pt-5 text-[9px] font-medium uppercase tracking-[0.18em] transition group-hover:border-red-600 group-hover:text-red-600">
+                    Explorar
+                    <ArrowRight size={13} />
+                  </span>
+                </div>
+              </button>
+            )
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function SubcategoryLandingSection({
+  mainCategory,
+  subcategories,
+  onBack,
+  onSelect,
+}) {
+  return (
+    <section className="px-4 py-12 sm:px-6 lg:px-10 xl:px-16">
+      <div className="mx-auto max-w-[1800px]">
+        <button
+          type="button"
+          onClick={onBack}
+          className="inline-flex items-center gap-2 text-[10px] font-medium uppercase tracking-[0.16em] text-black/50 transition hover:text-red-600"
+        >
+          <ChevronLeft size={14} />
+          Todas las categorías
+        </button>
+
+        <div className="mt-7 border-b border-black/[0.1] pb-7">
+          <p className="text-[10px] font-medium uppercase tracking-[0.22em] text-black/38">
+            Categoría principal
+          </p>
+
+          <h1 className="mt-2 text-[34px] font-medium uppercase tracking-[-0.045em] sm:text-[48px]">
+            {mainCategory?.name || "COLECCIÓN"}
+          </h1>
+
+          <p className="mt-3 max-w-[620px] text-[12px] leading-6 text-black/45">
+            Selecciona una subcategoría para ver todos los productos disponibles.
+          </p>
+        </div>
+
+        {subcategories.length === 0 ? (
+          <div className="mt-8 border border-black/[0.08] px-5 py-14 text-center">
+            <PackageSearch
+              size={34}
+              className="mx-auto text-black/25"
+            />
+
+            <p className="mt-4 text-[14px] font-medium uppercase">
+              No hay subcategorías con productos disponibles
+            </p>
+          </div>
+        ) : (
+          <div className="-mx-4 mt-8 flex snap-x snap-mandatory gap-4 overflow-x-auto px-4 pb-3 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden sm:mx-0 sm:grid sm:grid-cols-2 sm:overflow-visible sm:px-0 sm:pb-0 lg:grid-cols-3 2xl:grid-cols-4">
+            {subcategories.map(
+              (subcategory, subcategoryIndex) => (
+                <button
+                  key={subcategory.id}
+                  type="button"
+                  onClick={() =>
+                    onSelect(subcategory.id)
+                  }
+                  className="group flex min-h-[430px] w-[82vw] max-w-[340px] shrink-0 snap-start flex-col text-left sm:min-h-[470px] sm:w-auto sm:max-w-none"
+                >
+                  <div className="relative aspect-[4/4.35] w-full overflow-hidden bg-white">
+                    {subcategory.imageUrl ? (
+                      <img
+                        src={subcategory.imageUrl}
+                        alt={subcategory.name}
+                        loading={subcategoryIndex < 2 ? "eager" : "lazy"}
+                        decoding="async"
+                        fetchPriority={subcategoryIndex === 0 ? "high" : "auto"}
+                        className="h-full w-full object-contain p-2 transition duration-500 group-hover:scale-[1.025] sm:p-3"
+                      />
+                    ) : (
+                      <div className="flex h-full w-full items-center justify-center bg-black/[0.025]">
+                        <Camera size={34} className="text-black/20" />
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="flex flex-1 flex-col border-t border-black/[0.09] bg-white px-1 pb-2 pt-4 text-black">
+                    <p className="text-[9px] uppercase tracking-[0.18em] text-black/40">
+                      {subcategory.products.length} producto(s)
+                    </p>
+
+                    <h2 className="mt-2 line-clamp-2 text-[22px] font-medium uppercase leading-tight tracking-[-0.035em]">
+                      {subcategory.name}
+                    </h2>
+
+                    <span className="mt-auto inline-flex w-fit items-center gap-3 border-b border-black pb-1 pt-5 text-[9px] font-medium uppercase tracking-[0.18em] transition group-hover:border-red-600 group-hover:text-red-600">
+                      Ver productos
+                      <ArrowRight size={13} />
+                    </span>
+                  </div>
+                </button>
+              )
+            )}
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function ProductEditorialSection({
+  title,
+  description,
+  products,
+  storeId,
+  catalogSearch,
+  categoryById,
+  mainCategoryById,
+  navigationState,
+  actionLabel,
+  onAction,
+}) {
+  if (!products?.length) {
+    return null;
+  }
+
+  return (
+    <section className="border-t border-black/[0.08] px-4 py-14 sm:px-6 lg:px-10 xl:px-16">
+      <div className="mx-auto max-w-[1800px]">
+        <div className="flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <h2 className="text-[25px] font-medium uppercase tracking-[-0.035em] sm:text-[34px]">
+              {title}
+            </h2>
+
+            <p className="mt-2 text-[12px] leading-6 text-black/45">
+              {description}
             </p>
           </div>
 
-          <p className="mt-2 text-[10px] leading-5 text-black/50">
-            Las prendas reservadas se conservarán durante el plazo configurado por la tienda.
-          </p>
+          {onAction && (
+            <button
+              type="button"
+              onClick={onAction}
+              className="inline-flex items-center gap-3 self-start border-b border-black pb-1 text-[10px] font-medium uppercase tracking-[0.18em] transition hover:border-red-600 hover:text-red-600 sm:self-auto"
+            >
+              {actionLabel ||
+                "VER TODO"}
+              <ArrowRight size={14} />
+            </button>
+          )}
         </div>
-      </div>
 
-      <div className="mt-6 border-t border-black/[0.06] pt-5">
-        <p className="text-[12px] font-medium">Tallas disponibles</p>
-
-        <div className="mt-3 flex flex-wrap gap-2">
-          <SizeButton
-            active={sizeFilter === "all"}
-            label="Todas"
-            onClick={() => onSizeChange("all")}
-          />
-
-          {availableSizes.map((size) => (
-            <SizeButton
-              key={size}
-              active={sizeFilter === size}
-              label={size}
-              onClick={() => onSizeChange(size)}
+        <div className="mt-8 grid grid-cols-2 gap-x-3 gap-y-8 sm:gap-x-5 lg:grid-cols-4">
+          {products.map((product) => (
+            <EditorialProductCard
+              key={product.id}
+              product={product}
+              storeId={storeId}
+              catalogSearch={
+                catalogSearch
+              }
+              categoryPath={getCategoryPath(
+                product,
+                categoryById,
+                mainCategoryById
+              )}
+              navigationState={
+                navigationState
+              }
             />
           ))}
         </div>
       </div>
-
-    </div>
+    </section>
   );
 }
 
-function MobileSidebar(props) {
+function CatalogToolbar({
+  isHomeView,
+  search,
+  onSearchChange,
+  selectedMainCategory,
+  selectedSubcategory,
+  mainCategoryFilter,
+  categoryFilter,
+  sizeFilter,
+  availableSizes,
+  filteredSubcategories,
+  mainCategories,
+  visibleCount,
+  onMainCategoryChange,
+  onSubcategoryChange,
+  onSizeChange,
+  onOpenFilters,
+  onClearFilters,
+}) {
+  const title =
+    selectedSubcategory?.name ||
+    selectedMainCategory?.name ||
+    (isHomeView
+      ? "TODOS LOS PRODUCTOS"
+      : "RESULTADOS");
+
   return (
-    <div className="fixed inset-0 z-[80] bg-black/45 backdrop-blur-sm lg:hidden">
-      <button
-        type="button"
-        className="absolute inset-0 h-full w-full cursor-default"
-        onClick={props.onClose}
-        aria-label="Cerrar filtros"
-      />
+    <div className="mx-auto max-w-[1800px]">
+      <div className="flex flex-col gap-5 border-b border-black/[0.1] pb-7 lg:flex-row lg:items-end lg:justify-between">
+        <div>
+          <p className="text-[10px] font-medium uppercase tracking-[0.2em] text-black/38">
+            Catálogo Master Caps
+          </p>
 
-      <aside className="relative h-full w-[88%] max-w-[360px] overflow-y-auto bg-white shadow-2xl [scrollbar-gutter:stable]">
-        <CatalogSidebar {...props} mobile />
-      </aside>
+          <h2 className="mt-2 text-[30px] font-medium uppercase tracking-[-0.045em] sm:text-[42px]">
+            {title}
+          </h2>
+
+          <p className="mt-2 text-[12px] text-black/45">
+            {visibleCount} producto(s) disponibles
+          </p>
+        </div>
+
+        <label className="relative block w-full lg:max-w-[420px]">
+          <Search
+            size={18}
+            className="pointer-events-none absolute left-0 top-1/2 -translate-y-1/2 text-black/40"
+          />
+
+          <input
+            value={search}
+            onChange={(event) =>
+              onSearchChange(
+                event.target.value
+              )
+            }
+            className="h-12 w-full border-b border-black bg-transparent pl-8 pr-2 text-[12px] outline-none placeholder:text-black/35 focus:border-red-600"
+            placeholder="BUSCAR PRODUCTO, CÓDIGO, CATEGORÍA O TALLA"
+          />
+        </label>
+      </div>
+
+      <div className="mt-5 hidden grid-cols-3 gap-3 lg:grid">
+        <select
+          value={mainCategoryFilter}
+          onChange={(event) =>
+            onMainCategoryChange(
+              event.target.value
+            )
+          }
+          className="h-11 border border-black/[0.12] bg-white px-4 text-[11px] uppercase tracking-[0.08em] outline-none focus:border-black"
+        >
+          <option value="all">
+            Todas las categorías
+          </option>
+
+          {mainCategories.map(
+            (category) => (
+              <option
+                key={category.id}
+                value={category.id}
+              >
+                {category.name}
+              </option>
+            )
+          )}
+        </select>
+
+        <select
+          value={categoryFilter}
+          onChange={(event) =>
+            onSubcategoryChange(
+              event.target.value
+            )
+          }
+          className="h-11 border border-black/[0.12] bg-white px-4 text-[11px] uppercase tracking-[0.08em] outline-none focus:border-black"
+        >
+          <option value="all">
+            Todas las subcategorías
+          </option>
+
+          {filteredSubcategories.map(
+            (category) => (
+              <option
+                key={category.id}
+                value={category.id}
+              >
+                {category.name}
+              </option>
+            )
+          )}
+        </select>
+
+        <select
+          value={sizeFilter}
+          onChange={(event) =>
+            onSizeChange(
+              event.target.value
+            )
+          }
+          className="h-11 border border-black/[0.12] bg-white px-4 text-[11px] uppercase tracking-[0.08em] outline-none focus:border-black"
+        >
+          <option value="all">
+            Todas las tallas
+          </option>
+
+          {availableSizes.map((size) => (
+            <option
+              key={size}
+              value={size}
+            >
+              {size}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      <div className="mt-5 flex items-center justify-between gap-3 lg:hidden">
+        <button
+          type="button"
+          onClick={onOpenFilters}
+          className="inline-flex h-11 items-center gap-2 border border-black px-4 text-[10px] font-medium uppercase tracking-[0.14em]"
+        >
+          <SlidersHorizontal
+            size={15}
+          />
+          Filtros
+        </button>
+
+        <button
+          type="button"
+          onClick={onClearFilters}
+          className="text-[10px] font-medium uppercase tracking-[0.14em] text-black/50"
+        >
+          Limpiar
+        </button>
+      </div>
     </div>
   );
 }
 
-function ProductCard({
+function EditorialProductCard({
   product,
   storeId,
   catalogSearch,
-  categoryFilter,
-  sizeFilter,
-  search,
+  categoryPath,
+  navigationState,
 }) {
-  const variants = getAvailableVariants(product);
-  const totalStock = getTotalStock(product);
-  const coverImage = getProductCoverImage(product);
-  const images = getProductImages(product);
+  const variants =
+    getAvailableVariants(product);
+  const totalStock =
+    getTotalStock(product);
+  const images =
+    getProductImages(product).filter(
+      (image) => Boolean(image?.url)
+    );
+  const coverImage =
+    getProductCoverImage(product);
+  const hoverImage =
+    images[1]?.url || "";
 
   return (
-    <article className="group overflow-hidden rounded-[22px] border border-black/[0.055] bg-white shadow-[0_14px_40px_rgba(0,0,0,0.045)] transition duration-300 hover:-translate-y-1 hover:shadow-[0_26px_70px_rgba(0,0,0,0.09)] sm:rounded-[26px]">
+    <article className="group min-w-0">
       <Link
         to={`/catalogo/${storeId}/apartar/${product.id}${catalogSearch || ""}`}
         state={{
           catalogNavigation: {
-            categoryFilter,
-            sizeFilter,
-            search,
+            ...navigationState,
             scrollY: window.scrollY,
           },
         }}
         className="block"
       >
-        <div className="relative aspect-[4/4.7] overflow-hidden bg-black/[0.025] sm:aspect-[4/4.2]">
-          {coverImage.url ? (
-            <img
-              src={coverImage.url}
-              alt={product.name}
-              className="h-full w-full object-cover transition duration-700 group-hover:scale-105"
-            />
+        <div className="relative aspect-[4/5] overflow-hidden bg-[#f1f0ee]">
+          {coverImage?.url ? (
+            <>
+              <img
+                src={coverImage.url}
+                alt={product.name}
+                loading="lazy"
+                decoding="async"
+                className={`absolute inset-0 h-full w-full object-cover transition duration-700 ${
+                  hoverImage
+                    ? "group-hover:opacity-0"
+                    : "group-hover:scale-105"
+                }`}
+              />
+
+              {hoverImage && (
+                <img
+                  src={hoverImage}
+                  alt={`${product.name} segunda vista`}
+                  loading="lazy"
+                  decoding="async"
+                  className="absolute inset-0 h-full w-full object-cover opacity-0 transition duration-700 group-hover:scale-105 group-hover:opacity-100"
+                />
+              )}
+            </>
           ) : (
             <div className="flex h-full w-full items-center justify-center">
-              <Camera size={32} className="text-black/25" />
+              <Camera
+                size={36}
+                className="text-black/20"
+              />
             </div>
           )}
 
-          <div className="absolute inset-x-0 top-0 flex items-start justify-between p-2.5 sm:p-3">
-            <span className="rounded-full bg-white/92 px-2.5 py-1 text-[9px] font-medium text-emerald-600 shadow-sm backdrop-blur sm:text-[10px]">
+          <div className="absolute inset-x-0 top-0 flex items-start justify-between p-3">
+            <span className="bg-white px-2.5 py-1 text-[8px] font-medium uppercase tracking-[0.14em] text-black shadow-sm">
               Disponible
             </span>
 
             {images.length > 1 && (
-              <span className="inline-flex items-center gap-1 rounded-full bg-black/70 px-2.5 py-1 text-[9px] text-white backdrop-blur sm:text-[10px]">
-                <Images size={11} />
+              <span className="inline-flex items-center gap-1 bg-black/75 px-2 py-1 text-[8px] text-white">
+                <Images size={10} />
                 {images.length}
               </span>
             )}
           </div>
 
-          <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/55 via-black/10 to-transparent p-3 pt-12">
-            <p className="line-clamp-1 text-[11px] text-white/75">
-              {normalizeCategoryName(product.categoryName) || "COLECCIÓN"}
-            </p>
-            <h3 className="mt-0.5 line-clamp-2 text-[14px] font-medium leading-tight text-white sm:text-[16px]">
-              {product.name}
-            </h3>
+          <div className="absolute inset-x-0 bottom-0 translate-y-full bg-black px-4 py-3 text-white transition duration-300 group-hover:translate-y-0">
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-[9px] uppercase tracking-[0.16em]">
+                Ver producto
+              </span>
+
+              <ArrowRight size={14} />
+            </div>
           </div>
         </div>
 
-        <div className="p-3 sm:p-4">
-          <div className="flex items-start justify-between gap-2">
-            <div className="min-w-0">
-              <p className="text-[10px] uppercase tracking-[0.08em] text-black/35">
-                {product.code || "Sin código"}
-              </p>
+        <div className="pt-3">
+          <p className="line-clamp-1 text-[8px] uppercase tracking-[0.14em] text-black/40 sm:text-[9px]">
+            {categoryPath ||
+              "COLECCIÓN"}
+          </p>
 
-              <p className="mt-1 text-[17px] font-medium tracking-[-0.035em] sm:text-[19px]">
-                {formatCurrency(product.salePrice)}
-              </p>
-            </div>
+          <h3 className="mt-1 line-clamp-2 text-[11px] font-medium uppercase leading-5 sm:text-[13px]">
+            {product.name}
+          </h3>
 
-            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl bg-red-50 text-red-600 transition group-hover:bg-red-600 group-hover:text-white">
-              <ChevronRight size={17} />
-            </span>
-          </div>
+          <p className="mt-1.5 text-[13px] font-medium sm:text-[15px]">
+            {formatCurrency(
+              product.salePrice
+            )}
+          </p>
 
-          <div className="mt-3 flex flex-wrap gap-1.5">
-            {variants.slice(0, 4).map((variant) => (
-              <span
-                key={variant.id}
-                className="rounded-full bg-black/[0.035] px-2 py-1 text-[9px] text-black/60 sm:text-[10px]"
-              >
-                {variant.size}
-              </span>
-            ))}
+          <div className="mt-2 flex min-h-[26px] flex-wrap gap-1">
+            {variants
+              .slice(0, 5)
+              .map((variant) => (
+                <span
+                  key={variant.id}
+                  className="border border-black/[0.16] px-2 py-1 text-[8px] uppercase"
+                >
+                  {variant.size}
+                </span>
+              ))}
 
-            {variants.length > 4 && (
-              <span className="rounded-full bg-red-50 px-2 py-1 text-[9px] text-red-600 sm:text-[10px]">
-                +{variants.length - 4}
+            {variants.length > 5 && (
+              <span className="px-1 py-1 text-[8px] text-black/45">
+                +{variants.length - 5}
               </span>
             )}
           </div>
 
-          <div className="mt-3 flex items-center justify-between gap-2 border-t border-black/[0.055] pt-3">
-            <p className="text-[10px] text-emerald-600 sm:text-[11px]">
-              {totalStock} unidad(es) disponibles
-            </p>
-
-            <span className="text-[10px] font-medium text-red-600 sm:text-[11px]">
-              Ver producto
-            </span>
-          </div>
+          <p className="mt-2 text-[9px] text-emerald-700">
+            {totalStock} unidad(es) disponibles
+          </p>
         </div>
       </Link>
     </article>
   );
 }
 
-function ActiveFilter({ label }) {
+function BenefitsSection({
+  reservationDays,
+}) {
+  const [activeBenefit, setActiveBenefit] =
+    useState(0);
+
+  const benefits = [
+    {
+      icon: Truck,
+      title: "ENVÍOS A TODO COLOMBIA",
+      description:
+        "Recibe tus productos en cualquier ciudad del país.",
+    },
+    {
+      icon: CalendarClock,
+      title: `APARTADOS POR ${reservationDays} DÍA(S)`,
+      description:
+        "Separa tus productos favoritos y completa el pago dentro del plazo.",
+    },
+    {
+      icon: ShieldCheck,
+      title: "STOCK Y RESERVAS SEGURAS",
+      description:
+        "El sistema valida nuevamente cada talla antes de confirmar.",
+    },
+  ];
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setActiveBenefit((current) =>
+        current >= benefits.length - 1
+          ? 0
+          : current + 1
+      );
+    }, 3500);
+
+    return () =>
+      window.clearInterval(timer);
+  }, [benefits.length]);
+
+  function goToBenefit(index) {
+    setActiveBenefit(index);
+  }
+
   return (
-    <span className="rounded-full border border-black/[0.06] bg-white px-3 py-1.5 text-[10px] text-black/55 shadow-sm">
-      {label}
-    </span>
+    <section className="border-t border-black/[0.08] px-4 py-9 sm:px-6 sm:py-12 lg:px-10 lg:py-16 xl:px-16">
+      <div className="mx-auto max-w-[1800px]">
+        {/* CARRUSEL AUTOMÁTICO MÓVIL */}
+        <div className="sm:hidden">
+          <div className="overflow-hidden">
+            <div
+              className="flex transition-transform duration-700 ease-[cubic-bezier(0.22,1,0.36,1)]"
+              style={{
+                transform: `translateX(-${activeBenefit * 100}%)`,
+              }}
+            >
+              {benefits.map((benefit) => {
+                const Icon = benefit.icon;
+
+                return (
+                  <article
+                    key={benefit.title}
+                    className="flex min-h-[205px] w-full shrink-0 flex-col items-center justify-center border border-black/[0.08] bg-white px-6 py-7 text-center"
+                  >
+                    <div className="flex h-12 w-12 items-center justify-center rounded-full bg-black/[0.035]">
+                      <Icon
+                        size={23}
+                        strokeWidth={1.45}
+                      />
+                    </div>
+
+                    <h3 className="mt-5 text-[11px] font-medium uppercase tracking-[0.08em]">
+                      {benefit.title}
+                    </h3>
+
+                    <p className="mx-auto mt-3 max-w-[270px] text-[9px] leading-5 text-black/45">
+                      {benefit.description}
+                    </p>
+                  </article>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="mt-4 flex items-center justify-center gap-2">
+            {benefits.map(
+              (benefit, index) => (
+                <button
+                  key={benefit.title}
+                  type="button"
+                  onClick={() =>
+                    goToBenefit(index)
+                  }
+                  className={`h-1.5 rounded-full transition-all duration-300 ${
+                    activeBenefit === index
+                      ? "w-7 bg-black"
+                      : "w-1.5 bg-black/20"
+                  }`}
+                  aria-label={`Ver beneficio ${index + 1}`}
+                />
+              )
+            )}
+          </div>
+        </div>
+
+        {/* CUADRÍCULA TABLET Y ESCRITORIO */}
+        <div className="hidden gap-6 sm:grid sm:grid-cols-3">
+          {benefits.map((benefit) => {
+            const Icon = benefit.icon;
+
+            return (
+              <article
+                key={benefit.title}
+                className="flex min-h-[230px] flex-col items-center justify-center border border-black/[0.08] bg-white px-5 py-7 text-center"
+              >
+                <div className="flex h-12 w-12 items-center justify-center rounded-full bg-black/[0.035]">
+                  <Icon
+                    size={23}
+                    strokeWidth={1.45}
+                  />
+                </div>
+
+                <h3 className="mt-5 text-[11px] font-medium uppercase tracking-[0.08em]">
+                  {benefit.title}
+                </h3>
+
+                <p className="mx-auto mt-3 max-w-[260px] text-[9px] leading-5 text-black/45">
+                  {benefit.description}
+                </p>
+              </article>
+            );
+          })}
+        </div>
+      </div>
+    </section>
   );
 }
 
-function FilterButton({ active, icon: Icon, label, onClick }) {
+function CatalogFooter() {
+  const [openSection, setOpenSection] =
+    useState("");
+
+  function toggleSection(sectionId) {
+    setOpenSection((current) =>
+      current === sectionId
+        ? ""
+        : sectionId
+    );
+  }
+
+  const mobileSections = [
+    {
+      id: "legal",
+      title: "LEGAL Y CONDICIONES",
+      content: (
+        <div className="space-y-2">
+          <p>
+            Los apartados están sujetos a disponibilidad y validación final de stock.
+          </p>
+
+          <p>
+            Las imágenes pueden presentar pequeñas variaciones de color según la pantalla.
+          </p>
+        </div>
+      ),
+    },
+    {
+      id: "orders",
+      title: "PEDIDOS",
+      content: (
+        <div className="space-y-2">
+          <p>
+            Consulta el estado de tu apartado directamente con nuestro equipo.
+          </p>
+
+          <a
+            href={`https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(
+              "Hola Master Caps, quiero consultar el estado de mi pedido o apartado."
+            )}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-2 border-b border-black pb-1 font-medium text-black"
+          >
+            Consultar por WhatsApp
+            <ArrowRight size={12} />
+          </a>
+        </div>
+      ),
+    },
+    {
+      id: "help",
+      title: "¿NECESITAS AYUDA?",
+      content: (
+        <div className="space-y-2">
+          <p>
+            Te ayudamos con tallas, disponibilidad, apartados y entregas.
+          </p>
+
+          <a
+            href={`https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(
+              WHATSAPP_MESSAGE
+            )}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-2 border-b border-black pb-1 font-medium text-black"
+          >
+            Hablar con un asesor
+            <ArrowRight size={12} />
+          </a>
+        </div>
+      ),
+    },
+    {
+      id: "stores",
+      title: "TIENDAS",
+      content: (
+        <div className="flex items-start gap-3">
+          <MapPin
+            size={16}
+            className="mt-0.5 shrink-0 text-red-600"
+          />
+
+          <address className="not-italic">
+            <strong className="block font-medium text-black">
+              MASTER CAPS
+            </strong>
+
+            <span className="mt-1 block">
+              Ubaté, Cundinamarca
+            </span>
+
+            <span className="block">
+              Cra. 8 #10-51
+            </span>
+          </address>
+        </div>
+      ),
+    },
+  ];
+
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`flex h-10 w-full items-center gap-3 rounded-2xl px-3 text-left text-[12px] transition ${
-        active
-          ? "bg-red-50 font-medium text-red-600"
-          : "text-black/60 hover:bg-black/[0.035] hover:text-black"
-      }`}
-    >
-      <Icon size={15} />
-      <span className="truncate">{label}</span>
-    </button>
+    <>
+      {/* FOOTER COMPACTO MÓVIL */}
+      <footer className="border-t border-black/[0.1] bg-white px-4 pb-[calc(74px+env(safe-area-inset-bottom))] pt-8 text-black sm:px-6 lg:hidden">
+        <div className="mx-auto max-w-[560px]">
+          <div className="flex items-center justify-between gap-4 pb-7">
+            <img
+              src="/logo.png"
+              alt="Master Caps"
+              loading="lazy"
+              decoding="async"
+              className="h-[72px] w-auto object-contain"
+            />
+
+            <div className="text-right">
+              <p className="text-[8px] font-medium uppercase tracking-[0.18em] text-black/35">
+                Atención
+              </p>
+
+              <a
+                href={`https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(
+                  WHATSAPP_MESSAGE
+                )}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mt-1 inline-flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-[0.08em]"
+              >
+                WhatsApp
+                <ArrowRight size={11} />
+              </a>
+            </div>
+          </div>
+
+          <div className="border-t border-black/[0.14]">
+            {mobileSections.map(
+              (section) => {
+                const isOpen =
+                  openSection ===
+                  section.id;
+
+                return (
+                  <div
+                    key={section.id}
+                    className="border-b border-black/[0.14]"
+                  >
+                    <button
+                      type="button"
+                      onClick={() =>
+                        toggleSection(
+                          section.id
+                        )
+                      }
+                      className="flex min-h-[66px] w-full items-center justify-between gap-4 py-4 text-left"
+                      aria-expanded={isOpen}
+                    >
+                      <span className="text-[14px] font-normal tracking-[-0.01em]">
+                        {section.title}
+                      </span>
+
+                      <Plus
+                        size={17}
+                        className={`shrink-0 transition duration-300 ${
+                          isOpen
+                            ? "rotate-45"
+                            : ""
+                        }`}
+                      />
+                    </button>
+
+                    <div
+                      className={`grid transition-all duration-300 ${
+                        isOpen
+                          ? "grid-rows-[1fr] pb-4"
+                          : "grid-rows-[0fr]"
+                      }`}
+                    >
+                      <div className="overflow-hidden">
+                        <div className="pr-7 text-[10px] leading-5 text-black/55">
+                          {section.content}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              }
+            )}
+          </div>
+
+          <div className="flex flex-col gap-2 pt-5 text-[8px] uppercase tracking-[0.14em] text-black/32">
+            <p>
+              © {new Date().getFullYear()} Master Caps
+            </p>
+
+            <p>
+              Catálogo y disponibilidad en tiempo real
+            </p>
+          </div>
+        </div>
+      </footer>
+
+      {/* FOOTER PREMIUM ESCRITORIO */}
+      <footer className="relative hidden overflow-hidden bg-[#090909] px-10 pb-7 pt-16 text-white lg:block xl:px-16">
+        <div className="pointer-events-none absolute -right-20 -top-36 h-[420px] w-[420px] rounded-full bg-red-600/10 blur-[110px]" />
+
+        <div className="relative mx-auto max-w-[1800px]">
+          <div className="grid gap-16 border-b border-white/10 pb-12 md:grid-cols-[1.35fr_.8fr_.9fr]">
+            <div>
+              <img
+                src="/logo.png"
+                alt="Master Caps"
+                loading="lazy"
+                decoding="async"
+                className="h-28 w-auto object-contain brightness-0 invert"
+              />
+
+              <p className="mt-5 max-w-[500px] text-[11px] leading-6 text-white/55">
+                Moda, accesorios y productos seleccionados con inventario, tallas y apartados gestionados en tiempo real.
+              </p>
+
+              <div className="mt-6 inline-flex items-center gap-3 border border-white/12 bg-white/[0.035] px-4 py-3">
+                <ShieldCheck
+                  size={17}
+                  className="text-red-500"
+                />
+
+                <span className="text-[9px] font-medium uppercase tracking-[0.15em] text-white/75">
+                  Compra y apartado seguro
+                </span>
+              </div>
+            </div>
+
+            <div>
+              <p className="text-[9px] font-medium uppercase tracking-[0.2em] text-white/35">
+                Visítanos
+              </p>
+
+              <div className="mt-5 flex items-start gap-3">
+                <MapPin
+                  size={18}
+                  className="mt-0.5 shrink-0 text-red-500"
+                />
+
+                <div>
+                  <p className="text-[12px] font-medium uppercase tracking-[0.06em]">
+                    Master Caps
+                  </p>
+
+                  <address className="mt-2 not-italic text-[11px] leading-6 text-white/55">
+                    Ubaté, Cundinamarca
+                    <br />
+                    Cra. 8 #10-51
+                  </address>
+                </div>
+              </div>
+            </div>
+
+            <div>
+              <p className="text-[9px] font-medium uppercase tracking-[0.2em] text-white/35">
+                Atención personalizada
+              </p>
+
+              <a
+                href={`https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(
+                  WHATSAPP_MESSAGE
+                )}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mt-5 inline-flex items-center gap-3 border-b border-white/35 pb-2 text-[12px] font-medium uppercase tracking-[0.08em] transition hover:border-red-500 hover:text-red-500"
+              >
+                WhatsApp +57 311 816 9948
+                <ArrowRight size={14} />
+              </a>
+
+              <p className="mt-5 max-w-[330px] text-[10px] leading-5 text-white/45">
+                Escríbenos para consultar productos, disponibilidad, entregas y condiciones de apartado.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between pt-6 text-[8px] uppercase tracking-[0.16em] text-white/30">
+            <p>
+              © {new Date().getFullYear()} Master Caps
+            </p>
+
+            <p>
+              Catálogo y disponibilidad en tiempo real
+            </p>
+          </div>
+        </div>
+      </footer>
+    </>
   );
 }
 
-function SizeButton({ active, label, onClick }) {
+function EmptyCatalog({
+  onClear,
+}) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`h-9 rounded-xl px-3 text-[11px] transition ${
-        active
-          ? "bg-red-600 text-white shadow-lg shadow-red-600/15"
-          : "border border-black/[0.08] bg-white text-black/60 hover:bg-red-50 hover:text-red-600"
-      }`}
-    >
-      {label}
-    </button>
+    <div className="mx-auto mt-8 max-w-[1800px] border border-black/[0.08] px-5 py-16 text-center">
+      <PackageSearch
+        size={38}
+        className="mx-auto text-black/25"
+      />
+
+      <h2 className="mt-5 text-[22px] font-medium uppercase tracking-[-0.03em]">
+        No encontramos productos
+      </h2>
+
+      <p className="mt-2 text-[12px] text-black/45">
+        Ajusta la búsqueda, categoría, subcategoría o talla seleccionada.
+      </p>
+
+      <button
+        type="button"
+        onClick={onClear}
+        className="mt-6 bg-black px-6 py-3 text-[10px] font-medium uppercase tracking-[0.16em] text-white"
+      >
+        Ver todo el catálogo
+      </button>
+    </div>
+  );
+}
+
+function CatalogLoading() {
+  return (
+    <section className="flex min-h-[620px] items-center justify-center bg-[#f4f3f1]">
+      <div className="text-center">
+        <div className="mx-auto h-10 w-10 animate-spin rounded-full border-2 border-black/15 border-t-black" />
+
+        <p className="mt-4 text-[10px] font-medium uppercase tracking-[0.18em] text-black/45">
+          Cargando catálogo
+        </p>
+      </div>
+    </section>
+  );
+}
+
+function MobileCatalogMenu({
+  mainCategories,
+  categories,
+  cartCount,
+  onClose,
+  onOpenCart,
+  onSelectMainCategory,
+  onSelectSubcategory,
+  onHome,
+}) {
+  const [expandedId, setExpandedId] =
+    useState("");
+
+  return (
+    <div className="fixed inset-0 z-[90] bg-black/50 backdrop-blur-sm lg:hidden">
+      <button
+        type="button"
+        className="absolute inset-0 h-full w-full cursor-default"
+        onClick={onClose}
+        aria-label="Cerrar menú"
+      />
+
+      <aside className="relative flex h-full w-[90%] max-w-[420px] flex-col overflow-y-auto bg-white">
+        <div className="flex items-center justify-between border-b border-black/[0.08] px-5 py-4">
+          <img
+            src="/logo.png"
+            alt="Master Caps"
+            className="h-14 w-auto object-contain"
+          />
+
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex h-10 w-10 items-center justify-center"
+          >
+            <X size={21} />
+          </button>
+        </div>
+
+        <nav className="flex-1 px-5 py-5">
+          <button
+            type="button"
+            onClick={() => {
+              onHome();
+              onClose();
+            }}
+            className="flex w-full items-center justify-between border-b border-black/[0.08] py-4 text-left text-[12px] font-medium uppercase tracking-[0.1em]"
+          >
+            Nuevo
+            <ArrowRight size={15} />
+          </button>
+
+          {mainCategories.map(
+            (mainCategory) => {
+              const subcategories =
+                categories.filter(
+                  (category) =>
+                    safeText(
+                      category.parentCategoryId
+                    ) ===
+                    mainCategory.id
+                );
+
+              const expanded =
+                expandedId ===
+                mainCategory.id;
+
+              return (
+                <div
+                  key={mainCategory.id}
+                  className="border-b border-black/[0.08]"
+                >
+                  <div className="flex items-center">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onSelectMainCategory(
+                          mainCategory.id
+                        )
+                      }
+                      className="flex-1 py-4 text-left text-[12px] font-medium uppercase tracking-[0.1em]"
+                    >
+                      {mainCategory.name}
+                    </button>
+
+                    {subcategories.length >
+                      0 && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setExpandedId(
+                            expanded
+                              ? ""
+                              : mainCategory.id
+                          )
+                        }
+                        className="flex h-12 w-12 items-center justify-center"
+                      >
+                        <ChevronDown
+                          size={17}
+                          className={`transition ${
+                            expanded
+                              ? "rotate-180"
+                              : ""
+                          }`}
+                        />
+                      </button>
+                    )}
+                  </div>
+
+                  {expanded && (
+                    <div className="pb-3 pl-4">
+                      {subcategories.map(
+                        (subcategory) => (
+                          <button
+                            key={
+                              subcategory.id
+                            }
+                            type="button"
+                            onClick={() =>
+                              onSelectSubcategory(
+                                subcategory.id
+                              )
+                            }
+                            className="block w-full py-3 text-left text-[10px] uppercase tracking-[0.1em] text-black/55"
+                          >
+                            {
+                              subcategory.name
+                            }
+                          </button>
+                        )
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            }
+          )}
+        </nav>
+
+        <div className="border-t border-black/[0.08] p-5">
+          <button
+            type="button"
+            onClick={onOpenCart}
+            className="flex h-12 w-full items-center justify-between bg-black px-5 text-[11px] font-medium uppercase tracking-[0.14em] text-white"
+          >
+            <span className="inline-flex items-center gap-2">
+              <ShoppingBag
+                size={17}
+              />
+              Carrito
+            </span>
+
+            <span>{cartCount}</span>
+          </button>
+        </div>
+      </aside>
+    </div>
+  );
+}
+
+function CatalogFiltersDrawer({
+  mainCategories,
+  categories,
+  availableSizes,
+  mainCategoryFilter,
+  categoryFilter,
+  sizeFilter,
+  onMainCategoryChange,
+  onSubcategoryChange,
+  onSizeChange,
+  onClear,
+  onClose,
+}) {
+  const visibleSubcategories =
+    mainCategoryFilter === "all"
+      ? categories
+      : categories.filter(
+          (category) =>
+            safeText(
+              category.parentCategoryId
+            ) === mainCategoryFilter
+        );
+
+  return (
+    <div className="fixed inset-0 z-[95] bg-black/50 backdrop-blur-sm lg:hidden">
+      <button
+        type="button"
+        onClick={onClose}
+        className="absolute inset-0 h-full w-full cursor-default"
+        aria-label="Cerrar filtros"
+      />
+
+      <aside className="absolute bottom-0 left-0 right-0 max-h-[88vh] overflow-y-auto bg-white p-5 shadow-2xl">
+        <div className="flex items-center justify-between border-b border-black/[0.08] pb-4">
+          <h2 className="text-[17px] font-medium uppercase tracking-[-0.02em]">
+            Filtros
+          </h2>
+
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex h-10 w-10 items-center justify-center"
+          >
+            <X size={20} />
+          </button>
+        </div>
+
+        <FilterSelect
+          label="Categoría principal"
+          value={mainCategoryFilter}
+          onChange={onMainCategoryChange}
+          options={[
+            {
+              value: "all",
+              label:
+                "Todas las categorías",
+            },
+            ...mainCategories.map(
+              (category) => ({
+                value: category.id,
+                label: category.name,
+              })
+            ),
+          ]}
+        />
+
+        <FilterSelect
+          label="Subcategoría"
+          value={categoryFilter}
+          onChange={onSubcategoryChange}
+          options={[
+            {
+              value: "all",
+              label:
+                "Todas las subcategorías",
+            },
+            ...visibleSubcategories.map(
+              (category) => ({
+                value: category.id,
+                label: category.name,
+              })
+            ),
+          ]}
+        />
+
+        <FilterSelect
+          label="Talla"
+          value={sizeFilter}
+          onChange={onSizeChange}
+          options={[
+            {
+              value: "all",
+              label:
+                "Todas las tallas",
+            },
+            ...availableSizes.map(
+              (size) => ({
+                value: size,
+                label: size,
+              })
+            ),
+          ]}
+        />
+
+        <div className="mt-6 grid grid-cols-2 gap-3">
+          <button
+            type="button"
+            onClick={onClear}
+            className="h-12 border border-black text-[10px] font-medium uppercase tracking-[0.14em]"
+          >
+            Limpiar
+          </button>
+
+          <button
+            type="button"
+            onClick={onClose}
+            className="h-12 bg-black text-[10px] font-medium uppercase tracking-[0.14em] text-white"
+          >
+            Ver resultados
+          </button>
+        </div>
+      </aside>
+    </div>
+  );
+}
+
+function FilterSelect({
+  label,
+  value,
+  onChange,
+  options,
+}) {
+  return (
+    <label className="mt-5 block">
+      <span className="text-[10px] font-medium uppercase tracking-[0.14em] text-black/45">
+        {label}
+      </span>
+
+      <select
+        value={value}
+        onChange={(event) =>
+          onChange(event.target.value)
+        }
+        className="mt-2 h-12 w-full border border-black/[0.14] bg-white px-4 text-[11px] uppercase outline-none"
+      >
+        {options.map((option) => (
+          <option
+            key={option.value}
+            value={option.value}
+          >
+            {option.label}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+function SearchOverlay({
+  value,
+  onChange,
+  onClose,
+  onSubmit,
+}) {
+  return (
+    <div className="fixed inset-0 z-[100] bg-white">
+      <div className="mx-auto flex min-h-screen max-w-[1200px] flex-col px-5 py-5 sm:px-8">
+        <div className="flex items-center justify-between">
+          <img
+            src="/logo.png"
+            alt="Master Caps"
+            className="h-16 w-auto object-contain"
+          />
+
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex h-11 w-11 items-center justify-center"
+          >
+            <X size={23} />
+          </button>
+        </div>
+
+        <div className="flex flex-1 items-center">
+          <form
+            className="w-full"
+            onSubmit={(event) => {
+              event.preventDefault();
+              onSubmit();
+            }}
+          >
+            <p className="text-[10px] font-medium uppercase tracking-[0.18em] text-black/40">
+              Buscar en Master Caps
+            </p>
+
+            <div className="mt-4 flex items-center border-b-2 border-black">
+              <Search
+                size={27}
+                className="mr-4 shrink-0"
+              />
+
+              <input
+                autoFocus
+                value={value}
+                onChange={(event) =>
+                  onChange(
+                    event.target.value
+                  )
+                }
+                className="h-20 min-w-0 flex-1 bg-transparent text-[24px] uppercase tracking-[-0.03em] outline-none placeholder:text-black/25 sm:text-[38px]"
+                placeholder="¿QUÉ ESTÁS BUSCANDO?"
+              />
+            </div>
+
+            <button
+              type="submit"
+              className="mt-7 inline-flex h-12 items-center gap-3 bg-black px-7 text-[10px] font-medium uppercase tracking-[0.18em] text-white"
+            >
+              Ver resultados
+              <ArrowRight size={15} />
+            </button>
+          </form>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -757,7 +3220,7 @@ function FixedWhatsAppButton() {
       href={whatsappUrl}
       target="_blank"
       rel="noopener noreferrer"
-      className="group fixed bottom-[calc(18px+env(safe-area-inset-bottom))] right-4 z-[70] flex h-14 w-14 items-center justify-center rounded-full bg-[#25D366] text-white shadow-[0_18px_45px_rgba(37,211,102,0.36)] ring-4 ring-white transition duration-300 hover:-translate-y-1 hover:scale-[1.03] hover:bg-[#1ebe5d] sm:bottom-6 sm:right-6 sm:h-[60px] sm:w-[60px]"
+      className="fixed bottom-[calc(18px+env(safe-area-inset-bottom))] right-4 z-[70] flex h-14 w-14 items-center justify-center rounded-full bg-red-600 text-white shadow-[0_18px_45px_rgba(220,38,38,0.34)] ring-4 ring-white transition hover:-translate-y-1 hover:bg-red-700 sm:bottom-6 sm:right-6 sm:h-[60px] sm:w-[60px]"
       aria-label="Contactar por WhatsApp"
       title="Asesoría por WhatsApp"
     >
@@ -768,10 +3231,6 @@ function FixedWhatsAppButton() {
       >
         <path d="M16.04 4C9.41 4 4 9.38 4 15.98c0 2.1.56 4.16 1.62 5.97L4 28l6.23-1.63a12.08 12.08 0 0 0 5.81 1.48h.01C22.68 27.85 28 22.49 28 15.89 28 9.31 22.67 4 16.04 4Zm.01 21.83h-.01c-1.74 0-3.45-.47-4.94-1.36l-.35-.21-3.7.97.99-3.6-.23-.37a9.86 9.86 0 0 1-1.52-5.28c0-5.47 4.48-9.93 9.99-9.93 2.67 0 5.18 1.04 7.06 2.91a9.83 9.83 0 0 1 2.93 7.01c0 5.47-4.47 9.86-10.22 9.86Zm5.46-7.37c-.3-.15-1.76-.87-2.03-.97-.27-.1-.47-.15-.67.15-.2.3-.77.97-.95 1.17-.17.2-.35.22-.65.07-.3-.15-1.26-.46-2.4-1.47-.89-.79-1.49-1.76-1.66-2.06-.17-.3-.02-.46.13-.61.13-.13.3-.35.45-.52.15-.17.2-.3.3-.5.1-.2.05-.37-.02-.52-.07-.15-.67-1.61-.92-2.21-.24-.58-.49-.5-.67-.51h-.57c-.2 0-.52.07-.8.37-.27.3-1.05 1.03-1.05 2.51s1.08 2.91 1.23 3.11c.15.2 2.13 3.25 5.16 4.55.72.31 1.28.49 1.72.63.72.23 1.38.2 1.9.12.58-.09 1.76-.72 2.01-1.42.25-.7.25-1.3.17-1.42-.08-.12-.27-.2-.57-.35Z" />
       </svg>
-
-      <span className="pointer-events-none absolute right-[68px] hidden whitespace-nowrap rounded-2xl bg-black px-3 py-2 text-[11px] font-medium text-white opacity-0 shadow-xl transition group-hover:opacity-100 sm:block">
-        ¿Necesitas ayuda?
-      </span>
     </a>
   );
 }

@@ -26,10 +26,14 @@ import {
 } from "lucide-react";
 
 import {
-  getOrCreateCategory,
+  getOrCreateSubcategory,
   STORE_ID,
   subscribeCategories,
 } from "../../services/categories.service";
+
+import {
+  subscribeMainCategories,
+} from "../../services/mainCategories.service";
 
 import {
   createProduct,
@@ -84,9 +88,10 @@ const createInitialVariants = () => [
 const createEmptyForm = () => ({
   name: "",
   code: "",
+  mainCategoryId: "",
   categoryId: "",
   categoryName: "",
-  newCategoryName: "",
+  newSubcategoryName: "",
   costPrice: "",
   salePrice: "",
   variants: createInitialVariants(),
@@ -522,6 +527,7 @@ async function createCroppedImageFile({
 
 export default function InventoryPage() {
   const [products, setProducts] = useState([]);
+  const [mainCategories, setMainCategories] = useState([]);
   const [categories, setCategories] = useState([]);
 
   const [form, setForm] = useState(createEmptyForm());
@@ -549,6 +555,7 @@ export default function InventoryPage() {
   const [loadingCode, setLoadingCode] = useState(false);
 
   const [search, setSearch] = useState("");
+  const [mainCategoryFilter, setMainCategoryFilter] = useState("all");
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [sizeFilter, setSizeFilter] = useState("all");
   const [stockFilter, setStockFilter] = useState("all");
@@ -605,6 +612,24 @@ export default function InventoryPage() {
       STORE_ID
     );
 
+    const unsubscribeMainCategories = subscribeMainCategories(
+      (mainCategoriesData) =>
+        setMainCategories(
+          mainCategoriesData
+            .filter((category) => category.isActive !== false)
+            .map((category) => ({
+              ...category,
+              name: normalizeCategoryName(category.name),
+            }))
+        ),
+      () =>
+        alert(
+          "No se pudieron escuchar las categorías principales en tiempo real."
+        ),
+      STORE_ID,
+      { includeArchived: false }
+    );
+
     const unsubscribeCategories = subscribeCategories(
       (categoriesData) =>
         setCategories(
@@ -619,6 +644,7 @@ export default function InventoryPage() {
 
     return () => {
       unsubscribeProducts();
+      unsubscribeMainCategories();
       unsubscribeCategories();
     };
   }, []);
@@ -646,6 +672,40 @@ export default function InventoryPage() {
     );
   }, [form.variants]);
 
+  const categoriesById = useMemo(
+    () =>
+      new Map(
+        categories.map((category) => [
+          category.id,
+          category,
+        ])
+      ),
+    [categories]
+  );
+
+  const mainCategoriesById = useMemo(
+    () =>
+      new Map(
+        mainCategories.map((category) => [
+          category.id,
+          category,
+        ])
+      ),
+    [mainCategories]
+  );
+
+  const filteredSubcategories = useMemo(() => {
+    if (mainCategoryFilter === "all") {
+      return categories;
+    }
+
+    return categories.filter(
+      (category) =>
+        category.parentCategoryId ===
+        mainCategoryFilter
+    );
+  }, [categories, mainCategoryFilter]);
+
   const availableSizes = useMemo(() => {
     const sizes = products.flatMap((product) => getProductSizes(product));
 
@@ -662,14 +722,30 @@ export default function InventoryPage() {
       const totalStock = getTotalStock(product);
       const stockStatus = getStockStatus(totalStock);
 
+      const productCategory = categoriesById.get(
+        product.categoryId
+      );
+
+      const productMainCategory =
+        mainCategoriesById.get(
+          productCategory?.parentCategoryId
+        );
+
       const matchesSearch =
         !cleanSearch ||
         String(product.name || "").toLowerCase().includes(cleanSearch) ||
         String(product.code || "").toLowerCase().includes(cleanSearch) ||
         String(product.categoryName || "").toLowerCase().includes(cleanSearch) ||
+        String(productCategory?.name || "").toLowerCase().includes(cleanSearch) ||
+        String(productMainCategory?.name || "").toLowerCase().includes(cleanSearch) ||
         productSizes.some((size) =>
           String(size || "").toLowerCase().includes(cleanSearch)
         );
+
+      const matchesMainCategory =
+        mainCategoryFilter === "all" ||
+        productCategory?.parentCategoryId ===
+          mainCategoryFilter;
 
       const matchesCategory =
         categoryFilter === "all" || product.categoryId === categoryFilter;
@@ -680,9 +756,24 @@ export default function InventoryPage() {
       const matchesStock =
         stockFilter === "all" || stockStatus.filter === stockFilter;
 
-      return matchesSearch && matchesCategory && matchesSize && matchesStock;
+      return (
+        matchesSearch &&
+        matchesMainCategory &&
+        matchesCategory &&
+        matchesSize &&
+        matchesStock
+      );
     });
-  }, [products, search, categoryFilter, sizeFilter, stockFilter]);
+  }, [
+    products,
+    search,
+    mainCategoryFilter,
+    categoryFilter,
+    sizeFilter,
+    stockFilter,
+    categoriesById,
+    mainCategoriesById,
+  ]);
 
   const totalPages = Math.max(
     Math.ceil(filteredProducts.length / productsPerPage),
@@ -710,7 +801,17 @@ export default function InventoryPage() {
 
   useEffect(() => {
     setPage(1);
-  }, [search, categoryFilter, sizeFilter, stockFilter]);
+  }, [
+    search,
+    mainCategoryFilter,
+    categoryFilter,
+    sizeFilter,
+    stockFilter,
+  ]);
+
+  useEffect(() => {
+    setCategoryFilter("all");
+  }, [mainCategoryFilter]);
 
   function updateForm(field, value) {
     setForm((current) => ({
@@ -718,7 +819,7 @@ export default function InventoryPage() {
       [field]:
         field === "name"
           ? normalizeProductName(value)
-          : field === "newCategoryName" || field === "categoryName"
+          : field === "newSubcategoryName" || field === "categoryName"
             ? normalizeCategoryName(value)
             : value,
     }));
@@ -1382,12 +1483,21 @@ export default function InventoryPage() {
     setSuggestedCode("");
     setCodeTouched(true);
 
+    const currentCategory = categories.find(
+      (category) => category.id === product.categoryId
+    );
+
     setForm({
       name: normalizeProductName(product.name),
       code: product.code || "",
+      mainCategoryId:
+        currentCategory?.parentCategoryId || "",
       categoryId: product.categoryId || "",
-      categoryName: normalizeCategoryName(product.categoryName),
-      newCategoryName: "",
+      categoryName: normalizeCategoryName(
+        currentCategory?.name ||
+          product.categoryName
+      ),
+      newSubcategoryName: "",
       costPrice: normalizeMoneyInputValue(product.costPrice),
       salePrice: normalizeMoneyInputValue(product.salePrice),
       variants: normalizedVariants.map((variant) => ({
@@ -1484,8 +1594,16 @@ export default function InventoryPage() {
       return;
     }
 
-    if (!form.categoryId && !form.newCategoryName.trim()) {
-      alert("Selecciona o crea una categoría.");
+    if (!form.mainCategoryId) {
+      alert("Selecciona una categoría principal.");
+      return;
+    }
+
+    if (
+      !form.categoryId &&
+      !form.newSubcategoryName.trim()
+    ) {
+      alert("Selecciona o crea una subcategoría.");
       return;
     }
 
@@ -1513,11 +1631,30 @@ export default function InventoryPage() {
 
       let selectedCategory = null;
 
-      if (form.newCategoryName.trim()) {
-        selectedCategory = await getOrCreateCategory(
-          normalizeCategoryName(form.newCategoryName),
-          STORE_ID
+      if (form.newSubcategoryName.trim()) {
+        const normalizedNewSubcategoryName =
+          normalizeCategoryName(
+            form.newSubcategoryName
+          );
+
+        selectedCategory = categories.find(
+          (category) =>
+            category.parentCategoryId ===
+              form.mainCategoryId &&
+            normalizeCategoryName(
+              category.name
+            ) === normalizedNewSubcategoryName
         );
+
+        if (!selectedCategory) {
+          selectedCategory =
+            await getOrCreateSubcategory(
+              normalizedNewSubcategoryName,
+              form.mainCategoryId,
+              STORE_ID,
+              getCurrentUserActor()
+            );
+        }
       } else {
         selectedCategory = categories.find(
           (category) => category.id === form.categoryId
@@ -1679,7 +1816,7 @@ export default function InventoryPage() {
         </header>
 
         <section className="mt-5 rounded-[26px] bg-white p-3 shadow-[0_16px_45px_rgba(0,0,0,0.04)] ring-1 ring-black/[0.06]">
-          <div className="grid gap-3 lg:grid-cols-[1.45fr_0.82fr_0.78fr_0.78fr]">
+          <div className="grid gap-3 lg:grid-cols-[1.35fr_0.8fr_0.85fr_0.72fr_0.72fr]">
             <label className="relative block">
               <Search
                 size={16}
@@ -1690,21 +1827,58 @@ export default function InventoryPage() {
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
                 className="h-11 w-full rounded-2xl border border-black/[0.08] bg-white pl-11 pr-4 text-[13px] font-normal text-black outline-none transition placeholder:text-black/35 focus:border-red-600 focus:ring-4 focus:ring-red-600/10"
-                placeholder="Buscar producto, código, categoría o talla..."
+                placeholder="Buscar producto, código, categoría, subcategoría o talla..."
               />
             </label>
 
             <select
-              value={categoryFilter}
-              onChange={(event) => setCategoryFilter(event.target.value)}
+              value={mainCategoryFilter}
+              onChange={(event) =>
+                setMainCategoryFilter(
+                  event.target.value
+                )
+              }
               className="h-11 rounded-2xl border border-black/[0.08] bg-white px-4 text-[13px] font-normal text-black outline-none transition focus:border-red-600 focus:ring-4 focus:ring-red-600/10"
             >
-              <option value="all">Todas las categorías</option>
-              {categories.map((category) => (
-                <option key={category.id} value={category.id}>
-                  {category.name}
-                </option>
-              ))}
+              <option value="all">
+                Todas las principales
+              </option>
+
+              {mainCategories.map(
+                (category) => (
+                  <option
+                    key={category.id}
+                    value={category.id}
+                  >
+                    {category.name}
+                  </option>
+                )
+              )}
+            </select>
+
+            <select
+              value={categoryFilter}
+              onChange={(event) =>
+                setCategoryFilter(
+                  event.target.value
+                )
+              }
+              className="h-11 rounded-2xl border border-black/[0.08] bg-white px-4 text-[13px] font-normal text-black outline-none transition focus:border-red-600 focus:ring-4 focus:ring-red-600/10"
+            >
+              <option value="all">
+                Todas las subcategorías
+              </option>
+
+              {filteredSubcategories.map(
+                (category) => (
+                  <option
+                    key={category.id}
+                    value={category.id}
+                  >
+                    {category.name}
+                  </option>
+                )
+              )}
             </select>
 
             <select
@@ -1746,6 +1920,8 @@ export default function InventoryPage() {
                     <ProductCard
                       key={product.id}
                       product={product}
+                      categoriesById={categoriesById}
+                      mainCategoriesById={mainCategoriesById}
                       batchSelected={batchSelectedProductIds.includes(
                         product.id
                       )}
@@ -1776,6 +1952,8 @@ export default function InventoryPage() {
       {detailProduct && (
         <ProductDetailModal
           product={detailProduct}
+          categoriesById={categoriesById}
+          mainCategoriesById={mainCategoriesById}
           onClose={() => setDetailProduct(null)}
           onPrintLabels={() => setLabelProduct(detailProduct)}
           onEdit={() => {
@@ -1844,6 +2022,7 @@ export default function InventoryPage() {
           removeVariant={removeVariant}
           handleCodeChange={handleCodeChange}
           loadingCode={loadingCode}
+          mainCategories={mainCategories}
           categories={categories}
           saving={saving}
           profit={profit}
@@ -1901,6 +2080,8 @@ function EmptyInventory({ onCreate }) {
 
 function ProductCard({
   product,
+  categoriesById,
+  mainCategoriesById,
   batchSelected,
   onToggleBatch,
   onView,
@@ -1915,6 +2096,24 @@ function ProductCard({
   const sizes = getProductSizes(product);
   const labelPrintSummary =
     getProductLabelPrintSummary(product);
+  const currentCategory = categoriesById.get(
+    product.categoryId
+  );
+
+  const currentMainCategory =
+    mainCategoriesById.get(
+      currentCategory?.parentCategoryId
+    );
+
+  const categoryPath = [
+    currentMainCategory?.name,
+    currentCategory?.name ||
+      product.categoryName,
+  ]
+    .filter(Boolean)
+    .map(normalizeCategoryName)
+    .join(" / ");
+
 
   const labelStatus =
     stock <= 0
@@ -2008,7 +2207,7 @@ function ProductCard({
               </p>
 
               <p className="mt-1 truncate text-[12px] text-black/50">
-                {normalizeCategoryName(product.categoryName) || "SIN CATEGORÍA"}
+                {categoryPath || "SIN CATEGORÍA"}
               </p>
             </div>
 
@@ -2122,7 +2321,14 @@ function ProductCard({
   );
 }
 
-function ProductDetailModal({ product, onClose, onEdit, onPrintLabels }) {
+function ProductDetailModal({
+  product,
+  categoriesById,
+  mainCategoriesById,
+  onClose,
+  onEdit,
+  onPrintLabels,
+}) {
   const images = getProductImages(product);
   const variants = normalizeProductVariants(
     product.variants,
@@ -2131,6 +2337,15 @@ function ProductDetailModal({ product, onClose, onEdit, onPrintLabels }) {
   );
   const totalStock = getTotalStock(product);
   const stockStatus = getStockStatus(totalStock);
+
+  const currentCategory = categoriesById.get(
+    product.categoryId
+  );
+
+  const currentMainCategory =
+    mainCategoriesById.get(
+      currentCategory?.parentCategoryId
+    );
 
   const [activeImageIndex, setActiveImageIndex] = useState(0);
 
@@ -2244,10 +2459,20 @@ function ProductDetailModal({ product, onClose, onEdit, onPrintLabels }) {
             <div className="grid gap-2 sm:grid-cols-2">
               <DetailItem label="Código" value={product.code || "Sin código"} />
               <DetailItem
-                label="Categoría"
+                label="Categoría principal"
                 value={
-                  normalizeCategoryName(product.categoryName) ||
-                  "SIN CATEGORÍA"
+                  normalizeCategoryName(
+                    currentMainCategory?.name
+                  ) || "SIN CATEGORÍA PRINCIPAL"
+                }
+              />
+              <DetailItem
+                label="Subcategoría"
+                value={
+                  normalizeCategoryName(
+                    currentCategory?.name ||
+                      product.categoryName
+                  ) || "SIN SUBCATEGORÍA"
                 }
               />
               <DetailItem label="Estado" value={stockStatus.label} />
@@ -2401,6 +2626,7 @@ function ProductFormModal({
   removeVariant,
   handleCodeChange,
   loadingCode,
+  mainCategories,
   categories,
   saving,
   profit,
@@ -2430,6 +2656,22 @@ function ProductFormModal({
     galleryFiles.length +
     pendingGalleryFiles.length +
     Number(newCoverAddsSlot);
+
+  const availableFormSubcategories = useMemo(
+    () =>
+      categories.filter(
+        (category) =>
+          category.parentCategoryId ===
+          form.mainCategoryId
+      ),
+    [categories, form.mainCategoryId]
+  );
+
+  const selectedMainCategory =
+    mainCategories.find(
+      (category) =>
+        category.id === form.mainCategoryId
+    ) || null;
 
   const currentCoverImage =
     pendingCoverPreview ||
@@ -2468,8 +2710,16 @@ function ProductFormModal({
         return false;
       }
 
-      if (!form.categoryId && !form.newCategoryName.trim()) {
-        alert("Selecciona o crea una categoría.");
+      if (!form.mainCategoryId) {
+        alert("Selecciona una categoría principal.");
+        return false;
+      }
+
+      if (
+        !form.categoryId &&
+        !form.newSubcategoryName.trim()
+      ) {
+        alert("Selecciona o crea una subcategoría.");
         return false;
       }
     }
@@ -2647,45 +2897,116 @@ function ProductFormModal({
                 <div className="mt-4 grid gap-4 sm:grid-cols-2">
                   <label>
                     <span className="text-[13px] font-normal text-black/65">
-                      Categoría existente
+                      Categoría principal
                     </span>
 
                     <select
-                      value={form.categoryId}
+                      value={form.mainCategoryId}
                       onChange={(event) => {
-                        const selected = categories.find(
-                          (category) => category.id === event.target.value
+                        updateForm(
+                          "mainCategoryId",
+                          event.target.value
                         );
-
-                        updateForm("categoryId", event.target.value);
-                        updateForm("categoryName", selected?.name || "");
-                        updateForm("newCategoryName", "");
+                        updateForm("categoryId", "");
+                        updateForm("categoryName", "");
+                        updateForm(
+                          "newSubcategoryName",
+                          ""
+                        );
                       }}
                       className="mt-2 h-11 w-full rounded-2xl border border-black/[0.08] bg-white px-4 text-[13px] outline-none transition focus:border-red-600 focus:ring-4 focus:ring-red-600/10"
                     >
                       <option value="">
-                        {categories.length === 0
-                          ? "No hay categorías creadas"
-                          : "Seleccionar categoría"}
+                        {mainCategories.length === 0
+                          ? "No hay categorías principales"
+                          : "Seleccionar categoría principal"}
                       </option>
 
-                      {categories.map((category) => (
-                        <option key={category.id} value={category.id}>
-                          {category.name}
-                        </option>
-                      ))}
+                      {mainCategories.map(
+                        (category) => (
+                          <option
+                            key={category.id}
+                            value={category.id}
+                          >
+                            {category.name}
+                          </option>
+                        )
+                      )}
                     </select>
                   </label>
 
+                  <label>
+                    <span className="text-[13px] font-normal text-black/65">
+                      Subcategoría
+                    </span>
+
+                    <select
+                      value={form.categoryId}
+                      disabled={!form.mainCategoryId}
+                      onChange={(event) => {
+                        const selected =
+                          availableFormSubcategories.find(
+                            (category) =>
+                              category.id ===
+                              event.target.value
+                          );
+
+                        updateForm(
+                          "categoryId",
+                          event.target.value
+                        );
+                        updateForm(
+                          "categoryName",
+                          selected?.name || ""
+                        );
+                        updateForm(
+                          "newSubcategoryName",
+                          ""
+                        );
+                      }}
+                      className="mt-2 h-11 w-full rounded-2xl border border-black/[0.08] bg-white px-4 text-[13px] outline-none transition focus:border-red-600 focus:ring-4 focus:ring-red-600/10 disabled:bg-black/[0.025] disabled:text-black/35"
+                    >
+                      <option value="">
+                        {!form.mainCategoryId
+                          ? "Primero selecciona la categoría principal"
+                          : availableFormSubcategories.length === 0
+                            ? "No hay subcategorías creadas"
+                            : "Seleccionar subcategoría"}
+                      </option>
+
+                      {availableFormSubcategories.map(
+                        (category) => (
+                          <option
+                            key={category.id}
+                            value={category.id}
+                          >
+                            {category.name}
+                          </option>
+                        )
+                      )}
+                    </select>
+                  </label>
+                </div>
+
+                <div className="mt-4">
                   <InputField
-                    label="Crear nueva categoría"
-                    value={form.newCategoryName}
+                    label="Crear nueva subcategoría"
+                    value={form.newSubcategoryName}
+                    disabled={!form.mainCategoryId}
                     onChange={(value) => {
-                      updateForm("newCategoryName", value);
+                      updateForm(
+                        "newSubcategoryName",
+                        value
+                      );
                       updateForm("categoryId", "");
                       updateForm("categoryName", "");
                     }}
-                    placeholder="Ej: Camisetas"
+                    placeholder={
+                      form.mainCategoryId
+                        ? "Ej: GORRAS AGROPECUARIAS"
+                        : "Selecciona primero una categoría principal"
+                    }
+                    helper="La nueva subcategoría quedará dentro de la categoría principal seleccionada."
                   />
                 </div>
 
@@ -2697,9 +3018,16 @@ function ProductFormModal({
                     <SummaryBox label="Producto" value={form.name || "Pendiente"} />
                     <SummaryBox label="Código" value={form.code || "Automático"} />
                     <SummaryBox
-                      label="Categoría"
+                      label="Categoría principal"
                       value={
-                        form.newCategoryName ||
+                        selectedMainCategory?.name ||
+                        "Pendiente"
+                      }
+                    />
+                    <SummaryBox
+                      label="Subcategoría"
+                      value={
+                        form.newSubcategoryName ||
                         form.categoryName ||
                         "Pendiente"
                       }
@@ -3152,9 +3480,16 @@ function ProductFormModal({
                   <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                     <SummaryBox label="Producto" value={form.name || "Pendiente"} />
                     <SummaryBox
-                      label="Categoría"
+                      label="Categoría principal"
                       value={
-                        form.newCategoryName ||
+                        selectedMainCategory?.name ||
+                        "Pendiente"
+                      }
+                    />
+                    <SummaryBox
+                      label="Subcategoría"
+                      value={
+                        form.newSubcategoryName ||
                         form.categoryName ||
                         "Pendiente"
                       }
