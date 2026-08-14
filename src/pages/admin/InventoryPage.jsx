@@ -32,6 +32,7 @@ import {
 } from "../../services/categories.service";
 
 import {
+  createMainCategory,
   subscribeMainCategories,
 } from "../../services/mainCategories.service";
 
@@ -577,7 +578,36 @@ export default function InventoryPage() {
   const [nameNormalizationProgress, setNameNormalizationProgress] = useState({ current: 0, total: 0 });
   const [draggedGalleryItem, setDraggedGalleryItem] = useState(null);
 
+  const [notifications, setNotifications] = useState([]);
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [deletingProduct, setDeletingProduct] = useState(false);
+
   const productsPerPage = 8;
+
+  function notify(message, type = "info") {
+    const cleanMessage = String(message || "").trim();
+
+    if (!cleanMessage) return;
+
+    const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    setNotifications((current) => [
+      ...current.slice(-3),
+      { id, message: cleanMessage, type },
+    ]);
+
+    window.setTimeout(() => {
+      setNotifications((current) =>
+        current.filter((notification) => notification.id !== id)
+      );
+    }, 3800);
+  }
+
+  function dismissNotification(id) {
+    setNotifications((current) =>
+      current.filter((notification) => notification.id !== id)
+    );
+  }
 
   useEffect(() => {
     setLoading(true);
@@ -607,7 +637,7 @@ export default function InventoryPage() {
       },
       () => {
         setLoading(false);
-        alert("No se pudo escuchar el inventario en tiempo real.");
+        notify("No se pudo escuchar el inventario en tiempo real.", "error");
       },
       STORE_ID
     );
@@ -623,7 +653,7 @@ export default function InventoryPage() {
             }))
         ),
       () =>
-        alert(
+        notify(
           "No se pudieron escuchar las categorías principales en tiempo real."
         ),
       STORE_ID,
@@ -638,7 +668,7 @@ export default function InventoryPage() {
             name: normalizeCategoryName(category.name),
           }))
         ),
-      () => alert("No se pudieron escuchar las categorías en tiempo real."),
+      () => notify("No se pudieron escuchar las categorías en tiempo real."),
       STORE_ID
     );
 
@@ -986,7 +1016,7 @@ export default function InventoryPage() {
         code: "",
       }));
 
-      alert("No se pudo calcular el siguiente código automático.");
+      notify("No se pudo calcular el siguiente código automático.", "error");
     } finally {
       setLoadingCode(false);
     }
@@ -1096,7 +1126,7 @@ export default function InventoryPage() {
       setPendingCoverPreview("");
     } catch (error) {
       console.error(error);
-      alert(
+      notify(
         error.message ||
           "No se pudo preparar la imagen de portada."
       );
@@ -1121,14 +1151,14 @@ export default function InventoryPage() {
     const availableSlots = MAX_PRODUCT_IMAGES - currentCount;
 
     if (availableSlots <= 0) {
-      alert(`Puedes tener máximo ${MAX_PRODUCT_IMAGES} imágenes por producto.`);
+      notify(`Puedes tener máximo ${MAX_PRODUCT_IMAGES} imágenes por producto.`);
       return;
     }
 
     const acceptedFiles = files.slice(0, availableSlots);
 
     if (acceptedFiles.length < files.length) {
-      alert(
+      notify(
         `Solo se agregarán ${acceptedFiles.length} imágenes porque el máximo es ${MAX_PRODUCT_IMAGES}.`
       );
     }
@@ -1199,7 +1229,7 @@ export default function InventoryPage() {
       );
     } catch (error) {
       console.error(error);
-      alert(
+      notify(
         error.message ||
           "No se pudo preparar la imagen seleccionada."
       );
@@ -1275,7 +1305,7 @@ export default function InventoryPage() {
       );
     } catch (error) {
       console.error(error);
-      alert(
+      notify(
         error.message ||
           "No se pudieron preparar las imágenes seleccionadas."
       );
@@ -1461,7 +1491,7 @@ export default function InventoryPage() {
       setCropEditor(null);
     } catch (error) {
       console.error(error);
-      alert(error.message || "No se pudo guardar el recorte de la imagen.");
+      notify(error.message || "No se pudo guardar el recorte de la imagen.");
     } finally {
       setSavingCrop(false);
     }
@@ -1527,7 +1557,7 @@ export default function InventoryPage() {
 
   function validateVariants() {
     if (!Array.isArray(form.variants) || form.variants.length === 0) {
-      alert("Agrega al menos una talla al producto.");
+      notify("Agrega al menos una talla al producto.", "warning");
       return null;
     }
 
@@ -1546,7 +1576,7 @@ export default function InventoryPage() {
     );
 
     if (invalidStock) {
-      alert(
+      notify(
         "El stock de cada talla debe ser un número entero mayor o igual a 0."
       );
       return null;
@@ -1556,7 +1586,7 @@ export default function InventoryPage() {
     const uniqueSizes = new Set(sizes);
 
     if (uniqueSizes.size !== sizes.length) {
-      alert("No puedes repetir la misma talla dentro del producto.");
+      notify("No puedes repetir la misma talla dentro del producto.", "warning");
       return null;
     }
 
@@ -1580,22 +1610,22 @@ export default function InventoryPage() {
     if (!normalizedVariants) return;
 
     if (processingImages) {
-      alert("Espera a que termine el procesamiento de las imágenes.");
+      notify("Espera a que termine el procesamiento de las imágenes.", "warning");
       return;
     }
 
     if (pendingCoverFile || pendingGalleryFiles.length > 0) {
-      alert("Decide si quieres quitar fondo o dejar original en las imágenes pendientes.");
+      notify("Decide si quieres quitar fondo o dejar original en las imágenes pendientes.", "warning");
       return;
     }
 
     if (!name) {
-      alert("Escribe el nombre del producto.");
+      notify("Escribe el nombre del producto.", "warning");
       return;
     }
 
     if (!form.mainCategoryId) {
-      alert("Selecciona una categoría principal.");
+      notify("Selecciona una categoría principal.", "warning");
       return;
     }
 
@@ -1603,17 +1633,17 @@ export default function InventoryPage() {
       !form.categoryId &&
       !form.newSubcategoryName.trim()
     ) {
-      alert("Selecciona o crea una subcategoría.");
+      notify("Selecciona o crea una subcategoría.", "warning");
       return;
     }
 
     if (costPrice <= 0) {
-      alert("El precio de llegada debe ser mayor a cero.");
+      notify("El precio de llegada debe ser mayor a cero.", "warning");
       return;
     }
 
     if (salePrice <= 0) {
-      alert("El precio de venta debe ser mayor a cero.");
+      notify("El precio de venta debe ser mayor a cero.", "warning");
       return;
     }
 
@@ -1622,7 +1652,7 @@ export default function InventoryPage() {
     });
 
     if (totalImages > MAX_PRODUCT_IMAGES) {
-      alert(`Puedes subir máximo ${MAX_PRODUCT_IMAGES} imágenes por producto.`);
+      notify(`Puedes subir máximo ${MAX_PRODUCT_IMAGES} imágenes por producto.`);
       return;
     }
 
@@ -1662,7 +1692,7 @@ export default function InventoryPage() {
       }
 
       if (!selectedCategory) {
-        alert("No se encontró la categoría seleccionada.");
+        notify("No se encontró la categoría seleccionada.", "error");
         return;
       }
 
@@ -1710,9 +1740,15 @@ export default function InventoryPage() {
       }
 
       closeForm();
+      notify(
+        editingProduct
+          ? "Producto actualizado correctamente."
+          : "Producto creado correctamente.",
+        "success"
+      );
     } catch (error) {
       console.error(error);
-      alert(error.message || "No se pudo guardar el producto.");
+      notify(error.message || "No se pudo guardar el producto.", "error");
     } finally {
       setSaving(false);
     }
@@ -1732,7 +1768,7 @@ export default function InventoryPage() {
 
   function openBatchPrint() {
     if (batchSelectedProducts.length === 0) {
-      alert(
+      notify(
         "Selecciona al menos un producto con stock para imprimir por lote."
       );
       return;
@@ -1750,18 +1786,24 @@ export default function InventoryPage() {
     setBatchPrintOpen(false);
   }
 
-  async function handleDelete(product) {
-    const confirmDelete = window.confirm(
-      `¿Seguro que deseas eliminar "${product.name}"? También se eliminarán todas sus imágenes y variantes.`
-    );
+  function handleDelete(product) {
+    setDeleteTarget(product);
+  }
 
-    if (!confirmDelete) return;
+  async function confirmDeleteProduct() {
+    if (!deleteTarget || deletingProduct) return;
 
     try {
-      await deleteProduct(product.id);
+      setDeletingProduct(true);
+      const productName = deleteTarget.name || "Producto";
+      await deleteProduct(deleteTarget.id);
+      setDeleteTarget(null);
+      notify(`“${productName}” fue eliminado del inventario.`, "success");
     } catch (error) {
       console.error(error);
-      alert(error.message || "No se pudo eliminar el producto.");
+      notify(error.message || "No se pudo eliminar el producto.", "error");
+    } finally {
+      setDeletingProduct(false);
     }
   }
 
@@ -2036,6 +2078,7 @@ export default function InventoryPage() {
           handleGalleryDragStart={handleGalleryDragStart}
           handleGalleryDrop={handleGalleryDrop}
           draggedGalleryItem={draggedGalleryItem}
+          notify={notify}
         />
       )}
 
@@ -2046,6 +2089,23 @@ export default function InventoryPage() {
           saving={savingCrop}
           onClose={closeCropEditor}
           onSave={saveCroppedImage}
+          notify={notify}
+        />
+      )}
+
+      <ToastStack
+        notifications={notifications}
+        onDismiss={dismissNotification}
+      />
+
+      {deleteTarget && (
+        <ConfirmDialog
+          title="Eliminar producto"
+          message={`¿Deseas eliminar “${deleteTarget.name}”? También se eliminarán sus imágenes y variantes.`}
+          confirmLabel={deletingProduct ? "Eliminando..." : "Eliminar producto"}
+          busy={deletingProduct}
+          onCancel={() => !deletingProduct && setDeleteTarget(null)}
+          onConfirm={confirmDeleteProduct}
         />
       )}
     </main>
@@ -2640,9 +2700,14 @@ function ProductFormModal({
   handleGalleryDragStart,
   handleGalleryDrop,
   draggedGalleryItem,
+  notify,
 }) {
   const [step, setStep] = useState(1);
   const totalSteps = 4;
+
+  const [mainCategoryModalOpen, setMainCategoryModalOpen] = useState(false);
+  const [newMainCategoryName, setNewMainCategoryName] = useState("");
+  const [creatingMainCategory, setCreatingMainCategory] = useState(false);
 
   const hasExistingCover =
     existingImages.some((image) => image.type === "cover") ||
@@ -2703,15 +2768,53 @@ function ProductFormModal({
     },
   ];
 
+  async function handleCreateMainCategory(event) {
+    event.preventDefault();
+
+    const name = normalizeCategoryName(newMainCategoryName).trim();
+
+    if (!name) {
+      notify("Escribe el nombre de la categoría principal.", "warning");
+      return;
+    }
+
+    try {
+      setCreatingMainCategory(true);
+
+      const createdCategory = await createMainCategory(
+        { name, isActive: true },
+        STORE_ID,
+        getCurrentUserActor()
+      );
+
+      updateForm("mainCategoryId", createdCategory.id);
+      updateForm("categoryId", "");
+      updateForm("categoryName", "");
+      updateForm("newSubcategoryName", "");
+
+      setNewMainCategoryName("");
+      setMainCategoryModalOpen(false);
+      notify(`Categoría “${createdCategory.name}” creada correctamente.`, "success");
+    } catch (error) {
+      console.error(error);
+      notify(
+        error.message || "No se pudo crear la categoría principal.",
+        "error"
+      );
+    } finally {
+      setCreatingMainCategory(false);
+    }
+  }
+
   function validateCurrentStep() {
     if (step === 1) {
       if (!form.name.trim()) {
-        alert("Escribe el nombre del producto.");
+        notify("Escribe el nombre del producto.", "warning");
         return false;
       }
 
       if (!form.mainCategoryId) {
-        alert("Selecciona una categoría principal.");
+        notify("Selecciona una categoría principal.", "warning");
         return false;
       }
 
@@ -2719,26 +2822,26 @@ function ProductFormModal({
         !form.categoryId &&
         !form.newSubcategoryName.trim()
       ) {
-        alert("Selecciona o crea una subcategoría.");
+        notify("Selecciona o crea una subcategoría.", "warning");
         return false;
       }
     }
 
     if (step === 2) {
       if (totalImages > MAX_PRODUCT_IMAGES) {
-        alert(`Puedes subir máximo ${MAX_PRODUCT_IMAGES} imágenes.`);
+        notify(`Puedes subir máximo ${MAX_PRODUCT_IMAGES} imágenes.`);
         return false;
       }
 
       if (pendingCoverFile || pendingGalleryFiles.length > 0) {
-        alert("Decide si quieres quitar fondo o dejar original en las imágenes pendientes.");
+        notify("Decide si quieres quitar fondo o dejar original en las imágenes pendientes.", "warning");
         return false;
       }
     }
 
     if (step === 3) {
       if (!Array.isArray(form.variants) || form.variants.length === 0) {
-        alert("Agrega al menos una talla.");
+        notify("Agrega al menos una talla.", "warning");
         return false;
       }
 
@@ -2747,7 +2850,7 @@ function ProductFormModal({
       );
 
       if (new Set(normalizedSizes).size !== normalizedSizes.length) {
-        alert("No puedes repetir la misma talla.");
+        notify("No puedes repetir la misma talla.", "warning");
         return false;
       }
 
@@ -2757,19 +2860,19 @@ function ProductFormModal({
       });
 
       if (hasInvalidStock) {
-        alert("El stock debe ser un número entero mayor o igual a cero.");
+        notify("El stock debe ser un número entero mayor o igual a cero.", "warning");
         return false;
       }
     }
 
     if (step === 4) {
       if (parseMoneyInput(form.costPrice) <= 0) {
-        alert("El precio de llegada debe ser mayor a cero.");
+        notify("El precio de llegada debe ser mayor a cero.", "warning");
         return false;
       }
 
       if (parseMoneyInput(form.salePrice) <= 0) {
-        alert("El precio de venta debe ser mayor a cero.");
+        notify("El precio de venta debe ser mayor a cero.", "warning");
         return false;
       }
     }
@@ -2896,8 +2999,21 @@ function ProductFormModal({
 
                 <div className="mt-4 grid gap-4 sm:grid-cols-2">
                   <label>
-                    <span className="text-[13px] font-normal text-black/65">
-                      Categoría principal
+                    <span className="flex items-center justify-between gap-3">
+                      <span className="text-[13px] font-normal text-black/65">
+                        Categoría principal
+                      </span>
+
+                      {!editingProduct && (
+                        <button
+                          type="button"
+                          onClick={() => setMainCategoryModalOpen(true)}
+                          className="inline-flex items-center gap-1.5 rounded-full bg-red-50 px-2.5 py-1 text-[9px] font-medium text-red-600 transition hover:bg-red-100"
+                        >
+                          <Plus size={11} />
+                          Nueva principal
+                        </button>
+                      )}
                     </span>
 
                     <select
@@ -3561,6 +3677,77 @@ function ProductFormModal({
           </footer>
         </form>
       </section>
+
+      {mainCategoryModalOpen && (
+        <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/35 px-4 backdrop-blur-sm">
+          <section className="w-full max-w-[440px] overflow-hidden rounded-[26px] bg-white shadow-2xl ring-1 ring-black/[0.06]">
+            <header className="flex items-center justify-between border-b border-black/[0.06] px-5 py-4">
+              <div>
+                <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-red-600">
+                  Inventario
+                </p>
+                <h3 className="mt-1 text-[19px] font-medium tracking-[-0.03em] text-black">
+                  Nueva categoría principal
+                </h3>
+                <p className="mt-1 text-[10px] text-black/42">
+                  Después podrás crear sus subcategorías desde el producto.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  if (creatingMainCategory) return;
+                  setMainCategoryModalOpen(false);
+                  setNewMainCategoryName("");
+                }}
+                className="flex h-9 w-9 items-center justify-center rounded-xl bg-black/[0.035] text-black/50 transition hover:bg-red-50 hover:text-red-600"
+              >
+                <X size={17} />
+              </button>
+            </header>
+
+            <form onSubmit={handleCreateMainCategory} className="p-5">
+              <label>
+                <span className="text-[11px] font-medium text-black/60">
+                  Nombre de la categoría
+                </span>
+                <input
+                  autoFocus
+                  value={newMainCategoryName}
+                  onChange={(event) =>
+                    setNewMainCategoryName(normalizeCategoryName(event.target.value))
+                  }
+                  placeholder="Ej: CALZADO"
+                  className="mt-2 h-11 w-full rounded-2xl border border-black/[0.08] bg-white px-4 text-[13px] outline-none transition placeholder:text-black/30 focus:border-red-600 focus:ring-4 focus:ring-red-600/10"
+                />
+              </label>
+
+              <div className="mt-5 grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  disabled={creatingMainCategory}
+                  onClick={() => {
+                    setMainCategoryModalOpen(false);
+                    setNewMainCategoryName("");
+                  }}
+                  className="h-10 rounded-xl border border-black/[0.08] text-[11px] font-medium text-black/60 transition hover:bg-black/[0.03] disabled:opacity-40"
+                >
+                  Cancelar
+                </button>
+
+                <button
+                  type="submit"
+                  disabled={creatingMainCategory}
+                  className="h-10 rounded-xl bg-red-600 text-[11px] font-medium text-white shadow-lg shadow-red-600/15 transition hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-55"
+                >
+                  {creatingMainCategory ? "Creando..." : "Crear categoría"}
+                </button>
+              </div>
+            </form>
+          </section>
+        </div>
+      )}
     </div>
   );
 }
@@ -3827,6 +4014,7 @@ function ProductImageCropModal({
   saving,
   onClose,
   onSave,
+  notify,
 }) {
   const imageElementRef = useRef(null);
 
@@ -4018,7 +4206,7 @@ function ProductImageCropModal({
     const naturalCrop = buildNaturalPixelCrop();
 
     if (!naturalCrop) {
-      alert(
+      notify(
         "Selecciona un área válida antes de continuar."
       );
       return;
@@ -4043,7 +4231,7 @@ function ProductImageCropModal({
       setEditorStep("frame");
     } catch (error) {
       console.error(error);
-      alert(
+      notify(
         error.message ||
           "No se pudo preparar la imagen recortada."
       );
@@ -4054,7 +4242,7 @@ function ProductImageCropModal({
 
   function saveFinalImage() {
     if (!preparedCropPixels) {
-      alert(
+      notify(
         "No se encontró un recorte válido para guardar."
       );
       return;
@@ -4531,6 +4719,112 @@ function CropControl({
         />
         <Icon size={14} className="text-black/35" />
       </div>
+    </div>
+  );
+}
+
+function ToastStack({ notifications, onDismiss }) {
+  if (!notifications.length) return null;
+
+  const styles = {
+    success: {
+      dot: "bg-emerald-500",
+      ring: "ring-emerald-100",
+      title: "Listo",
+    },
+    error: {
+      dot: "bg-red-600",
+      ring: "ring-red-100",
+      title: "No se pudo completar",
+    },
+    warning: {
+      dot: "bg-amber-500",
+      ring: "ring-amber-100",
+      title: "Revisa este dato",
+    },
+    info: {
+      dot: "bg-black/55",
+      ring: "ring-black/[0.06]",
+      title: "Información",
+    },
+  };
+
+  return (
+    <div className="pointer-events-none fixed right-3 top-3 z-[200] flex w-[min(390px,calc(100vw-24px))] flex-col gap-2 sm:right-5 sm:top-5">
+      {notifications.map((notification) => {
+        const style = styles[notification.type] || styles.info;
+
+        return (
+          <article
+            key={notification.id}
+            className={`pointer-events-auto flex items-start gap-3 rounded-[18px] bg-white px-3.5 py-3 shadow-[0_18px_55px_rgba(0,0,0,0.14)] ring-1 ${style.ring}`}
+          >
+            <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${style.dot}`} />
+
+            <div className="min-w-0 flex-1">
+              <p className="text-[10px] font-medium text-black">{style.title}</p>
+              <p className="mt-0.5 text-[10px] leading-4 text-black/55">
+                {notification.message}
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => onDismiss(notification.id)}
+              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-black/35 transition hover:bg-black/[0.035] hover:text-black"
+            >
+              <X size={13} />
+            </button>
+          </article>
+        );
+      })}
+    </div>
+  );
+}
+
+function ConfirmDialog({
+  title,
+  message,
+  confirmLabel,
+  busy,
+  onCancel,
+  onConfirm,
+}) {
+  return (
+    <div className="fixed inset-0 z-[190] flex items-center justify-center bg-black/35 px-4 backdrop-blur-sm">
+      <section className="w-full max-w-[430px] overflow-hidden rounded-[26px] bg-white shadow-2xl ring-1 ring-black/[0.06]">
+        <div className="p-5">
+          <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-red-50 text-red-600">
+            <Trash2 size={17} />
+          </div>
+
+          <h3 className="mt-4 text-[18px] font-medium tracking-[-0.03em] text-black">
+            {title}
+          </h3>
+          <p className="mt-2 text-[11px] leading-5 text-black/48">
+            {message}
+          </p>
+
+          <div className="mt-5 grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={onCancel}
+              disabled={busy}
+              className="h-10 rounded-xl border border-black/[0.08] text-[11px] font-medium text-black/60 transition hover:bg-black/[0.03] disabled:opacity-40"
+            >
+              Cancelar
+            </button>
+            <button
+              type="button"
+              onClick={onConfirm}
+              disabled={busy}
+              className="h-10 rounded-xl bg-red-600 text-[11px] font-medium text-white shadow-lg shadow-red-600/15 transition hover:bg-red-700 disabled:opacity-50"
+            >
+              {confirmLabel}
+            </button>
+          </div>
+        </div>
+      </section>
     </div>
   );
 }

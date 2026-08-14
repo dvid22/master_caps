@@ -47,6 +47,12 @@ const navItems = [
     roles: ["admin", "seller"],
   },
   {
+    label: "Clientes",
+    path: "/admin/clientes",
+    icon: Users,
+    roles: ["admin"],
+  },
+  {
     label: "Usuarios y nómina",
     sellerLabel: "Mi jornada",
     path: "/admin/usuarios",

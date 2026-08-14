@@ -12,6 +12,11 @@ import {
 
 import { db } from "../firebase/firebase";
 import { STORE_ID } from "./categories.service";
+import {
+  getCustomerDocumentId,
+  normalizeCustomerDocument,
+  normalizeCustomerPhone,
+} from "./customers.service";
 
 /* -------------------------------------------------------------------------- */
 /*                                CONSTANTES                                   */
@@ -451,9 +456,11 @@ function normalizeSaleDocument(sale) {
     amountReceived,
     change,
 
+    customerId: normalizeText(sale.customerId),
     customerName: normalizeText(sale.customerName),
-    customerDocument: normalizeText(sale.customerDocument),
-    customerPhone: normalizeText(sale.customerPhone),
+    customerDocument: normalizeCustomerDocument(sale.customerDocument),
+    customerPhone: normalizeCustomerPhone(sale.customerPhone),
+    customerEmail: normalizeText(sale.customerEmail),
 
     paymentMethod:
       normalizeText(sale.paymentMethod) || DEFAULT_PAYMENT_METHOD,
@@ -565,9 +572,11 @@ export async function getSaleById(saleId) {
  *     }
  *   ],
  *
+ *   customerId: "",
  *   customerName: "",
  *   customerDocument: "",
  *   customerPhone: "",
+ *   customerEmail: "",
  *
  *   paymentMethod: "efectivo",
  *   discount: 0,
@@ -581,9 +590,11 @@ export async function getSaleById(saleId) {
  */
 export async function createMultiItemSale({
   items,
+  customerId = "",
   customerName = "",
   customerDocument = "",
   customerPhone = "",
+  customerEmail = "",
 
   paymentMethod = DEFAULT_PAYMENT_METHOD,
   discount = 0,
@@ -605,6 +616,27 @@ export async function createMultiItemSale({
 
   const cleanDiscount = normalizeMoney(discount);
 
+  const cleanCustomerDocument = normalizeCustomerDocument(
+    customerDocument
+  );
+  const cleanCustomerName = normalizeText(customerName);
+  const cleanCustomerPhone = normalizeCustomerPhone(customerPhone);
+  const cleanCustomerEmail = normalizeText(customerEmail);
+
+  const expectedCustomerId = cleanCustomerDocument
+    ? getCustomerDocumentId(cleanCustomerDocument, storeId)
+    : "";
+
+  if (
+    cleanCustomerDocument &&
+    normalizeText(customerId) &&
+    normalizeText(customerId) !== expectedCustomerId
+  ) {
+    throw new Error(
+      "La cédula seleccionada no coincide con el cliente de la venta."
+    );
+  }
+
   const saleRef = doc(collection(db, "sales"));
 
   const saleResult = await runTransaction(db, async (transaction) => {
@@ -613,6 +645,14 @@ export async function createMultiItemSale({
      * Después se realizan todas las escrituras.
      */
     const saleCounter = await getNextSaleNumber(transaction, storeId);
+
+    let customerRef = null;
+    let customerSnapshot = null;
+
+    if (cleanCustomerDocument) {
+      customerRef = doc(db, "customers", expectedCustomerId);
+      customerSnapshot = await transaction.get(customerRef);
+    }
 
     const productSnapshots = new Map();
 
@@ -624,6 +664,45 @@ export async function createMultiItemSale({
         ref: productRef,
         snapshot: productSnapshot,
       });
+    }
+
+    let finalCustomerId = "";
+    let finalCustomerName = cleanCustomerName;
+    let finalCustomerDocument = cleanCustomerDocument;
+    let finalCustomerPhone = cleanCustomerPhone;
+    let finalCustomerEmail = cleanCustomerEmail;
+    let shouldCreateCustomer = false;
+
+    if (cleanCustomerDocument) {
+      finalCustomerId = expectedCustomerId;
+
+      if (customerSnapshot?.exists()) {
+        const existingCustomer = customerSnapshot.data();
+
+        if (existingCustomer.storeId !== storeId) {
+          throw new Error(
+            "El cliente encontrado no pertenece a esta tienda."
+          );
+        }
+
+        finalCustomerName =
+          normalizeText(existingCustomer.fullName) ||
+          cleanCustomerName;
+        finalCustomerPhone =
+          normalizeCustomerPhone(existingCustomer.phone) ||
+          cleanCustomerPhone;
+        finalCustomerEmail =
+          normalizeText(existingCustomer.email) ||
+          cleanCustomerEmail;
+      } else {
+        if (!cleanCustomerName) {
+          throw new Error(
+            "Completa el nombre del cliente para registrar esta cédula."
+          );
+        }
+
+        shouldCreateCustomer = true;
+      }
     }
 
     const saleItems = [];
@@ -778,6 +857,37 @@ export async function createMultiItemSale({
 
     const profit = total - totalCost;
 
+    if (shouldCreateCustomer && customerRef) {
+      transaction.set(customerRef, {
+        storeId,
+
+        documentNumber: finalCustomerDocument,
+        normalizedDocument: finalCustomerDocument,
+
+        firstName: "",
+        lastName: "",
+        fullName: finalCustomerName,
+
+        phone: finalCustomerPhone,
+        email: finalCustomerEmail,
+        address: "",
+        notes: "",
+
+        isActive: true,
+
+        createdByUid: seller?.uid || "",
+        createdByName: seller?.name || "",
+        createdByEmail: seller?.email || "",
+
+        updatedByUid: seller?.uid || "",
+        updatedByName: seller?.name || "",
+        updatedByEmail: seller?.email || "",
+
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    }
+
     transaction.set(
       saleCounter.counterRef,
       {
@@ -805,9 +915,11 @@ export async function createMultiItemSale({
       totalCost,
       profit,
 
-      customerName: normalizeText(customerName),
-      customerDocument: normalizeText(customerDocument),
-      customerPhone: normalizeText(customerPhone),
+      customerId: finalCustomerId,
+      customerName: finalCustomerName,
+      customerDocument: finalCustomerDocument,
+      customerPhone: finalCustomerPhone,
+      customerEmail: finalCustomerEmail,
 
       paymentMethod: cleanPaymentMethod,
       amountReceived: finalAmountReceived,
@@ -852,9 +964,11 @@ export async function createMultiItemSale({
       amountReceived: finalAmountReceived,
       change,
 
-      customerName: normalizeText(customerName),
-      customerDocument: normalizeText(customerDocument),
-      customerPhone: normalizeText(customerPhone),
+      customerId: finalCustomerId,
+      customerName: finalCustomerName,
+      customerDocument: finalCustomerDocument,
+      customerPhone: finalCustomerPhone,
+      customerEmail: finalCustomerEmail,
 
       notes: normalizeText(notes),
       source: normalizeText(source) || DEFAULT_SOURCE,
@@ -891,9 +1005,11 @@ export async function createDirectSale({
   size = "",
 
   quantity,
+  customerId = "",
   customerName = "",
   customerDocument = "",
   customerPhone = "",
+  customerEmail = "",
 
   paymentMethod = DEFAULT_PAYMENT_METHOD,
   amountReceived = null,
@@ -917,9 +1033,11 @@ export async function createDirectSale({
       },
     ],
 
+    customerId,
     customerName,
     customerDocument,
     customerPhone,
+    customerEmail,
 
     paymentMethod,
     amountReceived,

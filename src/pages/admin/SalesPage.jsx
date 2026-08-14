@@ -35,6 +35,11 @@ import {
   subscribeSales,
 } from "../../services/sales.service";
 
+import {
+  getCustomerByDocument,
+  normalizeCustomerDocument,
+} from "../../services/customers.service";
+
 import { formatCurrency, toNumber } from "../../utils/money";
 import { getCurrentUserActor } from "../../services/auth.service";
 import ThermalReceipt from "../../components/sales/ThermalReceipt";
@@ -44,6 +49,7 @@ import {
 } from "../../services/barcode.service";
 
 const emptyCheckout = {
+  customerId: "",
   customerName: "",
   customerDocument: "",
   customerPhone: "",
@@ -118,6 +124,11 @@ export default function SalesPage() {
 
   const [cart, setCart] = useState([]);
   const [checkout, setCheckout] = useState(emptyCheckout);
+  const [customerLookup, setCustomerLookup] = useState({
+    status: "idle",
+    document: "",
+    customer: null,
+  });
 
   const [search, setSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("all");
@@ -200,6 +211,100 @@ export default function SalesPage() {
       unsubscribeSales();
     };
   }, []);
+
+  useEffect(() => {
+    const documentNumber = normalizeCustomerDocument(
+      checkout.customerDocument
+    );
+
+    if (!documentNumber) {
+      setCustomerLookup({
+        status: "idle",
+        document: "",
+        customer: null,
+      });
+      return undefined;
+    }
+
+    let cancelled = false;
+
+    setCustomerLookup({
+      status: "searching",
+      document: documentNumber,
+      customer: null,
+    });
+
+    const timeoutId = window.setTimeout(async () => {
+      try {
+        const customer = await getCustomerByDocument(
+          documentNumber,
+          STORE_ID
+        );
+
+        if (cancelled) return;
+
+        if (customer) {
+          setCheckout((current) => {
+            if (
+              normalizeCustomerDocument(current.customerDocument) !==
+              documentNumber
+            ) {
+              return current;
+            }
+
+            return {
+              ...current,
+              customerId: customer.id,
+              customerName: customer.fullName || "",
+              customerPhone: customer.phone || "",
+            };
+          });
+
+          setCustomerLookup({
+            status: "found",
+            document: documentNumber,
+            customer,
+          });
+          return;
+        }
+
+        setCheckout((current) => {
+          if (
+            normalizeCustomerDocument(current.customerDocument) !==
+            documentNumber
+          ) {
+            return current;
+          }
+
+          return {
+            ...current,
+            customerId: "",
+          };
+        });
+
+        setCustomerLookup({
+          status: "not-found",
+          document: documentNumber,
+          customer: null,
+        });
+      } catch (error) {
+        if (cancelled) return;
+
+        console.error("No se pudo buscar el cliente:", error);
+
+        setCustomerLookup({
+          status: "error",
+          document: documentNumber,
+          customer: null,
+        });
+      }
+    }, 450);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeoutId);
+    };
+  }, [checkout.customerDocument]);
 
   useEffect(() => {
     const focusScanner = (event) => {
@@ -312,6 +417,34 @@ export default function SalesPage() {
 
   function updateCheckout(field, value) {
     setCheckout((current) => ({ ...current, [field]: value }));
+  }
+
+  function handleCustomerDocumentChange(value) {
+    const documentNumber = normalizeCustomerDocument(value).slice(0, 15);
+
+    setCheckout((current) => ({
+      ...current,
+      customerId: "",
+      customerDocument: documentNumber,
+      customerName: "",
+      customerPhone: "",
+    }));
+  }
+
+  function clearCustomerSelection() {
+    setCheckout((current) => ({
+      ...current,
+      customerId: "",
+      customerName: "",
+      customerDocument: "",
+      customerPhone: "",
+    }));
+
+    setCustomerLookup({
+      status: "idle",
+      document: "",
+      customer: null,
+    });
   }
 
   function openProduct(product) {
@@ -537,6 +670,34 @@ export default function SalesPage() {
       return;
     }
 
+    const cleanCustomerDocument = normalizeCustomerDocument(
+      checkout.customerDocument
+    );
+
+    if (cleanCustomerDocument) {
+      if (customerLookup.status === "searching") {
+        alert("Espera un momento mientras validamos la cédula del cliente.");
+        return;
+      }
+
+      if (customerLookup.status === "error") {
+        alert(
+          "No se pudo validar la cédula del cliente. Revisa la conexión e inténtalo nuevamente."
+        );
+        return;
+      }
+
+      if (
+        customerLookup.status !== "found" &&
+        !String(checkout.customerName || "").trim()
+      ) {
+        alert(
+          "Este cliente no está registrado. Escribe su nombre para crearlo con esta venta."
+        );
+        return;
+      }
+    }
+
     if (
       checkout.paymentMethod === "efectivo" &&
       cartSummary.amountReceived < cartSummary.total
@@ -558,6 +719,7 @@ export default function SalesPage() {
           quantity: item.quantity,
         })),
 
+        customerId: checkout.customerId,
         customerName: checkout.customerName,
         customerDocument: checkout.customerDocument,
         customerPhone: checkout.customerPhone,
@@ -576,6 +738,11 @@ export default function SalesPage() {
       setCompletedSale(sale);
       setCart([]);
       setCheckout(emptyCheckout);
+      setCustomerLookup({
+        status: "idle",
+        document: "",
+        customer: null,
+      });
       setMobileCartOpen(false);
       setScannerStatus(null);
     } catch (error) {
@@ -791,7 +958,10 @@ export default function SalesPage() {
               checkout={checkout}
               summary={cartSummary}
               selling={selling}
+              customerLookup={customerLookup}
               onUpdateCheckout={updateCheckout}
+              onCustomerDocumentChange={handleCustomerDocumentChange}
+              onClearCustomer={clearCustomerSelection}
               onUpdateQuantity={updateCartQuantity}
               onRemoveItem={removeCartItem}
               onClear={clearCart}
@@ -812,8 +982,11 @@ export default function SalesPage() {
           checkout={checkout}
           summary={cartSummary}
           selling={selling}
+          customerLookup={customerLookup}
           onClose={() => setMobileCartOpen(false)}
           onUpdateCheckout={updateCheckout}
+          onCustomerDocumentChange={handleCustomerDocumentChange}
+          onClearCustomer={clearCustomerSelection}
           onUpdateQuantity={updateCartQuantity}
           onRemoveItem={removeCartItem}
           onClear={clearCart}
@@ -964,7 +1137,10 @@ function CartPanel(props) {
     checkout,
     summary,
     selling,
+    customerLookup,
     onUpdateCheckout,
+    onCustomerDocumentChange,
+    onClearCustomer,
     onUpdateQuantity,
     onRemoveItem,
     onClear,
@@ -1018,7 +1194,10 @@ function CartPanel(props) {
           <CheckoutFields
             checkout={checkout}
             summary={summary}
+            customerLookup={customerLookup}
             onUpdate={onUpdateCheckout}
+            onCustomerDocumentChange={onCustomerDocumentChange}
+            onClearCustomer={onClearCustomer}
           />
         </div>
 
@@ -1126,7 +1305,18 @@ function CartItem({ item, onUpdateQuantity, onRemove }) {
   );
 }
 
-function CheckoutFields({ checkout, summary, onUpdate }) {
+function CheckoutFields({
+  checkout,
+  summary,
+  customerLookup,
+  onUpdate,
+  onCustomerDocumentChange,
+  onClearCustomer,
+}) {
+  const hasCustomerDocument = Boolean(
+    normalizeCustomerDocument(checkout.customerDocument)
+  );
+
   return (
     <section className="mt-4 border-t border-black/[0.06] pt-4">
       <div className="flex items-center gap-2">
@@ -1135,30 +1325,118 @@ function CheckoutFields({ checkout, summary, onUpdate }) {
       </div>
 
       <div className="mt-3 grid gap-2">
-        <input
-          value={checkout.customerName}
-          onChange={(event) => onUpdate("customerName", event.target.value)}
-          className="h-10 rounded-xl border border-black/[0.08] px-3 text-[12px] outline-none placeholder:text-black/35 focus:border-red-600 focus:ring-4 focus:ring-red-600/10"
-          placeholder="Cliente opcional"
-        />
+        <label>
+          <div className="mb-1.5 flex items-center justify-between gap-3">
+            <span className="text-[10px] text-black/45">
+              Cédula del cliente
+            </span>
 
-        <div className="grid grid-cols-2 gap-2">
-          <input
-            value={checkout.customerDocument}
-            onChange={(event) =>
-              onUpdate("customerDocument", event.target.value)
-            }
-            className="h-10 min-w-0 rounded-xl border border-black/[0.08] px-3 text-[12px] outline-none placeholder:text-black/35 focus:border-red-600 focus:ring-4 focus:ring-red-600/10"
-            placeholder="Documento"
-          />
+            {hasCustomerDocument && (
+              <button
+                type="button"
+                onClick={onClearCustomer}
+                className="text-[10px] text-red-600 transition hover:text-red-700"
+              >
+                Cambiar
+              </button>
+            )}
+          </div>
 
-          <input
-            value={checkout.customerPhone}
-            onChange={(event) => onUpdate("customerPhone", event.target.value)}
-            className="h-10 min-w-0 rounded-xl border border-black/[0.08] px-3 text-[12px] outline-none placeholder:text-black/35 focus:border-red-600 focus:ring-4 focus:ring-red-600/10"
-            placeholder="Teléfono"
-          />
-        </div>
+          <div className="relative">
+            <User
+              size={14}
+              className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-black/35"
+            />
+
+            <input
+              value={checkout.customerDocument}
+              onChange={(event) =>
+                onCustomerDocumentChange(event.target.value)
+              }
+              inputMode="numeric"
+              autoComplete="off"
+              className="h-10 w-full rounded-xl border border-black/[0.08] pl-9 pr-3 text-[12px] outline-none placeholder:text-black/35 focus:border-red-600 focus:ring-4 focus:ring-red-600/10"
+              placeholder="Cédula · opcional"
+            />
+          </div>
+        </label>
+
+        {!hasCustomerDocument && (
+          <div className="rounded-xl bg-black/[0.025] px-3 py-2.5 text-[10px] leading-4 text-black/42">
+            Déjalo vacío para una venta sin cliente. Si ingresas una cédula,
+            la compra quedará asociada a su historial.
+          </div>
+        )}
+
+        {hasCustomerDocument && customerLookup?.status === "searching" && (
+          <div className="flex items-center gap-2 rounded-xl border border-red-100 bg-red-50 px-3 py-2.5 text-[10px] text-red-600">
+            <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-red-200 border-t-red-600" />
+            Buscando cliente por cédula...
+          </div>
+        )}
+
+        {hasCustomerDocument && customerLookup?.status === "found" && (
+          <div className="rounded-2xl border border-emerald-100 bg-emerald-50/80 p-3">
+            <div className="flex items-start gap-2.5">
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-white text-emerald-600 ring-1 ring-emerald-100">
+                <CheckCircle2 size={16} />
+              </div>
+
+              <div className="min-w-0 flex-1">
+                <p className="text-[10px] font-medium text-emerald-700">
+                  Cliente encontrado
+                </p>
+                <p className="mt-1 truncate text-[12px] font-medium text-black">
+                  {checkout.customerName || "Cliente registrado"}
+                </p>
+                <p className="mt-0.5 truncate text-[10px] text-black/45">
+                  {checkout.customerPhone || "Sin teléfono registrado"}
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {hasCustomerDocument && customerLookup?.status === "not-found" && (
+          <div className="rounded-2xl border border-orange-100 bg-orange-50/70 p-3">
+            <div className="mb-2">
+              <p className="text-[10px] font-medium text-orange-700">
+                Cliente nuevo
+              </p>
+              <p className="mt-0.5 text-[9px] leading-4 text-black/42">
+                No encontramos esta cédula. Completa los datos y el cliente se
+                creará automáticamente al cobrar.
+              </p>
+            </div>
+
+            <div className="grid gap-2">
+              <input
+                value={checkout.customerName}
+                onChange={(event) =>
+                  onUpdate("customerName", event.target.value)
+                }
+                className="h-10 rounded-xl border border-black/[0.08] bg-white px-3 text-[12px] outline-none placeholder:text-black/35 focus:border-red-600 focus:ring-4 focus:ring-red-600/10"
+                placeholder="Nombre completo *"
+              />
+
+              <input
+                value={checkout.customerPhone}
+                onChange={(event) =>
+                  onUpdate("customerPhone", event.target.value)
+                }
+                inputMode="tel"
+                className="h-10 rounded-xl border border-black/[0.08] bg-white px-3 text-[12px] outline-none placeholder:text-black/35 focus:border-red-600 focus:ring-4 focus:ring-red-600/10"
+                placeholder="Teléfono opcional"
+              />
+            </div>
+          </div>
+        )}
+
+        {hasCustomerDocument && customerLookup?.status === "error" && (
+          <div className="rounded-xl border border-red-100 bg-red-50 px-3 py-2.5 text-[10px] leading-4 text-red-700">
+            No pudimos validar esta cédula. Revisa la conexión antes de cobrar.
+          </div>
+        )}
 
         <select
           value={checkout.paymentMethod}
@@ -1331,7 +1609,10 @@ function MobileCartDrawer(props) {
             checkout={props.checkout}
             summary={props.summary}
             selling={props.selling}
+            customerLookup={props.customerLookup}
             onUpdateCheckout={props.onUpdateCheckout}
+            onCustomerDocumentChange={props.onCustomerDocumentChange}
+            onClearCustomer={props.onClearCustomer}
             onUpdateQuantity={props.onUpdateQuantity}
             onRemoveItem={props.onRemoveItem}
             onClear={props.onClear}
