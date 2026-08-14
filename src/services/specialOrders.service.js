@@ -76,6 +76,47 @@ function normalizeQuantity(value) {
   return Number.isFinite(quantity) ? Math.max(quantity, 0) : 0;
 }
 
+function normalizeMoney(value) {
+  const amount = Number(value || 0);
+  return Number.isFinite(amount) ? Math.max(amount, 0) : 0;
+}
+
+function normalizePaymentPayload({
+  agreedPrice = 0,
+  hasDeposit = false,
+  depositAmount = 0,
+}) {
+  const cleanAgreedPrice = normalizeMoney(agreedPrice);
+  const cleanDepositAmount = hasDeposit
+    ? normalizeMoney(depositAmount)
+    : 0;
+
+  if (hasDeposit && cleanDepositAmount <= 0) {
+    throw new Error(
+      "Si el cliente deja un abono, el valor debe ser mayor a cero."
+    );
+  }
+
+  if (
+    cleanAgreedPrice > 0 &&
+    cleanDepositAmount > cleanAgreedPrice
+  ) {
+    throw new Error(
+      "El abono no puede ser mayor al valor acordado del encargo."
+    );
+  }
+
+  return {
+    agreedPrice: cleanAgreedPrice,
+    hasDeposit: cleanDepositAmount > 0,
+    depositAmount: cleanDepositAmount,
+    balanceDue:
+      cleanAgreedPrice > 0
+        ? Math.max(cleanAgreedPrice - cleanDepositAmount, 0)
+        : 0,
+  };
+}
+
 function normalizeStatus(value) {
   const cleanStatus = safeString(value).toLowerCase();
 
@@ -272,6 +313,21 @@ function mapSpecialOrderDocument(id, data = {}) {
     quantity: Math.max(normalizeQuantity(data.quantity), 1),
     notes: normalizeOptionalText(data.notes),
 
+    agreedPrice: normalizeMoney(data.agreedPrice),
+    hasDeposit:
+      Boolean(data.hasDeposit) || normalizeMoney(data.depositAmount) > 0,
+    depositAmount: normalizeMoney(data.depositAmount),
+    balanceDue:
+      data.balanceDue !== undefined
+        ? normalizeMoney(data.balanceDue)
+        : Math.max(
+            normalizeMoney(data.agreedPrice) -
+              normalizeMoney(data.depositAmount),
+            0
+          ),
+    depositRegisteredAt: data.depositRegisteredAt || null,
+    depositUpdatedAt: data.depositUpdatedAt || null,
+
     imageUrl: safeString(data.imageUrl),
     imagePath: safeString(data.imagePath),
     imageName: safeString(data.imageName),
@@ -425,6 +481,9 @@ export async function createSpecialOrder({
   color = "",
   quantity = 1,
   notes = "",
+  agreedPrice = 0,
+  hasDeposit = false,
+  depositAmount = 0,
   imageFile = null,
   storeId = STORE_ID,
   actor = null,
@@ -447,6 +506,12 @@ export async function createSpecialOrder({
     color,
     quantity,
     notes,
+  });
+
+  const payment = normalizePaymentPayload({
+    agreedPrice,
+    hasDeposit,
+    depositAmount,
   });
 
   const specialOrderRef = doc(collection(db, SPECIAL_ORDER_COLLECTION));
@@ -552,6 +617,27 @@ export async function createSpecialOrder({
         color: order.color,
         quantity: order.quantity,
         notes: order.notes,
+
+        agreedPrice: payment.agreedPrice,
+        hasDeposit: payment.hasDeposit,
+        depositAmount: payment.depositAmount,
+        balanceDue: payment.balanceDue,
+        depositRegisteredAt: payment.hasDeposit
+          ? serverTimestamp()
+          : null,
+        depositUpdatedAt: payment.hasDeposit
+          ? serverTimestamp()
+          : null,
+        depositRegisteredByUid: payment.hasDeposit
+          ? actor?.uid || ""
+          : "",
+        depositRegisteredByName: payment.hasDeposit
+          ? actor?.name || ""
+          : "",
+        depositRegisteredByEmail: payment.hasDeposit
+          ? actor?.email || ""
+          : "",
+
         ...uploadedImage,
         status: SPECIAL_ORDER_STATUS.PENDING,
         requestedAt: serverTimestamp(),
@@ -578,6 +664,7 @@ export async function createSpecialOrder({
         customerName: finalCustomerName,
         customerPhone: finalCustomerPhone,
         ...order,
+        ...payment,
         ...uploadedImage,
         status: SPECIAL_ORDER_STATUS.PENDING,
       };
@@ -638,15 +725,56 @@ export async function updateSpecialOrder(
       notes: updates.notes !== undefined ? updates.notes : current.notes,
     });
 
+    const previousDepositAmount = normalizeMoney(current.depositAmount);
+
+    const payment = normalizePaymentPayload({
+      agreedPrice:
+        updates.agreedPrice !== undefined
+          ? updates.agreedPrice
+          : current.agreedPrice,
+      hasDeposit:
+        updates.hasDeposit !== undefined
+          ? updates.hasDeposit
+          : Boolean(current.hasDeposit) || previousDepositAmount > 0,
+      depositAmount:
+        updates.depositAmount !== undefined
+          ? updates.depositAmount
+          : previousDepositAmount,
+    });
+
+    const depositChanged =
+      payment.depositAmount !== previousDepositAmount;
+
     transaction.update(specialOrderRef, {
       ...payload,
+      ...payment,
+      depositRegisteredAt:
+        payment.hasDeposit && !current.depositRegisteredAt
+          ? serverTimestamp()
+          : current.depositRegisteredAt || null,
+      depositUpdatedAt:
+        depositChanged
+          ? serverTimestamp()
+          : current.depositUpdatedAt || null,
+      depositRegisteredByUid:
+        payment.hasDeposit && !current.depositRegisteredAt
+          ? actor?.uid || ""
+          : safeString(current.depositRegisteredByUid),
+      depositRegisteredByName:
+        payment.hasDeposit && !current.depositRegisteredAt
+          ? actor?.name || ""
+          : safeString(current.depositRegisteredByName),
+      depositRegisteredByEmail:
+        payment.hasDeposit && !current.depositRegisteredAt
+          ? actor?.email || ""
+          : safeString(current.depositRegisteredByEmail),
       updatedByUid: actor?.uid || "",
       updatedByName: actor?.name || "",
       updatedByEmail: actor?.email || "",
       updatedAt: serverTimestamp(),
     });
 
-    return { id: cleanId, ...payload };
+    return { id: cleanId, ...payload, ...payment };
   });
 }
 

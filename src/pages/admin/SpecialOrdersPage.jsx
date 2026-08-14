@@ -5,6 +5,8 @@ import {
   ChevronDown,
   Clock3,
   Edit3,
+  Eye,
+  HandCoins,
   ImagePlus,
   PackageCheck,
   PackageSearch,
@@ -45,6 +47,7 @@ import {
 } from "../../services/categories.service";
 
 import { getCurrentUserActor } from "../../services/auth.service";
+import { formatCurrency } from "../../utils/money";
 
 const PAGE_SIZE = 10;
 
@@ -62,6 +65,9 @@ const emptyForm = {
   color: "",
   quantity: "1",
   notes: "",
+  agreedPrice: "",
+  hasDeposit: false,
+  depositAmount: "",
 };
 
 function normalizeText(value) {
@@ -72,6 +78,32 @@ function normalizeText(value) {
 
 function normalizeUpper(value) {
   return normalizeText(value).toLocaleUpperCase("es-CO");
+}
+
+function parseMoneyInput(value) {
+  const digits = String(value || "").replace(/\D/g, "");
+  if (!digits) return 0;
+
+  const amount = Number(digits);
+  return Number.isFinite(amount) ? amount : 0;
+}
+
+function formatMoneyInput(value) {
+  const amount = parseMoneyInput(value);
+  if (!amount) return "";
+
+  return new Intl.NumberFormat("es-CO", {
+    maximumFractionDigits: 0,
+  }).format(amount);
+}
+
+function getOrderBalance(order) {
+  const agreedPrice = Number(order?.agreedPrice || 0);
+  const depositAmount = Number(order?.depositAmount || 0);
+
+  return agreedPrice > 0
+    ? Math.max(agreedPrice - depositAmount, 0)
+    : Number(order?.balanceDue || 0);
 }
 
 function getDate(value) {
@@ -154,6 +186,7 @@ export default function SpecialOrdersPage() {
 
   const [showCreate, setShowCreate] = useState(false);
   const [editingOrder, setEditingOrder] = useState(null);
+  const [selectedOrder, setSelectedOrder] = useState(null);
   const [viewMode, setViewMode] = useState("orders");
 
   const [notifications, setNotifications] = useState([]);
@@ -443,7 +476,7 @@ export default function SpecialOrdersPage() {
                         <TableHead>Cliente</TableHead>
                         <TableHead>Producto</TableHead>
                         <TableHead>Talla / color</TableHead>
-                        <TableHead>Cantidad</TableHead>
+                        <TableHead>Abono</TableHead>
                         <TableHead>Fecha</TableHead>
                         <TableHead>Estado</TableHead>
                         <TableHead align="right">Acciones</TableHead>
@@ -475,6 +508,7 @@ export default function SpecialOrdersPage() {
                             key={order.id}
                             order={order}
                             saving={saving}
+                            onOpen={() => setSelectedOrder(order)}
                             onEdit={() => {
                               setEditingOrder(order);
                               setShowCreate(true);
@@ -501,6 +535,7 @@ export default function SpecialOrdersPage() {
                       key={order.id}
                       order={order}
                       saving={saving}
+                      onOpen={() => setSelectedOrder(order)}
                       onEdit={() => {
                         setEditingOrder(order);
                         setShowCreate(true);
@@ -525,6 +560,18 @@ export default function SpecialOrdersPage() {
           )}
         </section>
       </section>
+
+      {selectedOrder && (
+        <OrderDetailModal
+          order={selectedOrder}
+          onClose={() => setSelectedOrder(null)}
+          onEdit={() => {
+            setEditingOrder(selectedOrder);
+            setSelectedOrder(null);
+            setShowCreate(true);
+          }}
+        />
+      )}
 
       {showCreate && (
         <SpecialOrderModal
@@ -614,23 +661,24 @@ function TableHead({ children, align = "left" }) {
 function OrderRow({
   order,
   saving,
+  onOpen,
   onEdit,
   onStatusChange,
 }) {
   const nextStatuses = getNextStatusOptions(order.status);
 
   return (
-    <tr className="border-b border-black/[0.055] last:border-0 hover:bg-black/[0.012]">
+    <tr
+      onClick={onOpen}
+      className="cursor-pointer border-b border-black/[0.055] last:border-0 transition hover:bg-red-50/35"
+    >
       <td className="px-4 py-3">
         <div className="flex items-center gap-2.5">
           <OrderImage order={order} size="h-10 w-10" />
-
           <div>
-            <p className="text-[10.5px] font-medium">
-              {order.orderNumber}
-            </p>
+            <p className="text-[10.5px] font-medium">{order.orderNumber}</p>
             <p className="mt-0.5 text-[8px] text-black/38">
-              {order.productId ? "Producto vinculado" : "Producto libre"}
+              Toca para ver detalles
             </p>
           </div>
         </div>
@@ -660,8 +708,17 @@ function OrderRow({
         <span>{order.color || "Sin color"}</span>
       </td>
 
-      <td className="px-4 py-3 text-[10px] font-medium">
-        {order.quantity}
+      <td className="px-4 py-3">
+        <p className="text-[9px] font-medium">
+          {Number(order.depositAmount || 0) > 0
+            ? formatCurrency(order.depositAmount)
+            : "Sin abono"}
+        </p>
+        {Number(order.agreedPrice || 0) > 0 && (
+          <p className="mt-0.5 text-[8px] text-black/36">
+            de {formatCurrency(order.agreedPrice)}
+          </p>
+        )}
       </td>
 
       <td className="px-4 py-3 text-[9px] text-black/50">
@@ -672,8 +729,20 @@ function OrderRow({
         <StatusBadge status={order.status} />
       </td>
 
-      <td className="px-4 py-3">
+      <td
+        className="px-4 py-3"
+        onClick={(event) => event.stopPropagation()}
+      >
         <div className="flex justify-end gap-1.5">
+          <button
+            type="button"
+            onClick={onOpen}
+            className="flex h-8 w-8 items-center justify-center rounded-lg border border-black/[0.07] text-black/45 transition hover:bg-black/[0.03] hover:text-black"
+            title="Ver detalles"
+          >
+            <Eye size={12} />
+          </button>
+
           <button
             type="button"
             onClick={onEdit}
@@ -703,44 +772,108 @@ function OrderRow({
 function OrderMobileCard({
   order,
   saving,
+  onOpen,
   onEdit,
   onStatusChange,
 }) {
   const nextStatuses = getNextStatusOptions(order.status);
+  const balance = getOrderBalance(order);
 
   return (
-    <article className="rounded-[18px] border border-black/[0.06] bg-white p-3 shadow-[0_10px_28px_rgba(0,0,0,0.025)]">
-      <div className="flex gap-3">
-        <OrderImage order={order} size="h-16 w-16" />
+    <article className="overflow-hidden rounded-[22px] border border-black/[0.055] bg-white shadow-[0_12px_34px_rgba(0,0,0,0.04)]">
+      <button
+        type="button"
+        onClick={onOpen}
+        className="block w-full p-3.5 text-left"
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className="text-[8px] font-medium uppercase tracking-[0.12em] text-red-600">
+              {order.orderNumber}
+            </p>
+            <p className="mt-0.5 text-[8px] text-black/35">
+              {formatDate(order.requestedAt)}
+            </p>
+          </div>
 
-        <div className="min-w-0 flex-1">
-          <div className="flex items-start justify-between gap-2">
-            <div className="min-w-0">
-              <p className="text-[8px] font-medium uppercase tracking-[0.08em] text-red-600">
-                {order.orderNumber}
-              </p>
+          <StatusBadge status={order.status} />
+        </div>
 
-              <p className="mt-1 truncate text-[12px] font-medium">
-                {order.productName}
-              </p>
+        <div className="mt-3 flex gap-3">
+          <OrderImage order={order} size="h-[86px] w-[86px]" />
 
-              <p className="mt-0.5 truncate text-[9px] text-black/40">
-                {order.customerName} · {order.customerDocument}
-              </p>
+          <div className="min-w-0 flex-1">
+            <p className="line-clamp-2 text-[13px] font-medium leading-[1.25] tracking-[-0.015em]">
+              {order.productName}
+            </p>
+
+            <div className="mt-2 flex flex-wrap gap-1">
+              <Chip>{order.size || "Sin talla"}</Chip>
+              <Chip>{order.color || "Sin color"}</Chip>
+              <Chip>{order.quantity} u.</Chip>
             </div>
 
-            <StatusBadge status={order.status} />
-          </div>
-
-          <div className="mt-2 flex flex-wrap gap-1">
-            <Chip>{order.size || "Sin talla"}</Chip>
-            <Chip>{order.color || "Sin color"}</Chip>
-            <Chip>{order.quantity} u.</Chip>
+            <div className="mt-2.5">
+              <p className="truncate text-[10px] font-medium text-black/75">
+                {order.customerName}
+              </p>
+              <p className="mt-0.5 truncate text-[8.5px] text-black/38">
+                CC {order.customerDocument}
+                {order.customerPhone ? ` · ${order.customerPhone}` : ""}
+              </p>
+            </div>
           </div>
         </div>
-      </div>
 
-      <div className="mt-3 grid grid-cols-2 gap-2">
+        <div
+          className={`mt-3 flex items-center justify-between rounded-[14px] px-3 py-2.5 ${
+            Number(order.depositAmount || 0) > 0
+              ? "bg-emerald-50"
+              : "bg-black/[0.025]"
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            <div
+              className={`flex h-7 w-7 items-center justify-center rounded-lg ${
+                Number(order.depositAmount || 0) > 0
+                  ? "bg-white text-emerald-600"
+                  : "bg-white text-black/35"
+              }`}
+            >
+              <HandCoins size={13} />
+            </div>
+
+            <div>
+              <p className="text-[7.5px] uppercase tracking-[0.08em] text-black/35">
+                Abono
+              </p>
+              <p className="mt-0.5 text-[10px] font-medium">
+                {Number(order.depositAmount || 0) > 0
+                  ? formatCurrency(order.depositAmount)
+                  : "Sin abono"}
+              </p>
+            </div>
+          </div>
+
+          {Number(order.agreedPrice || 0) > 0 && (
+            <div className="text-right">
+              <p className="text-[7.5px] text-black/35">Saldo</p>
+              <p className="mt-0.5 text-[10px] font-medium">
+                {formatCurrency(balance)}
+              </p>
+            </div>
+          )}
+        </div>
+
+        <div className="mt-2.5 flex items-center justify-between">
+          <span className="text-[8.5px] text-black/35">
+            Ver detalles completos
+          </span>
+          <Eye size={13} className="text-black/35" />
+        </div>
+      </button>
+
+      <div className="grid grid-cols-2 gap-2 border-t border-black/[0.055] bg-black/[0.012] p-2.5">
         <button
           type="button"
           onClick={onEdit}
@@ -748,8 +881,9 @@ function OrderMobileCard({
             SPECIAL_ORDER_STATUS.DELIVERED,
             SPECIAL_ORDER_STATUS.CANCELLED,
           ].includes(order.status)}
-          className="h-9 rounded-xl border border-black/[0.08] text-[9px] font-medium disabled:opacity-30"
+          className="inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-black/[0.07] bg-white text-[9px] font-medium text-black/65 disabled:opacity-30"
         >
+          <Edit3 size={12} />
           Editar
         </button>
 
@@ -762,7 +896,7 @@ function OrderMobileCard({
           />
         ) : (
           <div className="flex h-9 items-center justify-center rounded-xl bg-black/[0.03] text-[9px] text-black/40">
-            Cerrado
+            Encargo cerrado
           </div>
         )}
       </div>
@@ -956,6 +1090,15 @@ function SpecialOrderModal({
           color: order.color || "",
           quantity: String(order.quantity || 1),
           notes: order.notes || "",
+          agreedPrice:
+            Number(order.agreedPrice || 0) > 0
+              ? formatMoneyInput(order.agreedPrice)
+              : "",
+          hasDeposit: Number(order.depositAmount || 0) > 0,
+          depositAmount:
+            Number(order.depositAmount || 0) > 0
+              ? formatMoneyInput(order.depositAmount)
+              : "",
         }
       : emptyForm
   );
@@ -1088,7 +1231,9 @@ function SpecialOrderModal({
       [field]:
         ["productName", "size", "color"].includes(field)
           ? normalizeUpper(value)
-          : value,
+          : ["agreedPrice", "depositAmount"].includes(field)
+            ? formatMoneyInput(value)
+            : value,
     }));
   }
 
@@ -1171,6 +1316,21 @@ function SpecialOrderModal({
       return;
     }
 
+    const agreedPrice = parseMoneyInput(form.agreedPrice);
+    const depositAmount = form.hasDeposit
+      ? parseMoneyInput(form.depositAmount)
+      : 0;
+
+    if (form.hasDeposit && depositAmount <= 0) {
+      onError("Escribe el valor del abono del cliente.");
+      return;
+    }
+
+    if (agreedPrice > 0 && depositAmount > agreedPrice) {
+      onError("El abono no puede ser mayor al valor del encargo.");
+      return;
+    }
+
     try {
       setSaving(true);
       const actor = getCurrentUserActor();
@@ -1186,6 +1346,9 @@ function SpecialOrderModal({
             color: form.color,
             quantity: form.quantity,
             notes: form.notes,
+            agreedPrice,
+            hasDeposit: Boolean(form.hasDeposit),
+            depositAmount,
           },
           actor
         );
@@ -1209,6 +1372,9 @@ function SpecialOrderModal({
       } else {
         const created = await createSpecialOrder({
           ...form,
+          agreedPrice,
+          hasDeposit: Boolean(form.hasDeposit),
+          depositAmount,
           imageFile,
           storeId: STORE_ID,
           actor,
@@ -1455,6 +1621,149 @@ function SpecialOrderModal({
                 />
               </div>
 
+              <div className="mt-5">
+                <SectionTitle
+                  title="Valor y abono"
+                  description="Define si el cliente deja dinero al momento de hacer el encargo."
+                />
+              </div>
+
+              <div className="mt-3 rounded-[18px] border border-black/[0.06] bg-black/[0.018] p-3">
+                <div className="grid gap-2.5 sm:grid-cols-[1fr_auto] sm:items-end">
+                  <Field
+                    label="Valor acordado del encargo"
+                    value={form.agreedPrice}
+                    onChange={(value) =>
+                      updateForm("agreedPrice", value)
+                    }
+                    placeholder="Ej: 180.000"
+                    inputMode="numeric"
+                  />
+
+                  <div>
+                    <span className="text-[9px] font-medium uppercase tracking-[0.08em] text-black/48">
+                      ¿Deja abono?
+                    </span>
+
+                    <div className="mt-1.5 grid grid-cols-2 rounded-xl bg-white p-1 ring-1 ring-black/[0.07]">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setForm((current) => ({
+                            ...current,
+                            hasDeposit: false,
+                            depositAmount: "",
+                          }))
+                        }
+                        className={`h-8 rounded-lg px-3 text-[9px] font-medium transition ${
+                          !form.hasDeposit
+                            ? "bg-black text-white"
+                            : "text-black/45"
+                        }`}
+                      >
+                        Sin abono
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setForm((current) => ({
+                            ...current,
+                            hasDeposit: true,
+                          }))
+                        }
+                        className={`h-8 rounded-lg px-3 text-[9px] font-medium transition ${
+                          form.hasDeposit
+                            ? "bg-red-600 text-white"
+                            : "text-black/45"
+                        }`}
+                      >
+                        Con abono
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {form.hasDeposit && (
+                  <div className="mt-3">
+                    <Field
+                      label="Valor del abono"
+                      value={form.depositAmount}
+                      onChange={(value) =>
+                        updateForm("depositAmount", value)
+                      }
+                      placeholder="Ej: 10.000"
+                      inputMode="numeric"
+                    />
+
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      {[10000, 20000, 50000].map((amount) => (
+                        <button
+                          key={amount}
+                          type="button"
+                          onClick={() =>
+                            updateForm("depositAmount", String(amount))
+                          }
+                          className="h-7 rounded-lg border border-black/[0.07] bg-white px-2.5 text-[8px] text-black/55 transition hover:border-red-200 hover:text-red-600"
+                        >
+                          {formatCurrency(amount)}
+                        </button>
+                      ))}
+
+                      {parseMoneyInput(form.agreedPrice) > 0 && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            updateForm(
+                              "depositAmount",
+                              String(
+                                Math.round(
+                                  parseMoneyInput(form.agreedPrice) / 2
+                                )
+                              )
+                            )
+                          }
+                          className="h-7 rounded-lg border border-red-100 bg-red-50 px-2.5 text-[8px] text-red-600"
+                        >
+                          50% del valor
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                <div className="mt-3 grid grid-cols-2 gap-2">
+                  <MiniMetric
+                    label="Abono"
+                    value={
+                      form.hasDeposit &&
+                      parseMoneyInput(form.depositAmount) > 0
+                        ? formatCurrency(
+                            parseMoneyInput(form.depositAmount)
+                          )
+                        : "Sin abono"
+                    }
+                  />
+
+                  <MiniMetric
+                    label="Saldo"
+                    value={
+                      parseMoneyInput(form.agreedPrice) > 0
+                        ? formatCurrency(
+                            Math.max(
+                              parseMoneyInput(form.agreedPrice) -
+                                (form.hasDeposit
+                                  ? parseMoneyInput(form.depositAmount)
+                                  : 0),
+                              0
+                            )
+                          )
+                        : "Sin definir"
+                    }
+                  />
+                </div>
+              </div>
+
               <label className="mt-3 block">
                 <span className="text-[9px] font-medium uppercase tracking-[0.08em] text-black/48">
                   Notas
@@ -1561,6 +1870,17 @@ function SpecialOrderModal({
                     label="Cantidad"
                     value={`${form.quantity || 0} unidad(es)`}
                   />
+                  <InfoLine
+                    label="Abono"
+                    value={
+                      form.hasDeposit &&
+                      parseMoneyInput(form.depositAmount) > 0
+                        ? formatCurrency(
+                            parseMoneyInput(form.depositAmount)
+                          )
+                        : "Sin abono"
+                    }
+                  />
                 </div>
               </div>
             </aside>
@@ -1591,6 +1911,213 @@ function SpecialOrderModal({
           </footer>
         </form>
       </section>
+    </div>
+  );
+}
+
+
+function OrderDetailModal({ order, onClose, onEdit }) {
+  const balance = getOrderBalance(order);
+  const canEdit = ![
+    SPECIAL_ORDER_STATUS.DELIVERED,
+    SPECIAL_ORDER_STATUS.CANCELLED,
+  ].includes(order.status);
+
+  return (
+    <div className="fixed inset-0 z-[90] flex items-end justify-center bg-black/45 p-0 backdrop-blur-sm sm:items-center sm:px-4 sm:py-6">
+      <section className="flex max-h-[94vh] w-full flex-col overflow-hidden rounded-t-[28px] bg-white shadow-2xl sm:max-w-[760px] sm:rounded-[28px]">
+        <header className="flex shrink-0 items-start justify-between gap-4 border-b border-black/[0.06] px-4 py-4 sm:px-5">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="text-[9px] font-medium uppercase tracking-[0.13em] text-red-600">
+                {order.orderNumber}
+              </p>
+              <StatusBadge status={order.status} />
+            </div>
+
+            <h2 className="mt-1.5 truncate text-[19px] font-medium tracking-[-0.03em]">
+              Detalle del encargo
+            </h2>
+
+            <p className="mt-0.5 text-[9px] text-black/38">
+              Registrado {formatDate(order.requestedAt)}
+            </p>
+          </div>
+
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-black/[0.035]"
+          >
+            <X size={17} />
+          </button>
+        </header>
+
+        <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-5">
+          <div className="grid gap-4 sm:grid-cols-[210px_minmax(0,1fr)]">
+            <div className="flex aspect-square items-center justify-center overflow-hidden rounded-[20px] bg-black/[0.025] ring-1 ring-black/[0.055]">
+              {order.imageUrl ? (
+                <img
+                  src={order.imageUrl}
+                  alt={order.productName}
+                  className="h-full w-full bg-white object-contain p-2"
+                />
+              ) : (
+                <Camera size={30} className="text-black/22" />
+              )}
+            </div>
+
+            <div className="min-w-0">
+              <p className="text-[8px] font-medium uppercase tracking-[0.1em] text-black/35">
+                Producto solicitado
+              </p>
+              <h3 className="mt-1 text-[17px] font-medium leading-tight">
+                {order.productName}
+              </h3>
+              <p className="mt-1 text-[9px] text-black/38">
+                {order.productCode || "Sin código"}
+                {order.productId
+                  ? " · Vinculado al inventario"
+                  : " · Producto libre"}
+              </p>
+
+              <div className="mt-3 grid grid-cols-3 gap-2">
+                <DetailMini label="Talla" value={order.size || "—"} />
+                <DetailMini label="Color" value={order.color || "—"} />
+                <DetailMini label="Cantidad" value={`${order.quantity} u.`} />
+              </div>
+
+              <div className="mt-4 rounded-[16px] bg-black/[0.025] p-3">
+                <p className="text-[8px] font-medium uppercase tracking-[0.1em] text-black/35">
+                  Cliente
+                </p>
+                <p className="mt-1 text-[12px] font-medium">
+                  {order.customerName}
+                </p>
+                <p className="mt-0.5 text-[9px] text-black/42">
+                  CC {order.customerDocument}
+                  {order.customerPhone ? ` · ${order.customerPhone}` : ""}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-4">
+            <p className="text-[10px] font-medium">Valor y abono</p>
+
+            <div className="mt-2 grid gap-2 sm:grid-cols-3">
+              <DetailMoney
+                label="Valor acordado"
+                value={
+                  Number(order.agreedPrice || 0) > 0
+                    ? formatCurrency(order.agreedPrice)
+                    : "Sin definir"
+                }
+              />
+              <DetailMoney
+                label="Abono recibido"
+                value={
+                  Number(order.depositAmount || 0) > 0
+                    ? formatCurrency(order.depositAmount)
+                    : "Sin abono"
+                }
+                accent={Number(order.depositAmount || 0) > 0}
+              />
+              <DetailMoney
+                label="Saldo pendiente"
+                value={
+                  Number(order.agreedPrice || 0) > 0
+                    ? formatCurrency(balance)
+                    : "Sin definir"
+                }
+              />
+            </div>
+          </div>
+
+          <div className="mt-4">
+            <p className="text-[10px] font-medium">Seguimiento</p>
+            <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-5">
+              <TimelineItem label="Solicitado" value={order.requestedAt} active />
+              <TimelineItem label="Pedido" value={order.orderedAt} />
+              <TimelineItem label="Recibido" value={order.receivedAt} />
+              <TimelineItem label="Entregado" value={order.deliveredAt} />
+              <TimelineItem label="Cancelado" value={order.cancelledAt} />
+            </div>
+          </div>
+
+          {order.notes && (
+            <div className="mt-4 rounded-[16px] border border-black/[0.055] p-3">
+              <p className="text-[8px] font-medium uppercase tracking-[0.1em] text-black/35">
+                Notas
+              </p>
+              <p className="mt-1.5 whitespace-pre-wrap text-[10px] leading-5 text-black/65">
+                {order.notes}
+              </p>
+            </div>
+          )}
+        </div>
+
+        <footer className="grid shrink-0 grid-cols-2 gap-2 border-t border-black/[0.06] bg-white p-3 sm:flex sm:justify-end">
+          <button
+            type="button"
+            onClick={onClose}
+            className="h-10 rounded-xl border border-black/[0.08] px-4 text-[10px] font-medium"
+          >
+            Cerrar
+          </button>
+
+          <button
+            type="button"
+            onClick={onEdit}
+            disabled={!canEdit}
+            className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-red-600 px-4 text-[10px] font-medium text-white disabled:bg-black/15"
+          >
+            <Edit3 size={13} />
+            Editar encargo
+          </button>
+        </footer>
+      </section>
+    </div>
+  );
+}
+
+function DetailMini({ label, value }) {
+  return (
+    <div className="rounded-xl bg-black/[0.025] px-2.5 py-2">
+      <p className="text-[7.5px] text-black/35">{label}</p>
+      <p className="mt-0.5 truncate text-[9.5px] font-medium">{value}</p>
+    </div>
+  );
+}
+
+function DetailMoney({ label, value, accent = false }) {
+  return (
+    <div
+      className={`rounded-[14px] px-3 py-3 ${
+        accent ? "bg-emerald-50" : "bg-black/[0.025]"
+      }`}
+    >
+      <p className={`text-[8px] ${accent ? "text-emerald-700/65" : "text-black/35"}`}>
+        {label}
+      </p>
+      <p className={`mt-1 text-[12px] font-medium ${accent ? "text-emerald-700" : ""}`}>
+        {value}
+      </p>
+    </div>
+  );
+}
+
+function TimelineItem({ label, value, active = false }) {
+  const hasValue = Boolean(value);
+
+  return (
+    <div className={`rounded-xl px-2.5 py-2 ${
+      hasValue || active ? "bg-black/[0.035]" : "bg-black/[0.018]"
+    }`}>
+      <p className="text-[7.5px] text-black/35">{label}</p>
+      <p className="mt-0.5 text-[8.5px] font-medium text-black/60">
+        {hasValue ? formatDate(value) : active ? "Registrado" : "Pendiente"}
+      </p>
     </div>
   );
 }
