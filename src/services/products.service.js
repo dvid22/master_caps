@@ -978,38 +978,250 @@ function mapProductsSnapshot(snapshot) {
 /*                          CONSULTAS Y SUSCRIPCIONES                           */
 /* -------------------------------------------------------------------------- */
 
-export function subscribeProducts(callback, onError, storeId = STORE_ID) {
+/**
+ * Registro compartido de productos por tienda.
+ *
+ * Objetivos:
+ * - Mantener un único onSnapshot real por storeId durante la sesión.
+ * - Evitar abrir listeners duplicados desde Inventario, Ventas, Apartados, etc.
+ * - Conservar el último snapshot normalizado en memoria para entregarlo
+ *   inmediatamente a nuevos consumidores.
+ *
+ * La caché persistente de Firestore (IndexedDB) sigue siendo responsabilidad
+ * de firebase.js. Esta capa únicamente evita duplicar listeners dentro de la
+ * misma ejecución de la aplicación.
+ */
+const productsRealtimeRegistry = new Map();
+
+function normalizeStoreId(storeId = STORE_ID) {
+  const cleanStoreId = String(storeId || STORE_ID).trim();
+
+  return cleanStoreId || STORE_ID;
+}
+
+function createProductsRealtimeEntry(storeId) {
+  return {
+    storeId,
+    subscribers: new Set(),
+    products: [],
+    hasSnapshot: false,
+    unsubscribeFirestore: null,
+    lastError: null,
+  };
+}
+
+function getProductsRealtimeEntry(storeId = STORE_ID) {
+  const cleanStoreId = normalizeStoreId(storeId);
+
+  if (!productsRealtimeRegistry.has(cleanStoreId)) {
+    productsRealtimeRegistry.set(
+      cleanStoreId,
+      createProductsRealtimeEntry(cleanStoreId)
+    );
+  }
+
+  return productsRealtimeRegistry.get(cleanStoreId);
+}
+
+function notifyProductsSubscribers(entry) {
+  const products = entry.products;
+
+  entry.subscribers.forEach((subscriber) => {
+    try {
+      subscriber.callback(products);
+    } catch (error) {
+      /*
+       * Un error dentro de un consumidor no debe romper el listener global
+       * ni impedir que los demás módulos reciban actualizaciones.
+       */
+      console.error(
+        "Error entregando productos a un suscriptor:",
+        error
+      );
+    }
+  });
+}
+
+function notifyProductsSubscribersError(entry, error) {
+  entry.subscribers.forEach((subscriber) => {
+    if (typeof subscriber.onError !== "function") {
+      return;
+    }
+
+    try {
+      subscriber.onError(error);
+    } catch (subscriberError) {
+      console.error(
+        "Error ejecutando el manejador de error de productos:",
+        subscriberError
+      );
+    }
+  });
+}
+
+function ensureProductsRealtimeListener(entry) {
+  if (entry.unsubscribeFirestore) {
+    return;
+  }
+
   const productsRef = collection(db, "products");
+
   const productsQuery = query(
     productsRef,
-    where("storeId", "==", storeId)
+    where("storeId", "==", entry.storeId)
   );
 
-  return onSnapshot(
+  entry.unsubscribeFirestore = onSnapshot(
     productsQuery,
     (snapshot) => {
-      callback(mapProductsSnapshot(snapshot));
+      entry.products = mapProductsSnapshot(snapshot);
+      entry.hasSnapshot = true;
+      entry.lastError = null;
+
+      notifyProductsSubscribers(entry);
     },
     (error) => {
-      console.error("Error escuchando productos:", error);
+      console.error(
+        `Error escuchando productos de la tienda "${entry.storeId}":`,
+        error
+      );
 
-      if (onError) {
-        onError(error);
-      }
+      entry.lastError = error;
+
+      /*
+       * Firestore no continuará enviando eventos después de un error fatal
+       * del listener. Dejamos la referencia limpia para permitir que una
+       * futura suscripción vuelva a inicializarlo.
+       */
+      entry.unsubscribeFirestore = null;
+
+      notifyProductsSubscribersError(entry, error);
     }
   );
 }
 
+/**
+ * Suscripción pública compatible con la implementación anterior.
+ *
+ * Cada llamada registra un consumidor, pero todas las llamadas del mismo
+ * storeId comparten un único listener de Firestore.
+ *
+ * El listener real permanece activo durante la sesión de la SPA para evitar
+ * ciclos repetidos de conectar/desconectar al navegar entre módulos. El
+ * navegador cierra la conexión al descargar la página.
+ */
+export function subscribeProducts(
+  callback,
+  onError,
+  storeId = STORE_ID
+) {
+  if (typeof callback !== "function") {
+    throw new TypeError(
+      "subscribeProducts necesita una función callback."
+    );
+  }
+
+  const entry = getProductsRealtimeEntry(storeId);
+
+  const subscriber = {
+    callback,
+    onError:
+      typeof onError === "function"
+        ? onError
+        : null,
+  };
+
+  entry.subscribers.add(subscriber);
+
+  /*
+   * Si ya existe información en memoria, el nuevo módulo la recibe de forma
+   * inmediata sin esperar otro snapshot ni otra consulta a Firestore.
+   */
+  if (entry.hasSnapshot) {
+    try {
+      callback(entry.products);
+    } catch (error) {
+      console.error(
+        "Error entregando productos almacenados en memoria:",
+        error
+      );
+    }
+  }
+
+  ensureProductsRealtimeListener(entry);
+
+  /*
+   * Mantiene la misma API de onSnapshot: el consumidor recibe una función
+   * unsubscribe. Solo retiramos ese consumidor; no destruimos el listener
+   * compartido de la sesión.
+   */
+  let active = true;
+
+  return () => {
+    if (!active) {
+      return;
+    }
+
+    active = false;
+    entry.subscribers.delete(subscriber);
+  };
+}
+
+/**
+ * Lectura puntual conservada para compatibilidad.
+ *
+ * No se sustituye automáticamente por la caché en memoria porque algunos
+ * flujos pueden depender explícitamente de ejecutar una consulta puntual.
+ * La persistencia configurada en firebase.js sigue permitiendo a Firestore
+ * aprovechar su caché local cuando corresponda.
+ */
 export async function getProducts(storeId = STORE_ID) {
+  const cleanStoreId = normalizeStoreId(storeId);
   const productsRef = collection(db, "products");
+
   const productsQuery = query(
     productsRef,
-    where("storeId", "==", storeId)
+    where("storeId", "==", cleanStoreId)
   );
 
   const snapshot = await getDocs(productsQuery);
 
   return mapProductsSnapshot(snapshot);
+}
+
+/**
+ * Limpieza opcional de listeners/caché en memoria.
+ *
+ * No es necesaria durante la navegación normal. Puede utilizarse al cerrar
+ * sesión o al cambiar de tienda si en el futuro la aplicación lo requiere.
+ */
+export function clearProductsRealtimeCache(storeId) {
+  if (storeId !== undefined && storeId !== null) {
+    const cleanStoreId = normalizeStoreId(storeId);
+    const entry = productsRealtimeRegistry.get(cleanStoreId);
+
+    if (!entry) {
+      return;
+    }
+
+    if (typeof entry.unsubscribeFirestore === "function") {
+      entry.unsubscribeFirestore();
+    }
+
+    entry.subscribers.clear();
+    productsRealtimeRegistry.delete(cleanStoreId);
+    return;
+  }
+
+  productsRealtimeRegistry.forEach((entry) => {
+    if (typeof entry.unsubscribeFirestore === "function") {
+      entry.unsubscribeFirestore();
+    }
+
+    entry.subscribers.clear();
+  });
+
+  productsRealtimeRegistry.clear();
 }
 
 /* -------------------------------------------------------------------------- */

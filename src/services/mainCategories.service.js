@@ -102,8 +102,15 @@ function mapMainCategoriesSnapshot(snapshot) {
 }
 
 async function getNextSortOrder(storeId) {
+  const cleanStoreId = normalizeStoreId(storeId);
+
+  const cachedEntry =
+    mainCategoriesRealtimeRegistry.get(cleanStoreId);
+
   const currentCategories =
-    await getMainCategories(storeId);
+    cachedEntry?.hasSnapshot
+      ? cachedEntry.categories
+      : await getMainCategories(cleanStoreId);
 
   if (currentCategories.length === 0) {
     return 0;
@@ -154,6 +161,181 @@ function buildMainCategoryPayload({
 }
 
 /* -------------------------------------------------------------------------- */
+/*                         CACHÉ Y LISTENER COMPARTIDO                         */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Registro compartido de categorías principales por tienda.
+ *
+ * - Mantiene un único onSnapshot real por storeId.
+ * - Permite múltiples consumidores sin duplicar listeners de Firestore.
+ * - Conserva el último snapshot normalizado en memoria durante la sesión.
+ * - Respeta includeArchived de forma individual para cada consumidor.
+ *
+ * La persistencia entre recargas sigue siendo responsabilidad de la caché
+ * IndexedDB configurada en firebase.js.
+ */
+const mainCategoriesRealtimeRegistry = new Map();
+
+function normalizeStoreId(storeId = STORE_ID) {
+  const cleanStoreId = String(storeId || STORE_ID).trim();
+
+  return cleanStoreId || STORE_ID;
+}
+
+function createMainCategoriesRealtimeEntry(storeId) {
+  return {
+    storeId,
+    subscribers: new Set(),
+    categories: [],
+    hasSnapshot: false,
+    unsubscribeFirestore: null,
+    lastError: null,
+  };
+}
+
+function getMainCategoriesRealtimeEntry(
+  storeId = STORE_ID
+) {
+  const cleanStoreId =
+    normalizeStoreId(storeId);
+
+  if (
+    !mainCategoriesRealtimeRegistry.has(
+      cleanStoreId
+    )
+  ) {
+    mainCategoriesRealtimeRegistry.set(
+      cleanStoreId,
+      createMainCategoriesRealtimeEntry(
+        cleanStoreId
+      )
+    );
+  }
+
+  return mainCategoriesRealtimeRegistry.get(
+    cleanStoreId
+  );
+}
+
+function getMainCategoriesForSubscriber(
+  entry,
+  subscriber
+) {
+  return subscriber.includeArchived
+    ? entry.categories
+    : entry.categories.filter(
+        (category) =>
+          category.isActive !== false
+      );
+}
+
+function notifyMainCategorySubscriber(
+  entry,
+  subscriber
+) {
+  try {
+    subscriber.callback(
+      getMainCategoriesForSubscriber(
+        entry,
+        subscriber
+      )
+    );
+  } catch (error) {
+    console.error(
+      "Error entregando categorías principales a un suscriptor:",
+      error
+    );
+  }
+}
+
+function notifyMainCategorySubscribers(
+  entry
+) {
+  entry.subscribers.forEach(
+    (subscriber) => {
+      notifyMainCategorySubscriber(
+        entry,
+        subscriber
+      );
+    }
+  );
+}
+
+function notifyMainCategorySubscribersError(
+  entry,
+  error
+) {
+  entry.subscribers.forEach(
+    (subscriber) => {
+      if (
+        typeof subscriber.onError !==
+        "function"
+      ) {
+        return;
+      }
+
+      try {
+        subscriber.onError(error);
+      } catch (subscriberError) {
+        console.error(
+          "Error ejecutando el manejador de error de categorías principales:",
+          subscriberError
+        );
+      }
+    }
+  );
+}
+
+function ensureMainCategoriesRealtimeListener(
+  entry
+) {
+  if (entry.unsubscribeFirestore) {
+    return;
+  }
+
+  const categoriesRef = collection(
+    db,
+    MAIN_CATEGORIES_COLLECTION
+  );
+
+  const categoriesQuery = query(
+    categoriesRef,
+    where(
+      "storeId",
+      "==",
+      entry.storeId
+    )
+  );
+
+  entry.unsubscribeFirestore = onSnapshot(
+    categoriesQuery,
+    (snapshot) => {
+      entry.categories =
+        mapMainCategoriesSnapshot(snapshot);
+      entry.hasSnapshot = true;
+      entry.lastError = null;
+
+      notifyMainCategorySubscribers(entry);
+    },
+    (error) => {
+      console.error(
+        `Error escuchando categorías principales de la tienda "${entry.storeId}":`,
+        error
+      );
+
+      entry.lastError = error;
+      entry.unsubscribeFirestore = null;
+
+      notifyMainCategorySubscribersError(
+        entry,
+        error
+      );
+    }
+  );
+}
+
+/* -------------------------------------------------------------------------- */
 /*                           LECTURA EN TIEMPO REAL                            */
 /* -------------------------------------------------------------------------- */
 
@@ -163,46 +345,54 @@ export function subscribeMainCategories(
   storeId = STORE_ID,
   options = {}
 ) {
+  if (typeof callback !== "function") {
+    throw new TypeError(
+      "subscribeMainCategories necesita una función callback."
+    );
+  }
+
   const {
     includeArchived = true,
   } = options;
 
-  const categoriesRef = collection(
-    db,
-    MAIN_CATEGORIES_COLLECTION
+  const entry =
+    getMainCategoriesRealtimeEntry(
+      storeId
+    );
+
+  const subscriber = {
+    callback,
+    onError:
+      typeof onError === "function"
+        ? onError
+        : null,
+    includeArchived:
+      includeArchived !== false,
+  };
+
+  entry.subscribers.add(subscriber);
+
+  if (entry.hasSnapshot) {
+    notifyMainCategorySubscriber(
+      entry,
+      subscriber
+    );
+  }
+
+  ensureMainCategoriesRealtimeListener(
+    entry
   );
 
-  const categoriesQuery = query(
-    categoriesRef,
-    where("storeId", "==", storeId)
-  );
+  let active = true;
 
-  return onSnapshot(
-    categoriesQuery,
-    (snapshot) => {
-      const categories =
-        mapMainCategoriesSnapshot(snapshot);
-
-      callback(
-        includeArchived
-          ? categories
-          : categories.filter(
-              (category) =>
-                category.isActive !== false
-            )
-      );
-    },
-    (error) => {
-      console.error(
-        "Error escuchando categorías principales:",
-        error
-      );
-
-      if (onError) {
-        onError(error);
-      }
+  return () => {
+    if (!active) {
+      return;
     }
-  );
+
+    active = false;
+    entry.subscribers.delete(subscriber);
+  };
 }
 
 export async function getMainCategories(
@@ -213,6 +403,23 @@ export async function getMainCategories(
     includeArchived = true,
   } = options;
 
+  const cleanStoreId =
+    normalizeStoreId(storeId);
+
+  const cachedEntry =
+    mainCategoriesRealtimeRegistry.get(
+      cleanStoreId
+    );
+
+  if (cachedEntry?.hasSnapshot) {
+    return includeArchived
+      ? cachedEntry.categories
+      : cachedEntry.categories.filter(
+          (category) =>
+            category.isActive !== false
+        );
+  }
+
   const categoriesRef = collection(
     db,
     MAIN_CATEGORIES_COLLECTION
@@ -220,10 +427,16 @@ export async function getMainCategories(
 
   const categoriesQuery = query(
     categoriesRef,
-    where("storeId", "==", storeId)
+    where(
+      "storeId",
+      "==",
+      cleanStoreId
+    )
   );
 
-  const snapshot = await getDocs(categoriesQuery);
+  const snapshot =
+    await getDocs(categoriesQuery);
+
   const categories =
     mapMainCategoriesSnapshot(snapshot);
 
@@ -246,15 +459,93 @@ export async function getMainCategoryById(
     return null;
   }
 
+  for (
+    const entry of
+    mainCategoriesRealtimeRegistry.values()
+  ) {
+    if (!entry.hasSnapshot) {
+      continue;
+    }
+
+    const cachedCategory =
+      entry.categories.find(
+        (category) =>
+          category.id ===
+          cleanCategoryId
+      );
+
+    if (cachedCategory) {
+      return cachedCategory;
+    }
+  }
+
   const categoryRef = doc(
     db,
     MAIN_CATEGORIES_COLLECTION,
     cleanCategoryId
   );
 
-  const snapshot = await getDoc(categoryRef);
+  const snapshot =
+    await getDoc(categoryRef);
 
   return mapMainCategoryDocument(snapshot);
+}
+
+/**
+ * Limpieza opcional de caché/listeners en memoria.
+ *
+ * No se necesita durante la navegación normal. Puede utilizarse al cerrar
+ * sesión o si en el futuro la aplicación cambia dinámicamente de tienda.
+ */
+export function clearMainCategoriesRealtimeCache(
+  storeId
+) {
+  if (
+    storeId !== undefined &&
+    storeId !== null
+  ) {
+    const cleanStoreId =
+      normalizeStoreId(storeId);
+
+    const entry =
+      mainCategoriesRealtimeRegistry.get(
+        cleanStoreId
+      );
+
+    if (!entry) {
+      return;
+    }
+
+    if (
+      typeof entry.unsubscribeFirestore ===
+      "function"
+    ) {
+      entry.unsubscribeFirestore();
+    }
+
+    entry.subscribers.clear();
+
+    mainCategoriesRealtimeRegistry.delete(
+      cleanStoreId
+    );
+
+    return;
+  }
+
+  mainCategoriesRealtimeRegistry.forEach(
+    (entry) => {
+      if (
+        typeof entry.unsubscribeFirestore ===
+        "function"
+      ) {
+        entry.unsubscribeFirestore();
+      }
+
+      entry.subscribers.clear();
+    }
+  );
+
+  mainCategoriesRealtimeRegistry.clear();
 }
 
 /* -------------------------------------------------------------------------- */

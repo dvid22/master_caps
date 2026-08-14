@@ -126,6 +126,193 @@ function mapCategoriesSnapshot(snapshot) {
 }
 
 /* -------------------------------------------------------------------------- */
+/*                         CACHÉ Y LISTENER COMPARTIDO                         */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Registro compartido de categorías por tienda.
+ *
+ * - Un único onSnapshot real por storeId.
+ * - Varios consumidores pueden reutilizar el mismo listener.
+ * - El último snapshot queda en memoria durante la sesión.
+ * - Las suscripciones por categoría principal se derivan del mismo snapshot,
+ *   evitando listeners adicionales a Firestore.
+ *
+ * La persistencia entre recargas sigue siendo responsabilidad de la caché
+ * IndexedDB configurada en firebase.js.
+ */
+const categoriesRealtimeRegistry = new Map();
+
+function normalizeStoreId(storeId = STORE_ID) {
+  const cleanStoreId = String(storeId || STORE_ID).trim();
+
+  return cleanStoreId || STORE_ID;
+}
+
+function createCategoriesRealtimeEntry(storeId) {
+  return {
+    storeId,
+    subscribers: new Set(),
+    categories: [],
+    hasSnapshot: false,
+    unsubscribeFirestore: null,
+    lastError: null,
+  };
+}
+
+function getCategoriesRealtimeEntry(storeId = STORE_ID) {
+  const cleanStoreId = normalizeStoreId(storeId);
+
+  if (!categoriesRealtimeRegistry.has(cleanStoreId)) {
+    categoriesRealtimeRegistry.set(
+      cleanStoreId,
+      createCategoriesRealtimeEntry(cleanStoreId)
+    );
+  }
+
+  return categoriesRealtimeRegistry.get(cleanStoreId);
+}
+
+function getCategoriesForSubscriber(entry, subscriber) {
+  if (!subscriber.mainCategoryId) {
+    return entry.categories;
+  }
+
+  return entry.categories.filter(
+    (category) =>
+      String(category.parentCategoryId || "").trim() ===
+      subscriber.mainCategoryId
+  );
+}
+
+function notifyCategorySubscriber(entry, subscriber) {
+  try {
+    subscriber.callback(
+      getCategoriesForSubscriber(entry, subscriber)
+    );
+  } catch (error) {
+    console.error(
+      "Error entregando categorías a un suscriptor:",
+      error
+    );
+  }
+}
+
+function notifyCategorySubscribers(entry) {
+  entry.subscribers.forEach((subscriber) => {
+    notifyCategorySubscriber(entry, subscriber);
+  });
+}
+
+function notifyCategorySubscribersError(entry, error) {
+  entry.subscribers.forEach((subscriber) => {
+    if (typeof subscriber.onError !== "function") {
+      return;
+    }
+
+    try {
+      subscriber.onError(error);
+    } catch (subscriberError) {
+      console.error(
+        "Error ejecutando el manejador de error de categorías:",
+        subscriberError
+      );
+    }
+  });
+}
+
+function ensureCategoriesRealtimeListener(entry) {
+  if (entry.unsubscribeFirestore) {
+    return;
+  }
+
+  const categoriesRef = collection(
+    db,
+    CATEGORIES_COLLECTION
+  );
+
+  const categoriesQuery = query(
+    categoriesRef,
+    where("storeId", "==", entry.storeId)
+  );
+
+  entry.unsubscribeFirestore = onSnapshot(
+    categoriesQuery,
+    (snapshot) => {
+      entry.categories =
+        mapCategoriesSnapshot(snapshot);
+      entry.hasSnapshot = true;
+      entry.lastError = null;
+
+      notifyCategorySubscribers(entry);
+    },
+    (error) => {
+      console.error(
+        `Error escuchando categorías de la tienda "${entry.storeId}":`,
+        error
+      );
+
+      entry.lastError = error;
+      entry.unsubscribeFirestore = null;
+
+      notifyCategorySubscribersError(
+        entry,
+        error
+      );
+    }
+  );
+}
+
+function addCategoriesSubscriber({
+  callback,
+  onError,
+  storeId,
+  mainCategoryId = "",
+}) {
+  if (typeof callback !== "function") {
+    throw new TypeError(
+      "La suscripción de categorías necesita una función callback."
+    );
+  }
+
+  const entry =
+    getCategoriesRealtimeEntry(storeId);
+
+  const subscriber = {
+    callback,
+    onError:
+      typeof onError === "function"
+        ? onError
+        : null,
+    mainCategoryId: String(
+      mainCategoryId || ""
+    ).trim(),
+  };
+
+  entry.subscribers.add(subscriber);
+
+  if (entry.hasSnapshot) {
+    notifyCategorySubscriber(
+      entry,
+      subscriber
+    );
+  }
+
+  ensureCategoriesRealtimeListener(entry);
+
+  let active = true;
+
+  return () => {
+    if (!active) {
+      return;
+    }
+
+    active = false;
+    entry.subscribers.delete(subscriber);
+  };
+}
+
+/* -------------------------------------------------------------------------- */
 /*                              LECTURA GENERAL                                */
 /* -------------------------------------------------------------------------- */
 
@@ -134,37 +321,28 @@ export function subscribeCategories(
   onError,
   storeId = STORE_ID
 ) {
-  const categoriesRef = collection(
-    db,
-    CATEGORIES_COLLECTION
-  );
-
-  const categoriesQuery = query(
-    categoriesRef,
-    where("storeId", "==", storeId)
-  );
-
-  return onSnapshot(
-    categoriesQuery,
-    (snapshot) => {
-      callback(mapCategoriesSnapshot(snapshot));
-    },
-    (error) => {
-      console.error(
-        "Error escuchando categorías:",
-        error
-      );
-
-      if (onError) {
-        onError(error);
-      }
-    }
-  );
+  return addCategoriesSubscriber({
+    callback,
+    onError,
+    storeId,
+  });
 }
 
 export async function getCategories(
   storeId = STORE_ID
 ) {
+  const cleanStoreId =
+    normalizeStoreId(storeId);
+
+  const cachedEntry =
+    categoriesRealtimeRegistry.get(
+      cleanStoreId
+    );
+
+  if (cachedEntry?.hasSnapshot) {
+    return cachedEntry.categories;
+  }
+
   const categoriesRef = collection(
     db,
     CATEGORIES_COLLECTION
@@ -172,7 +350,7 @@ export async function getCategories(
 
   const categoriesQuery = query(
     categoriesRef,
-    where("storeId", "==", storeId)
+    where("storeId", "==", cleanStoreId)
   );
 
   const snapshot = await getDocs(
@@ -191,6 +369,23 @@ export async function getCategoryById(
 
   if (!cleanCategoryId) {
     return null;
+  }
+
+  for (const entry of categoriesRealtimeRegistry.values()) {
+    if (!entry.hasSnapshot) {
+      continue;
+    }
+
+    const cachedCategory =
+      entry.categories.find(
+        (category) =>
+          category.id ===
+          cleanCategoryId
+      );
+
+    if (cachedCategory) {
+      return cachedCategory;
+    }
   }
 
   const categoryRef = doc(
@@ -223,37 +418,13 @@ export function subscribeSubcategoriesByMainCategory(
     return () => {};
   }
 
-  const categoriesRef = collection(
-    db,
-    CATEGORIES_COLLECTION
-  );
-
-  const categoriesQuery = query(
-    categoriesRef,
-    where("storeId", "==", storeId),
-    where(
-      "parentCategoryId",
-      "==",
-      cleanMainCategoryId
-    )
-  );
-
-  return onSnapshot(
-    categoriesQuery,
-    (snapshot) => {
-      callback(mapCategoriesSnapshot(snapshot));
-    },
-    (error) => {
-      console.error(
-        "Error escuchando subcategorías:",
-        error
-      );
-
-      if (onError) {
-        onError(error);
-      }
-    }
-  );
+  return addCategoriesSubscriber({
+    callback,
+    onError,
+    storeId,
+    mainCategoryId:
+      cleanMainCategoryId,
+  });
 }
 
 export async function getSubcategoriesByMainCategory(
@@ -268,6 +439,23 @@ export async function getSubcategoriesByMainCategory(
     return [];
   }
 
+  const cleanStoreId =
+    normalizeStoreId(storeId);
+
+  const cachedEntry =
+    categoriesRealtimeRegistry.get(
+      cleanStoreId
+    );
+
+  if (cachedEntry?.hasSnapshot) {
+    return cachedEntry.categories.filter(
+      (category) =>
+        String(
+          category.parentCategoryId || ""
+        ).trim() === cleanMainCategoryId
+    );
+  }
+
   const categoriesRef = collection(
     db,
     CATEGORIES_COLLECTION
@@ -275,7 +463,7 @@ export async function getSubcategoriesByMainCategory(
 
   const categoriesQuery = query(
     categoriesRef,
-    where("storeId", "==", storeId),
+    where("storeId", "==", cleanStoreId),
     where(
       "parentCategoryId",
       "==",
@@ -293,7 +481,8 @@ export async function getSubcategoriesByMainCategory(
 export async function getUnassignedCategories(
   storeId = STORE_ID
 ) {
-  const categories = await getCategories(storeId);
+  const categories =
+    await getCategories(storeId);
 
   return categories.filter(
     (category) =>
@@ -301,6 +490,62 @@ export async function getUnassignedCategories(
         category.parentCategoryId || ""
       ).trim()
   );
+}
+
+/**
+ * Limpieza opcional de caché/listeners en memoria.
+ *
+ * No se necesita durante la navegación normal. Puede utilizarse al cerrar
+ * sesión o si en el futuro la app cambia dinámicamente de tienda.
+ */
+export function clearCategoriesRealtimeCache(
+  storeId
+) {
+  if (
+    storeId !== undefined &&
+    storeId !== null
+  ) {
+    const cleanStoreId =
+      normalizeStoreId(storeId);
+
+    const entry =
+      categoriesRealtimeRegistry.get(
+        cleanStoreId
+      );
+
+    if (!entry) {
+      return;
+    }
+
+    if (
+      typeof entry.unsubscribeFirestore ===
+      "function"
+    ) {
+      entry.unsubscribeFirestore();
+    }
+
+    entry.subscribers.clear();
+    categoriesRealtimeRegistry.delete(
+      cleanStoreId
+    );
+
+    return;
+  }
+
+  categoriesRealtimeRegistry.forEach(
+    (entry) => {
+      if (
+        typeof entry.unsubscribeFirestore ===
+        "function"
+      ) {
+        entry.unsubscribeFirestore();
+      }
+
+      entry.subscribers.clear();
+    }
+  );
+
+  categoriesRealtimeRegistry.clear();
 }
 
 /* -------------------------------------------------------------------------- */

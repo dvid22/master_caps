@@ -42,6 +42,10 @@ import {
 } from "../../services/categories.service";
 import { formatCurrency } from "../../utils/money";
 import { getCurrentUserActor } from "../../services/auth.service";
+import {
+  getCustomerByDocument,
+  normalizeCustomerDocument,
+} from "../../services/customers.service";
 
 const emptySaleForm = {
   paymentMethod: "efectivo",
@@ -202,6 +206,7 @@ function buildFallbackGroup(groupKey, lines) {
         .replace(/[^a-zA-Z0-9]/g, "")
         .slice(0, 8)
         .toUpperCase()}`,
+    customerId: first.customerId || "",
     customerName: first.customerName,
     customerDocument: first.customerDocument,
     customerPhone: first.customerPhone,
@@ -1076,6 +1081,7 @@ function ManualReservationModal({
   onSubmit,
 }) {
   const [form, setForm] = useState({
+    customerId: "",
     customerName: "",
     customerDocument: "",
     customerPhone: "",
@@ -1091,6 +1097,118 @@ function ManualReservationModal({
   const [sizeFilter, setSizeFilter] = useState("all");
   const [stockFilter, setStockFilter] = useState("available");
   const [variantProduct, setVariantProduct] = useState(null);
+
+  const [customerLookup, setCustomerLookup] = useState({
+    status: "idle",
+    document: "",
+    customer: null,
+  });
+
+  useEffect(() => {
+    const documentNumber = normalizeCustomerDocument(
+      form.customerDocument
+    );
+
+    if (!documentNumber) {
+      setCustomerLookup({
+        status: "idle",
+        document: "",
+        customer: null,
+      });
+      return undefined;
+    }
+
+    let cancelled = false;
+
+    setCustomerLookup({
+      status: "searching",
+      document: documentNumber,
+      customer: null,
+    });
+
+    const timeoutId = window.setTimeout(async () => {
+      try {
+        const customer = await getCustomerByDocument(
+          documentNumber,
+          STORE_ID
+        );
+
+        if (cancelled) return;
+
+        if (customer) {
+          setForm((current) => {
+            if (
+              normalizeCustomerDocument(current.customerDocument) !==
+              documentNumber
+            ) {
+              return current;
+            }
+
+            return {
+              ...current,
+              customerId: customer.id,
+              customerName: customer.fullName || "",
+              customerPhone: customer.phone || "",
+            };
+          });
+
+          setCustomerLookup({
+            status: "found",
+            document: documentNumber,
+            customer,
+          });
+          return;
+        }
+
+        setForm((current) => {
+          if (
+            normalizeCustomerDocument(current.customerDocument) !==
+            documentNumber
+          ) {
+            return current;
+          }
+
+          return {
+            ...current,
+            customerId: "",
+          };
+        });
+
+        setCustomerLookup({
+          status: "not-found",
+          document: documentNumber,
+          customer: null,
+        });
+      } catch (error) {
+        if (cancelled) return;
+
+        console.error("No se pudo buscar el cliente:", error);
+
+        setCustomerLookup({
+          status: "error",
+          document: documentNumber,
+          customer: null,
+        });
+      }
+    }, 450);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeoutId);
+    };
+  }, [form.customerDocument]);
+
+  function handleCustomerDocumentChange(value) {
+    const documentNumber = normalizeCustomerDocument(value).slice(0, 15);
+
+    setForm((current) => ({
+      ...current,
+      customerId: "",
+      customerDocument: documentNumber,
+      customerName: "",
+      customerPhone: "",
+    }));
+  }
 
   const availableSizes = useMemo(() => {
     const sizes = products.flatMap((product) =>
@@ -1239,13 +1357,23 @@ function ManualReservationModal({
   function submit(event) {
     event.preventDefault();
 
-    if (!form.customerName.trim()) {
-      alert("Escribe el nombre del cliente.");
+    if (!form.customerDocument.trim()) {
+      alert("Escribe la cédula del cliente.");
       return;
     }
 
-    if (!form.customerDocument.trim()) {
-      alert("Escribe la cédula del cliente.");
+    if (customerLookup.status === "searching") {
+      alert("Espera un momento mientras verificamos la cédula.");
+      return;
+    }
+
+    if (customerLookup.status === "error") {
+      alert("No pudimos verificar el cliente. Intenta nuevamente.");
+      return;
+    }
+
+    if (!form.customerName.trim()) {
+      alert("Escribe el nombre del cliente.");
       return;
     }
 
@@ -1266,8 +1394,9 @@ function ManualReservationModal({
         size: item.size,
         quantity: item.quantity,
       })),
+      customerId: form.customerId,
       customerName: form.customerName,
-      customerDocument: form.customerDocument,
+      customerDocument: normalizeCustomerDocument(form.customerDocument),
       customerPhone: form.customerPhone,
       reservationDays: form.reservationDays,
       initialPayment,
@@ -1447,40 +1576,104 @@ function ManualReservationModal({
 
                 <section className="mt-4 border-t border-black/[0.06] pt-4">
                   <div className="grid gap-2">
-                    <Input
-                      label="Nombre completo"
-                      value={form.customerName}
-                      onChange={(value) =>
-                        setForm((current) => ({
-                          ...current,
-                          customerName: value,
-                        }))
-                      }
-                    />
+                    <label className="block">
+                      <span className="text-[11px] font-medium text-black/60">
+                        Cliente por cédula
+                      </span>
 
-                    <div className="grid grid-cols-2 gap-2">
-                      <Input
-                        label="Cédula"
-                        value={form.customerDocument}
-                        onChange={(value) =>
-                          setForm((current) => ({
-                            ...current,
-                            customerDocument: value,
-                          }))
-                        }
-                      />
+                      <div className="relative mt-2">
+                        <Search
+                          size={14}
+                          className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-black/35"
+                        />
 
-                      <Input
-                        label="Teléfono"
-                        value={form.customerPhone}
-                        onChange={(value) =>
-                          setForm((current) => ({
-                            ...current,
-                            customerPhone: value,
-                          }))
-                        }
-                      />
-                    </div>
+                        <input
+                          value={form.customerDocument}
+                          onChange={(event) =>
+                            handleCustomerDocumentChange(event.target.value)
+                          }
+                          inputMode="numeric"
+                          autoComplete="off"
+                          className="h-11 w-full rounded-2xl border border-black/[0.08] pl-9 pr-3 text-[12px] outline-none focus:border-red-600 focus:ring-4 focus:ring-red-600/10"
+                          placeholder="Escribe la cédula del cliente"
+                        />
+                      </div>
+                    </label>
+
+                    {form.customerDocument && customerLookup.status === "searching" && (
+                      <div className="flex items-center gap-2 rounded-2xl border border-red-100 bg-red-50 px-3 py-2.5 text-[10px] text-red-600">
+                        <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-red-200 border-t-red-600" />
+                        Buscando cliente por cédula...
+                      </div>
+                    )}
+
+                    {form.customerDocument && customerLookup.status === "found" && (
+                      <div className="rounded-2xl border border-emerald-100 bg-emerald-50/80 p-3">
+                        <div className="flex items-start gap-2.5">
+                          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-white text-emerald-600 ring-1 ring-emerald-100">
+                            <CheckCircle2 size={16} />
+                          </div>
+
+                          <div className="min-w-0 flex-1">
+                            <p className="text-[10px] font-medium text-emerald-700">
+                              Cliente encontrado
+                            </p>
+                            <p className="mt-1 truncate text-[12px] font-medium text-black">
+                              {form.customerName || "Cliente registrado"}
+                            </p>
+                            <p className="mt-0.5 truncate text-[10px] text-black/45">
+                              {form.customerPhone || "Sin teléfono registrado"}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {form.customerDocument && customerLookup.status === "not-found" && (
+                      <div className="rounded-2xl border border-orange-100 bg-orange-50/70 p-3">
+                        <div className="mb-2">
+                          <p className="text-[10px] font-medium text-orange-700">
+                            Cliente nuevo
+                          </p>
+                          <p className="mt-0.5 text-[9px] leading-4 text-black/42">
+                            Esta cédula no está registrada. Completa los datos y el cliente se creará automáticamente con el apartado.
+                          </p>
+                        </div>
+
+                        <div className="grid gap-2">
+                          <input
+                            value={form.customerName}
+                            onChange={(event) =>
+                              setForm((current) => ({
+                                ...current,
+                                customerName: event.target.value,
+                              }))
+                            }
+                            className="h-10 rounded-xl border border-black/[0.08] bg-white px-3 text-[12px] outline-none placeholder:text-black/35 focus:border-red-600 focus:ring-4 focus:ring-red-600/10"
+                            placeholder="Nombre completo *"
+                          />
+
+                          <input
+                            value={form.customerPhone}
+                            onChange={(event) =>
+                              setForm((current) => ({
+                                ...current,
+                                customerPhone: event.target.value.replace(/\D/g, "").slice(0, 15),
+                              }))
+                            }
+                            inputMode="tel"
+                            className="h-10 rounded-xl border border-black/[0.08] bg-white px-3 text-[12px] outline-none placeholder:text-black/35 focus:border-red-600 focus:ring-4 focus:ring-red-600/10"
+                            placeholder="Teléfono"
+                          />
+                        </div>
+                      </div>
+                    )}
+
+                    {form.customerDocument && customerLookup.status === "error" && (
+                      <div className="rounded-2xl border border-red-100 bg-red-50 px-3 py-2.5 text-[10px] leading-4 text-red-700">
+                        No se pudo verificar la cédula. Revisa la conexión e intenta nuevamente.
+                      </div>
+                    )}
 
                     <div className="grid grid-cols-2 gap-2">
                       <Input

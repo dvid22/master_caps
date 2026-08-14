@@ -15,6 +15,11 @@ import {
 
 import { db } from "../firebase/firebase";
 import { STORE_ID } from "./categories.service";
+import {
+  getCustomerDocumentId,
+  normalizeCustomerDocument,
+  normalizeCustomerPhone,
+} from "./customers.service";
 
 const DEFAULT_RESERVATION_DAYS = 7;
 
@@ -91,18 +96,36 @@ function getProductCoverUrl(product = {}) {
 }
 
 function validateCustomer({
+  customerId = "",
   customerName,
   customerDocument,
   customerPhone = "",
+  storeId = STORE_ID,
 }) {
   const cleanName = safeString(customerName);
-  const cleanDocument = safeString(customerDocument);
-  const cleanPhone = safeString(customerPhone);
+  const cleanDocument = normalizeCustomerDocument(customerDocument);
+  const cleanPhone = normalizeCustomerPhone(customerPhone);
 
-  if (!cleanName) throw new Error("Debes escribir el nombre del cliente.");
-  if (!cleanDocument) throw new Error("Debes escribir la cédula del cliente.");
+  if (!cleanDocument) {
+    throw new Error("Debes escribir la cédula del cliente.");
+  }
+
+  const expectedCustomerId = getCustomerDocumentId(
+    cleanDocument,
+    storeId
+  );
+
+  if (
+    safeString(customerId) &&
+    safeString(customerId) !== expectedCustomerId
+  ) {
+    throw new Error(
+      "La cédula seleccionada no coincide con el cliente del apartado."
+    );
+  }
 
   return {
+    customerId: expectedCustomerId,
     customerName: cleanName,
     customerDocument: cleanDocument,
     customerPhone: cleanPhone,
@@ -263,6 +286,7 @@ export async function updateReservationSettings({
 
 export async function createReservationCart({
   items = [],
+  customerId = "",
   customerName,
   customerDocument,
   customerPhone = "",
@@ -279,15 +303,28 @@ export async function createReservationCart({
   const cleanStoreId = safeString(storeId) || STORE_ID;
   const normalizedItems = normalizeCartItems(items);
   const customer = validateCustomer({
+    customerId,
     customerName,
     customerDocument,
     customerPhone,
+    storeId: cleanStoreId,
   });
   const requestedInitialPayment = Math.max(safeNumber(initialPayment), 0);
 
   return runTransaction(db, async (transaction) => {
     const settingsRef = doc(db, "reservationSettings", cleanStoreId);
     const settingsSnap = await transaction.get(settingsRef);
+
+    const shouldResolveCustomerNow =
+      source === "manual" || Boolean(actor?.uid);
+
+    const customerRef = shouldResolveCustomerNow
+      ? doc(db, "customers", customer.customerId)
+      : null;
+
+    const customerSnapshot = customerRef
+      ? await transaction.get(customerRef)
+      : null;
 
     const defaultDays = normalizeDays(
       settingsSnap.exists()
@@ -299,6 +336,33 @@ export async function createReservationCart({
     const expiresAtDate = new Date(
       Date.now() + finalReservationDays * 24 * 60 * 60 * 1000
     );
+
+    let finalCustomerName = customer.customerName;
+    let finalCustomerPhone = customer.customerPhone;
+    let shouldCreateCustomer = false;
+
+    if (customerSnapshot?.exists()) {
+      const existingCustomer = customerSnapshot.data();
+
+      if (safeString(existingCustomer.storeId) !== cleanStoreId) {
+        throw new Error(
+          "El cliente encontrado no pertenece a esta tienda."
+        );
+      }
+
+      finalCustomerName =
+        safeString(existingCustomer.fullName) || finalCustomerName;
+      finalCustomerPhone =
+        normalizeCustomerPhone(existingCustomer.phone) || finalCustomerPhone;
+    } else if (shouldResolveCustomerNow) {
+      if (!finalCustomerName) {
+        throw new Error(
+          "Completa el nombre del cliente para registrar esta cédula."
+        );
+      }
+
+      shouldCreateCustomer = true;
+    }
 
     const groupRef = doc(collection(db, "reservationGroups"));
     const groupNumber = createGroupNumber(groupRef);
@@ -410,6 +474,30 @@ export async function createReservationCart({
           ]
         : [];
 
+    if (shouldCreateCustomer && customerRef) {
+      transaction.set(customerRef, {
+        storeId: cleanStoreId,
+        documentNumber: customer.customerDocument,
+        normalizedDocument: customer.customerDocument,
+        firstName: "",
+        lastName: "",
+        fullName: finalCustomerName,
+        phone: finalCustomerPhone,
+        email: "",
+        address: "",
+        notes: "",
+        isActive: true,
+        createdByUid: actor?.uid || "",
+        createdByName: actor?.name || "",
+        createdByEmail: actor?.email || "",
+        updatedByUid: actor?.uid || "",
+        updatedByName: actor?.name || "",
+        updatedByEmail: actor?.email || "",
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    }
+
     for (const state of productStates.values()) {
       transaction.update(state.productRef, {
         variants: state.variants,
@@ -421,9 +509,10 @@ export async function createReservationCart({
     transaction.set(groupRef, {
       storeId: cleanStoreId,
       groupNumber,
-      customerName: customer.customerName,
+      customerId: customer.customerId,
+      customerName: finalCustomerName,
       customerDocument: customer.customerDocument,
-      customerPhone: customer.customerPhone,
+      customerPhone: finalCustomerPhone,
       status: "active",
       source,
       clientVisitorId: safeString(clientVisitorId),
@@ -472,9 +561,10 @@ export async function createReservationCart({
         costPrice: line.costPrice,
         quantity: line.requested.quantity,
         subtotal: line.subtotal,
-        customerName: customer.customerName,
+        customerId: customer.customerId,
+        customerName: finalCustomerName,
         customerDocument: customer.customerDocument,
-        customerPhone: customer.customerPhone,
+        customerPhone: finalCustomerPhone,
         status: "active",
         source,
         clientVisitorId: safeString(clientVisitorId),
@@ -498,6 +588,10 @@ export async function createReservationCart({
     return {
       reservationGroupId: groupRef.id,
       reservationGroupNumber: groupNumber,
+      customerId: customer.customerId,
+      customerName: finalCustomerName,
+      customerDocument: customer.customerDocument,
+      customerPhone: finalCustomerPhone,
       reservationIds: lines.map((line) => line.reservationRef.id),
       totalLines: lines.length,
       totalItems,
@@ -531,6 +625,7 @@ export async function createReservation(payload) {
         quantity: payload.quantity || 1,
       },
     ],
+    customerId: payload.customerId || "",
     customerName: payload.customerName,
     customerDocument: payload.customerDocument,
     customerPhone: payload.customerPhone || "",
@@ -646,6 +741,22 @@ export async function completeReservationGroupSale({
       throw new Error("Este apartado ya venció.");
     }
 
+    const cleanCustomerDocument = normalizeCustomerDocument(
+      group.customerDocument
+    );
+    const resolvedCustomerId = cleanCustomerDocument
+      ? getCustomerDocumentId(
+          cleanCustomerDocument,
+          group.storeId || STORE_ID
+        )
+      : safeString(group.customerId);
+    const customerRef = resolvedCustomerId
+      ? doc(db, "customers", resolvedCustomerId)
+      : null;
+    const customerSnapshot = customerRef
+      ? await transaction.get(customerRef)
+      : null;
+
     const reservationIds = Array.isArray(group.reservationIds)
       ? group.reservationIds
       : [];
@@ -707,6 +818,34 @@ export async function completeReservationGroupSale({
 
     const saleRef = doc(collection(db, "sales"));
 
+    if (customerRef && !customerSnapshot?.exists()) {
+      const customerName = safeString(group.customerName);
+
+      if (customerName) {
+        transaction.set(customerRef, {
+          storeId: group.storeId || STORE_ID,
+          documentNumber: cleanCustomerDocument,
+          normalizedDocument: cleanCustomerDocument,
+          firstName: "",
+          lastName: "",
+          fullName: customerName,
+          phone: normalizeCustomerPhone(group.customerPhone),
+          email: "",
+          address: "",
+          notes: "",
+          isActive: true,
+          createdByUid: seller?.uid || "",
+          createdByName: seller?.name || "",
+          createdByEmail: seller?.email || "",
+          updatedByUid: seller?.uid || "",
+          updatedByName: seller?.name || "",
+          updatedByEmail: seller?.email || "",
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      }
+    }
+
     transaction.set(saleRef, {
       storeId: group.storeId || STORE_ID,
       items,
@@ -721,6 +860,7 @@ export async function completeReservationGroupSale({
       finalPayment,
       totalPaid,
       balanceDue: 0,
+      customerId: resolvedCustomerId || group.customerId || "",
       customerName: group.customerName || "",
       customerDocument: group.customerDocument || "",
       customerPhone: group.customerPhone || "",
@@ -748,6 +888,7 @@ export async function completeReservationGroupSale({
 
     transaction.update(groupRef, {
       status: "completed",
+      customerId: resolvedCustomerId || group.customerId || "",
       completedAt: serverTimestamp(),
       saleId: saleRef.id,
       amountPaid: totalPaid,
