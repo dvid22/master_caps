@@ -7,6 +7,7 @@ import {
   LogOut,
   Menu,
   Package,
+  PackagePlus,
   TimerReset,
   PanelLeftClose,
   PanelLeftOpen,
@@ -51,6 +52,12 @@ const navItems = [
     label: "Clientes",
     path: "/admin/clientes",
     icon: Users,
+    roles: ["admin"],
+  },
+  {
+    label: "Encargos",
+    path: "/admin/encargos",
+    icon: PackagePlus,
     roles: ["admin"],
   },
   {
