@@ -11,6 +11,7 @@ import InventoryPage from "./pages/admin/InventoryPage";
 import SalesPage from "./pages/admin/SalesPage";
 import ReservationsPage from "./pages/admin/ReservationsPage";
 import ClientsPage from "./pages/admin/ClientsPage";
+import AddiPaymentsPage from "./pages/admin/AddiPaymentsPage";
 import UsersPage from "./pages/admin/UsersPage";
 import ExpensesPage from "./pages/admin/ExpensesPage";
 
@@ -82,6 +83,15 @@ export default function App() {
           element={
             <RoleGuard allowedRoles={["admin"]}>
               <ClientsPage />
+            </RoleGuard>
+          }
+        />
+
+        <Route
+          path="addi"
+          element={
+            <RoleGuard allowedRoles={["admin"]}>
+              <AddiPaymentsPage />
             </RoleGuard>
           }
         />

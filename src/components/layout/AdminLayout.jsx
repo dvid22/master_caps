@@ -13,6 +13,7 @@ import {
   ShoppingBag,
   ReceiptText,
   Users,
+  WalletCards,
   X,
 } from "lucide-react";
 
@@ -50,6 +51,12 @@ const navItems = [
     label: "Clientes",
     path: "/admin/clientes",
     icon: Users,
+    roles: ["admin"],
+  },
+  {
+    label: "Pagos Addi",
+    path: "/admin/addi",
+    icon: WalletCards,
     roles: ["admin"],
   },
   {
@@ -181,22 +188,22 @@ export default function AdminLayout() {
     <main
       className={`min-h-screen bg-[#f7f7f8] text-black transition-all duration-300 lg:grid ${
         sidebarCollapsed
-          ? "lg:grid-cols-[88px_1fr]"
-          : "lg:grid-cols-[244px_1fr]"
+          ? "lg:grid-cols-[74px_1fr]"
+          : "lg:grid-cols-[218px_1fr]"
       }`}
     >
       <aside className="hidden border-r border-black/[0.06] bg-white/95 lg:block">
-        <div className="sticky top-0 flex h-screen flex-col">
-          <div className="px-4 pb-4 pt-5">
+        <div className="sticky top-0 flex h-screen min-h-0 flex-col overflow-hidden">
+          <div className="shrink-0 px-3 pb-2.5 pt-3">
             <div
-              className={`relative rounded-[24px] border border-black/[0.06] bg-white shadow-[0_18px_55px_rgba(0,0,0,0.04)] transition-all ${
-                sidebarCollapsed ? "px-3 py-4" : "px-4 py-5"
+              className={`relative rounded-[20px] border border-black/[0.06] bg-white shadow-[0_12px_34px_rgba(0,0,0,0.035)] transition-all ${
+                sidebarCollapsed ? "px-2.5 py-2.5" : "px-3 py-3"
               }`}
             >
               <button
                 type="button"
                 onClick={() => setSidebarCollapsed((current) => !current)}
-                className="absolute -right-3 top-5 flex h-7 w-7 items-center justify-center rounded-full border border-black/[0.08] bg-white text-black/55 shadow-sm transition hover:bg-red-50 hover:text-red-600"
+                className="absolute -right-2.5 top-3 flex h-6 w-6 items-center justify-center rounded-full border border-black/[0.08] bg-white text-black/55 shadow-sm transition hover:bg-red-50 hover:text-red-600"
               >
                 {sidebarCollapsed ? (
                   <PanelLeftOpen size={15} />
@@ -210,12 +217,12 @@ export default function AdminLayout() {
                   src="/logo.png"
                   alt="Master Caps"
                   className={`object-contain transition-all ${
-                    sidebarCollapsed ? "h-12 w-12" : "h-20 w-auto"
+                    sidebarCollapsed ? "h-9 w-9" : "h-[58px] w-auto"
                   }`}
                 />
 
                 {!sidebarCollapsed && (
-                  <div className="mt-4 inline-flex rounded-full border border-red-500/25 bg-red-50 px-4 py-1.5 text-[13px] font-normal text-red-600">
+                  <div className="mt-2 inline-flex rounded-full border border-red-500/25 bg-red-50 px-3 py-1 text-[11px] font-normal text-red-600">
                     {getRoleLabel(role)}
                   </div>
                 )}
@@ -223,7 +230,7 @@ export default function AdminLayout() {
             </div>
           </div>
 
-          <nav className="flex-1 space-y-1.5 px-4 py-2">
+          <nav className="min-h-0 flex-1 space-y-1 overflow-y-auto px-3 py-1.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             {visibleNavItems.map((item) => {
               const Icon = item.icon;
               const navLabel = getNavigationLabel(item, role);
@@ -235,10 +242,10 @@ export default function AdminLayout() {
                   to={item.path}
                   title={sidebarCollapsed ? navLabel : undefined}
                   className={({ isActive }) =>
-                    `group relative flex items-center rounded-2xl text-[14px] font-normal transition-all ${
+                    `group relative flex items-center rounded-xl text-[12.5px] font-normal transition-all ${
                       sidebarCollapsed
-                        ? "h-11 justify-center px-0"
-                        : "gap-3 px-3.5 py-2.5"
+                        ? "h-9 justify-center px-0"
+                        : "h-9 gap-2.5 px-2.5"
                     } ${
                       isActive
                         ? "bg-red-600 text-white shadow-lg shadow-red-600/15"
@@ -249,13 +256,13 @@ export default function AdminLayout() {
                   {({ isActive }) => (
                     <>
                       <span
-                        className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-xl transition ${
+                        className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-[10px] transition ${
                           isActive
                             ? "bg-white/15 text-white"
                             : "bg-white text-black/55 ring-1 ring-black/[0.06] group-hover:text-red-600"
                         }`}
                       >
-                        <Icon size={17} strokeWidth={1.9} />
+                        <Icon size={15} strokeWidth={1.9} />
                       </span>
 
                       {sidebarCollapsed && isReservationsItem && (
@@ -287,12 +294,12 @@ export default function AdminLayout() {
             })}
           </nav>
 
-          <div className="space-y-2 border-t border-black/[0.06] px-4 py-4">
+          <div className="shrink-0 space-y-1.5 border-t border-black/[0.06] bg-white px-3 py-3">
             <button
               type="button"
               onClick={openCatalog}
               title={sidebarCollapsed ? "Ver catálogo" : undefined}
-              className={`flex h-11 w-full items-center justify-center gap-2 rounded-2xl border border-black/[0.08] bg-white px-4 text-[13px] font-normal text-black/76 transition hover:border-red-500/25 hover:bg-red-50 hover:text-red-600 ${
+              className={`flex h-9 w-full items-center justify-center gap-2 rounded-xl border border-black/[0.08] bg-white px-3 text-[11px] font-normal text-black/76 transition hover:border-red-500/25 hover:bg-red-50 hover:text-red-600 ${
                 sidebarCollapsed ? "px-0" : ""
               }`}
             >
@@ -304,7 +311,7 @@ export default function AdminLayout() {
               type="button"
               onClick={handleLogout}
               title={sidebarCollapsed ? "Cerrar sesión" : undefined}
-              className={`flex h-11 w-full items-center justify-center gap-2 rounded-2xl bg-black/[0.035] px-4 text-[13px] font-normal text-black/66 transition hover:bg-red-50 hover:text-red-600 ${
+              className={`flex h-9 w-full items-center justify-center gap-2 rounded-xl bg-black/[0.035] px-3 text-[11px] font-normal text-black/66 transition hover:bg-red-50 hover:text-red-600 ${
                 sidebarCollapsed ? "px-0" : ""
               }`}
             >
@@ -358,17 +365,17 @@ export default function AdminLayout() {
 
       {mobileOpen && (
         <div className="fixed inset-0 z-50 bg-black/35 backdrop-blur-sm lg:hidden">
-          <aside className="flex h-full w-[84%] max-w-[330px] flex-col bg-white shadow-2xl">
-            <div className="border-b border-black/[0.06] px-5 py-5">
+          <aside className="flex h-full min-h-0 w-[82%] max-w-[300px] flex-col overflow-hidden bg-white shadow-2xl">
+            <div className="shrink-0 border-b border-black/[0.06] px-4 py-3.5">
               <div className="flex items-start justify-between gap-4">
                 <div className="flex min-w-0 flex-1 flex-col items-center">
                   <img
                     src="/logo.png"
                     alt="Master Caps"
-                    className="h-20 w-auto object-contain"
+                    className="h-14 w-auto object-contain"
                   />
 
-                  <div className="mt-4 inline-flex rounded-full border border-red-500/25 bg-red-50 px-4 py-1.5 text-[13px] font-normal text-red-600">
+                  <div className="mt-2 inline-flex rounded-full border border-red-500/25 bg-red-50 px-3 py-1 text-[11px] font-normal text-red-600">
                     {getRoleLabel(role)}
                   </div>
                 </div>
@@ -383,7 +390,7 @@ export default function AdminLayout() {
               </div>
             </div>
 
-            <nav className="space-y-1.5 px-4 py-4">
+            <nav className="min-h-0 flex-1 space-y-1 overflow-y-auto px-3 py-3 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
               {visibleNavItems.map((item) => {
                 const Icon = item.icon;
                 const navLabel = getNavigationLabel(item, role);
@@ -395,7 +402,7 @@ export default function AdminLayout() {
                     to={item.path}
                     onClick={() => setMobileOpen(false)}
                     className={({ isActive }) =>
-                      `group flex items-center gap-3 rounded-2xl px-3.5 py-2.5 text-[14px] font-normal transition-all ${
+                      `group flex h-10 items-center gap-2.5 rounded-xl px-2.5 text-[13px] font-normal transition-all ${
                         isActive
                           ? "bg-red-600 text-white shadow-lg shadow-red-600/15"
                           : "text-black/68 hover:bg-black/[0.035] hover:text-black"
@@ -405,13 +412,13 @@ export default function AdminLayout() {
                     {({ isActive }) => (
                       <>
                         <span
-                          className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-xl transition ${
+                          className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-[10px] transition ${
                             isActive
                               ? "bg-white/15 text-white"
                               : "bg-white text-black/55 ring-1 ring-black/[0.06] group-hover:text-red-600"
                           }`}
                         >
-                          <Icon size={17} strokeWidth={1.9} />
+                          <Icon size={15} strokeWidth={1.9} />
                         </span>
 
                         <span className="min-w-0 flex-1 truncate">
@@ -431,11 +438,11 @@ export default function AdminLayout() {
               })}
             </nav>
 
-            <div className="mt-auto space-y-2 border-t border-black/[0.06] px-4 py-4">
+            <div className="shrink-0 space-y-1.5 border-t border-black/[0.06] bg-white px-3 py-3">
               <button
                 type="button"
                 onClick={openCatalog}
-                className="flex h-11 w-full items-center justify-center gap-2 rounded-2xl border border-black/[0.08] bg-white px-4 text-[13px] font-normal text-black/76 transition hover:border-red-500/25 hover:bg-red-50 hover:text-red-600"
+                className="flex h-9 w-full items-center justify-center gap-2 rounded-xl border border-black/[0.08] bg-white px-3 text-[11px] font-normal text-black/76 transition hover:border-red-500/25 hover:bg-red-50 hover:text-red-600"
               >
                 <ExternalLink size={16} />
                 Ver catálogo
@@ -444,7 +451,7 @@ export default function AdminLayout() {
               <button
                 type="button"
                 onClick={handleLogout}
-                className="flex h-11 w-full items-center justify-center gap-2 rounded-2xl bg-black/[0.035] px-4 text-[13px] font-normal text-black/66 transition hover:bg-red-50 hover:text-red-600"
+                className="flex h-9 w-full items-center justify-center gap-2 rounded-xl bg-black/[0.035] px-3 text-[11px] font-normal text-black/66 transition hover:bg-red-50 hover:text-red-600"
               >
                 <LogOut size={16} />
                 Cerrar sesión

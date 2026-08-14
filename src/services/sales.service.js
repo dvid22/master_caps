@@ -1,4 +1,5 @@
 import {
+  Timestamp,
   collection,
   doc,
   getDoc,
@@ -31,8 +32,13 @@ const VALID_PAYMENT_METHODS = [
   "nequi",
   "daviplata",
   "tarjeta",
+  "addi",
   "otro",
 ];
+
+export const ADDI_PAYMENT_METHOD = "addi";
+export const ADDI_STATUS_PENDING = "pending";
+export const ADDI_STATUS_SETTLED = "settled";
 
 /* -------------------------------------------------------------------------- */
 /*                              UTILIDADES GENERALES                           */
@@ -89,6 +95,28 @@ function createFallbackVariantId(productId, size) {
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/\s+/g, "-")
     .replace(/[^a-z0-9-_]/g, "")}`;
+}
+
+function normalizeSettlementDate(value) {
+  if (!value) {
+    return null;
+  }
+
+  if (typeof value?.toDate === "function") {
+    return value;
+  }
+
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime())
+      ? null
+      : Timestamp.fromDate(value);
+  }
+
+  const parsedDate = new Date(value);
+
+  return Number.isNaN(parsedDate.getTime())
+    ? null
+    : Timestamp.fromDate(parsedDate);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -465,6 +493,34 @@ function normalizeSaleDocument(sale) {
     paymentMethod:
       normalizeText(sale.paymentMethod) || DEFAULT_PAYMENT_METHOD,
 
+    paymentStatus:
+      normalizeText(sale.paymentStatus) ||
+      (normalizeText(sale.paymentMethod) === ADDI_PAYMENT_METHOD
+        ? "pending_settlement"
+        : "paid"),
+
+    addiStatus:
+      normalizeText(sale.addiStatus) ||
+      (normalizeText(sale.paymentMethod) === ADDI_PAYMENT_METHOD
+        ? ADDI_STATUS_PENDING
+        : ""),
+
+    addiExpectedAmount:
+      sale.addiExpectedAmount !== undefined
+        ? normalizeMoney(sale.addiExpectedAmount)
+        : normalizeText(sale.paymentMethod) === ADDI_PAYMENT_METHOD
+          ? total
+          : 0,
+
+    addiSettledAmount:
+      sale.addiSettledAmount !== undefined
+        ? normalizeMoney(sale.addiSettledAmount)
+        : 0,
+
+    addiSettledAt: sale.addiSettledAt || null,
+    addiReference: normalizeText(sale.addiReference),
+    addiNotes: normalizeText(sale.addiNotes),
+
     notes: normalizeText(sale.notes),
     source: normalizeText(sale.source) || "direct",
   };
@@ -552,6 +608,116 @@ export async function getSaleById(saleId) {
   return normalizeSaleDocument({
     id: saleSnapshot.id,
     ...saleSnapshot.data(),
+  });
+}
+
+export function subscribeAddiSales(
+  callback,
+  onError,
+  storeId = STORE_ID
+) {
+  return subscribeSales(
+    (sales) => {
+      callback(
+        sales.filter(
+          (sale) => sale.paymentMethod === ADDI_PAYMENT_METHOD
+        )
+      );
+    },
+    onError,
+    storeId
+  );
+}
+
+export async function getAddiSales(storeId = STORE_ID) {
+  const sales = await getSales(storeId);
+
+  return sales.filter(
+    (sale) => sale.paymentMethod === ADDI_PAYMENT_METHOD
+  );
+}
+
+export async function settleAddiSale({
+  saleId,
+  settledAmount = null,
+  settledAt = null,
+  reference = "",
+  notes = "",
+  actor = null,
+}) {
+  const cleanSaleId = normalizeText(saleId);
+
+  if (!cleanSaleId) {
+    throw new Error("No se encontró la venta de Addi.");
+  }
+
+  const saleRef = doc(db, "sales", cleanSaleId);
+
+  return runTransaction(db, async (transaction) => {
+    const saleSnapshot = await transaction.get(saleRef);
+
+    if (!saleSnapshot.exists()) {
+      throw new Error("La venta no existe.");
+    }
+
+    const currentSale = normalizeSaleDocument({
+      id: saleSnapshot.id,
+      ...saleSnapshot.data(),
+    });
+
+    if (currentSale.paymentMethod !== ADDI_PAYMENT_METHOD) {
+      throw new Error("Esta venta no corresponde a un pago por Addi.");
+    }
+
+    if (currentSale.addiStatus === ADDI_STATUS_SETTLED) {
+      throw new Error("Este desembolso de Addi ya fue confirmado.");
+    }
+
+    const expectedAmount = normalizeMoney(
+      currentSale.addiExpectedAmount || currentSale.total
+    );
+
+    const finalSettledAmount =
+      settledAmount === null ||
+      settledAmount === undefined ||
+      settledAmount === ""
+        ? expectedAmount
+        : normalizeMoney(settledAmount);
+
+    if (finalSettledAmount <= 0) {
+      throw new Error(
+        "El valor recibido de Addi debe ser mayor a cero."
+      );
+    }
+
+    const explicitSettlementDate =
+      normalizeSettlementDate(settledAt);
+
+    transaction.update(saleRef, {
+      paymentStatus: "paid",
+
+      addiStatus: ADDI_STATUS_SETTLED,
+      addiExpectedAmount: expectedAmount,
+      addiSettledAmount: finalSettledAmount,
+      addiSettledAt:
+        explicitSettlementDate || serverTimestamp(),
+      addiReference: normalizeText(reference),
+      addiNotes: normalizeText(notes),
+
+      addiSettledByUid: actor?.uid || "",
+      addiSettledByName: actor?.name || "",
+      addiSettledByEmail: actor?.email || "",
+
+      updatedAt: serverTimestamp(),
+    });
+
+    return {
+      saleId: cleanSaleId,
+      saleNumber: currentSale.saleNumber,
+      expectedAmount,
+      settledAmount: finalSettledAmount,
+      status: ADDI_STATUS_SETTLED,
+    };
   });
 }
 
@@ -855,6 +1021,21 @@ export async function createMultiItemSale({
         ? Math.max(finalAmountReceived - total, 0)
         : 0;
 
+    const isAddiPayment =
+      cleanPaymentMethod === ADDI_PAYMENT_METHOD;
+
+    const paymentStatus = isAddiPayment
+      ? "pending_settlement"
+      : "paid";
+
+    const addiStatus = isAddiPayment
+      ? ADDI_STATUS_PENDING
+      : "";
+
+    const addiExpectedAmount = isAddiPayment
+      ? total
+      : 0;
+
     const profit = total - totalCost;
 
     if (shouldCreateCustomer && customerRef) {
@@ -925,6 +1106,14 @@ export async function createMultiItemSale({
       amountReceived: finalAmountReceived,
       change,
 
+      paymentStatus,
+      addiStatus,
+      addiExpectedAmount,
+      addiSettledAmount: 0,
+      addiSettledAt: null,
+      addiReference: "",
+      addiNotes: "",
+
       notes: normalizeText(notes),
       source: normalizeText(source) || DEFAULT_SOURCE,
 
@@ -963,6 +1152,12 @@ export async function createMultiItemSale({
       paymentMethod: cleanPaymentMethod,
       amountReceived: finalAmountReceived,
       change,
+
+      paymentStatus,
+      addiStatus,
+      addiExpectedAmount,
+      addiSettledAmount: 0,
+      addiSettledAt: null,
 
       customerId: finalCustomerId,
       customerName: finalCustomerName,

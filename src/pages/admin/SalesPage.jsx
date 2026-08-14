@@ -4,6 +4,7 @@ import {
   Camera,
   CheckCircle2,
   ChevronRight,
+  Clock3,
   CreditCard,
   Minus,
   PackageSearch,
@@ -910,7 +911,7 @@ export default function SalesPage() {
               </select>
             </div>
 
-            <div className="mt-4 flex items-center justify-between gap-3">
+            <div className="mt-3 flex items-center justify-between gap-3">
               <div>
                 <p className="text-[14px] font-medium">Productos</p>
                 <p className="mt-0.5 text-[12px] text-black/45">
@@ -939,7 +940,7 @@ export default function SalesPage() {
                   </p>
                 </div>
               ) : (
-                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
+                <div className="grid grid-cols-[repeat(auto-fill,minmax(158px,1fr))] gap-2.5 sm:grid-cols-[repeat(auto-fill,minmax(170px,1fr))]">
                   {filteredProducts.map((product) => (
                     <ProductSaleCard
                       key={product.id}
@@ -1052,76 +1053,78 @@ function ProductSaleCard({ product, onAdd }) {
   const stockStatus = getStockStatus(stock);
 
   return (
-    <article className="group overflow-hidden rounded-[22px] bg-white shadow-[0_12px_35px_rgba(0,0,0,0.035)] ring-1 ring-black/[0.06] transition hover:-translate-y-0.5 hover:shadow-[0_20px_55px_rgba(0,0,0,0.07)]">
+    <article className="group min-w-0 overflow-hidden rounded-[18px] bg-white shadow-[0_10px_28px_rgba(0,0,0,0.03)] ring-1 ring-black/[0.055] transition hover:-translate-y-0.5 hover:shadow-[0_16px_38px_rgba(0,0,0,0.065)]">
       <button
         type="button"
         onClick={onAdd}
         disabled={stock <= 0}
-        className="block w-full text-left disabled:cursor-not-allowed"
+        className="block w-full min-w-0 text-left disabled:cursor-not-allowed"
       >
-        <div className="relative aspect-[4/3.2] overflow-hidden bg-black/[0.025]">
+        <div className="relative aspect-[1.18/1] overflow-hidden bg-black/[0.025]">
           {coverImage.url ? (
             <img
               src={coverImage.url}
               alt={product.name}
-              className="h-full w-full object-cover transition duration-500 group-hover:scale-105"
+              className="h-full w-full bg-white object-contain p-1.5 transition duration-300 group-hover:scale-[1.025]"
             />
           ) : (
             <div className="flex h-full w-full items-center justify-center">
-              <Camera size={28} className="text-black/25" />
+              <Camera size={23} className="text-black/22" />
             </div>
           )}
 
           <span
-            className={`absolute left-3 top-3 rounded-full px-2.5 py-1 text-[10px] ${stockStatus.badgeClass}`}
+            className={`absolute left-2 top-2 rounded-full px-2 py-0.5 text-[8px] font-medium ${stockStatus.badgeClass}`}
           >
             {stockStatus.label}
           </span>
 
-          <span className="absolute bottom-3 right-3 rounded-full bg-black/75 px-2.5 py-1 text-[10px] text-white backdrop-blur">
-            {variants.length} talla(s)
-          </span>
+          {variants.length > 0 && (
+            <span className="absolute bottom-2 right-2 rounded-full bg-black/72 px-2 py-0.5 text-[8px] text-white backdrop-blur">
+              {variants.length} talla(s)
+            </span>
+          )}
         </div>
 
-        <div className="p-3">
-          <p className="text-[11px] text-black/45">
+        <div className="p-2.5">
+          <p className="truncate text-[9px] text-black/42">
             {product.code || "Sin código"} · {product.categoryName || "Sin categoría"}
           </p>
 
-          <h3 className="mt-1 truncate text-[14px] font-medium">
+          <h3 className="mt-1 truncate text-[12px] font-medium leading-tight">
             {product.name}
           </h3>
 
-          <div className="mt-2 flex flex-wrap gap-1">
-            {variants.slice(0, 4).map((variant) => (
+          <div className="mt-1.5 flex min-h-[20px] flex-wrap gap-1">
+            {variants.slice(0, 3).map((variant) => (
               <span
                 key={variant.id}
-                className="rounded-full bg-black/[0.035] px-2 py-1 text-[10px] text-black/60"
+                className="rounded-full bg-black/[0.035] px-1.5 py-0.5 text-[8px] text-black/58"
               >
                 {variant.size}
               </span>
             ))}
 
-            {variants.length > 4 && (
-              <span className="rounded-full bg-red-50 px-2 py-1 text-[10px] text-red-600">
-                +{variants.length - 4}
+            {variants.length > 3 && (
+              <span className="rounded-full bg-red-50 px-1.5 py-0.5 text-[8px] text-red-600">
+                +{variants.length - 3}
               </span>
             )}
           </div>
 
-          <div className="mt-3 flex items-end justify-between gap-3">
-            <div>
-              <p className="text-[17px] font-medium tracking-[-0.035em]">
+          <div className="mt-2 flex items-end justify-between gap-2">
+            <div className="min-w-0">
+              <p className="truncate text-[14px] font-medium tracking-[-0.035em]">
                 {formatCurrency(product.salePrice)}
               </p>
 
-              <p className={`mt-1 text-[11px] ${stockStatus.stockClass}`}>
-                {stock} unidad(es)
+              <p className={`mt-0.5 text-[9px] ${stockStatus.stockClass}`}>
+                {stock} u.
               </p>
             </div>
 
-            <span className="inline-flex h-9 items-center gap-1.5 rounded-xl bg-red-600 px-3 text-[11px] font-medium text-white shadow-lg shadow-red-600/15">
-              <Plus size={14} />
+            <span className="inline-flex h-8 shrink-0 items-center gap-1 rounded-[10px] bg-red-600 px-2.5 text-[9px] font-medium text-white shadow-sm shadow-red-600/15">
+              <Plus size={12} />
               Agregar
             </span>
           </div>
@@ -1130,7 +1133,6 @@ function ProductSaleCard({ product, onAdd }) {
     </article>
   );
 }
-
 function CartPanel(props) {
   const {
     cart,
@@ -1205,6 +1207,7 @@ function CartPanel(props) {
           summary={summary}
           selling={selling}
           disabled={cart.length === 0}
+          paymentMethod={checkout.paymentMethod}
         />
       </form>
     </section>
@@ -1448,8 +1451,30 @@ function CheckoutFields({
           <option value="nequi">Nequi</option>
           <option value="daviplata">Daviplata</option>
           <option value="tarjeta">Tarjeta</option>
+          <option value="addi">Addi</option>
           <option value="otro">Otro</option>
         </select>
+
+        {checkout.paymentMethod === "addi" && (
+          <div className="rounded-2xl border border-amber-200 bg-amber-50/80 px-3 py-2.5">
+            <div className="flex items-start gap-2.5">
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-white text-amber-700 ring-1 ring-amber-200">
+                <Clock3 size={15} />
+              </div>
+
+              <div className="min-w-0">
+                <p className="text-[10px] font-medium text-amber-800">
+                  Pago por Addi
+                </p>
+                <p className="mt-0.5 text-[9px] leading-4 text-black/48">
+                  La venta se registrará y descontará inventario normalmente,
+                  pero el desembolso quedará pendiente hasta confirmar que Addi
+                  realizó el pago.
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
 
         <div className="grid grid-cols-2 gap-2">
           <label>
@@ -1469,7 +1494,9 @@ function CheckoutFields({
             <span className="text-[10px] text-black/45">
               {checkout.paymentMethod === "efectivo"
                 ? "Dinero recibido"
-                : "Total pagado"}
+                : checkout.paymentMethod === "addi"
+                  ? "Monto financiado"
+                  : "Total pagado"}
             </span>
             <input
               type="number"
@@ -1509,7 +1536,7 @@ function CheckoutFields({
   );
 }
 
-function CartTotals({ summary, selling, disabled }) {
+function CartTotals({ summary, selling, disabled, paymentMethod }) {
   return (
     <div className="border-t border-black/[0.06] bg-white px-5 py-4">
       <div className="space-y-2 text-[12px]">
@@ -1543,7 +1570,11 @@ function CartTotals({ summary, selling, disabled }) {
         className="mt-4 inline-flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-red-600 px-5 text-[14px] font-medium text-white shadow-lg shadow-red-600/20 transition hover:bg-red-700 disabled:cursor-not-allowed disabled:bg-black/15 disabled:shadow-none"
       >
         <CreditCard size={17} />
-        {selling ? "Procesando venta..." : "Cobrar venta"}
+        {selling
+          ? "Procesando venta..."
+          : paymentMethod === "addi"
+            ? "Registrar venta Addi"
+            : "Cobrar venta"}
       </button>
     </div>
   );
@@ -1740,6 +1771,20 @@ function SalesHistoryModal({ sales, onClose, onSelectSale }) {
                     <p className="mt-1 truncate text-[11px] text-black/45">
                       {sale.totalItems || 0} artículo(s) · {sale.paymentMethod || "efectivo"} · {sale.sellerName || "Sin vendedor"}
                     </p>
+
+                    {sale.paymentMethod === "addi" && (
+                      <span
+                        className={`mt-1.5 inline-flex rounded-full px-2 py-0.5 text-[8px] font-medium ${
+                          sale.addiStatus === "settled"
+                            ? "bg-emerald-50 text-emerald-700"
+                            : "bg-amber-50 text-amber-700"
+                        }`}
+                      >
+                        {sale.addiStatus === "settled"
+                          ? "Addi recibido"
+                          : "Addi pendiente"}
+                      </span>
+                    )}
                   </div>
 
                   <div className="shrink-0 text-right">
@@ -1761,11 +1806,19 @@ function SalesHistoryModal({ sales, onClose, onSelectSale }) {
 }
 
 function CompletedSaleModal({ sale, onClose, onNewSale, onPrint }) {
+  const isAddi = sale.paymentMethod === "addi";
+
   return (
     <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/45 px-4 py-6 backdrop-blur-sm">
       <section className="w-full max-w-[520px] overflow-hidden rounded-[30px] bg-white p-6 text-center shadow-2xl">
-        <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-emerald-50 text-emerald-600">
-          <CheckCircle2 size={34} />
+        <div
+          className={`mx-auto flex h-16 w-16 items-center justify-center rounded-full ${
+            isAddi
+              ? "bg-amber-50 text-amber-700"
+              : "bg-emerald-50 text-emerald-600"
+          }`}
+        >
+          {isAddi ? <Clock3 size={32} /> : <CheckCircle2 size={34} />}
         </div>
 
         <p className="mt-5 text-[12px] text-red-600">
@@ -1773,12 +1826,25 @@ function CompletedSaleModal({ sale, onClose, onNewSale, onPrint }) {
         </p>
 
         <h2 className="mt-1 text-[25px] font-medium tracking-[-0.045em]">
-          Venta completada
+          {isAddi ? "Venta registrada" : "Venta completada"}
         </h2>
 
         <p className="mt-2 text-[13px] text-black/50">
-          El inventario fue actualizado correctamente.
+          {isAddi
+            ? "El inventario fue actualizado y el desembolso de Addi quedó pendiente."
+            : "El inventario fue actualizado correctamente."}
         </p>
+
+        {isAddi && (
+          <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-left">
+            <p className="text-[10px] font-medium text-amber-800">
+              Pendiente de desembolso
+            </p>
+            <p className="mt-1 text-[10px] leading-4 text-black/48">
+              Esta operación aparecerá en Pagos Addi hasta que confirmes que el dinero fue recibido.
+            </p>
+          </div>
+        )}
 
         <div className="mt-5 rounded-[22px] bg-black/[0.025] p-4 text-left">
           <div className="flex items-center justify-between">
