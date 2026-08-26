@@ -32,6 +32,108 @@ function safeNumber(value, fallback = 0) {
   return Number.isFinite(number) ? number : fallback;
 }
 
+function normalizePromotionVariants(product = {}, variants = []) {
+  const source = Array.isArray(product.promotionVariants)
+    ? product.promotionVariants
+    : [];
+
+  return source
+    .map((item) => {
+      const variantId = safeString(
+        item?.variantId || item?.id
+      );
+      const size = normalizeSize(item?.size);
+      const variant =
+        variants.find(
+          (candidate) =>
+            (variantId &&
+              candidate.id === variantId) ||
+            normalizeSize(candidate.size) ===
+              size
+        ) || null;
+
+      if (!variant) {
+        return null;
+      }
+
+      const quantity = Math.min(
+        Math.max(
+          Math.trunc(
+            safeNumber(
+              item?.quantity ?? item?.stock
+            )
+          ),
+          0
+        ),
+        Math.max(
+          Math.trunc(
+            safeNumber(variant.stock)
+          ),
+          0
+        )
+      );
+
+      if (quantity <= 0) {
+        return null;
+      }
+
+      return {
+        variantId: variant.id,
+        size: variant.size,
+        quantity,
+      };
+    })
+    .filter(Boolean);
+}
+
+function getPromotionStockForVariant(
+  promotionVariants = [],
+  variant
+) {
+  const match = promotionVariants.find(
+    (item) =>
+      item.variantId === variant?.id ||
+      normalizeSize(item.size) ===
+        normalizeSize(variant?.size)
+  );
+
+  return Math.max(
+    Math.trunc(
+      safeNumber(match?.quantity)
+    ),
+    0
+  );
+}
+
+function getPromotionTotalStock(
+  promotionVariants = []
+) {
+  return promotionVariants.reduce(
+    (total, item) =>
+      total +
+      Math.max(
+        Math.trunc(
+          safeNumber(item.quantity)
+        ),
+        0
+      ),
+    0
+  );
+}
+
+function isPromotionProduct(
+  product = {},
+  promotionVariants = []
+) {
+  return (
+    Boolean(product?.isPromotion) &&
+    safeNumber(product?.promotionPrice) > 0 &&
+    getPromotionTotalStock(
+      promotionVariants
+    ) > 0
+  );
+}
+
 function normalizeDays(value, fallback = DEFAULT_RESERVATION_DAYS) {
   const days = Math.trunc(safeNumber(value, fallback));
   return Math.min(Math.max(days, 1), 365);
@@ -162,6 +264,10 @@ function normalizeCartItems(items = []) {
       variantId,
       size,
       quantity,
+      isPromotion:
+        Boolean(item.isPromotion) ||
+        safeString(item.pricingMode) ===
+          "promotion",
     };
   });
 }
@@ -398,10 +504,18 @@ export async function createReservationCart({
       let state = productStates.get(requested.productId);
 
       if (!state) {
+        const variants =
+          normalizeVariants(product);
+
         state = {
           productRef: productRefs[index],
           product,
-          variants: normalizeVariants(product),
+          variants,
+          promotionVariants:
+            normalizePromotionVariants(
+              product,
+              variants
+            ),
         };
         productStates.set(requested.productId, state);
       }
@@ -418,29 +532,137 @@ export async function createReservationCart({
 
       const variant = state.variants[variantIndex];
 
-      if (requested.quantity > variant.stock) {
+      const promotionAvailable =
+        getPromotionStockForVariant(
+          state.promotionVariants,
+          variant
+        );
+
+      const normalAvailable =
+        Math.max(
+          variant.stock -
+            promotionAvailable,
+          0
+        );
+
+      const requestedPromotion =
+        Boolean(requested.isPromotion);
+
+      const availableForMode =
+        requestedPromotion
+          ? promotionAvailable
+          : normalAvailable;
+
+      if (
+        requested.quantity >
+        availableForMode
+      ) {
         throw new Error(
-          `Solo hay ${variant.stock} unidad(es) de "${product.name}" talla ${variant.size}.`
+          requestedPromotion
+            ? `Solo hay ${availableForMode} unidad(es) en promoción de "${product.name}" talla ${variant.size}.`
+            : `Solo hay ${availableForMode} unidad(es) normales de "${product.name}" talla ${variant.size}.`
         );
       }
 
-      state.variants = state.variants.map((currentVariant, currentIndex) =>
-        currentIndex === variantIndex
-          ? { ...currentVariant, stock: currentVariant.stock - requested.quantity }
-          : currentVariant
+      state.variants = state.variants.map(
+        (currentVariant, currentIndex) =>
+          currentIndex === variantIndex
+            ? {
+                ...currentVariant,
+                stock:
+                  currentVariant.stock -
+                  requested.quantity,
+              }
+            : currentVariant
       );
 
+      if (requestedPromotion) {
+        state.promotionVariants =
+          state.promotionVariants
+            .map((item) =>
+              item.variantId ===
+                variant.id ||
+              normalizeSize(item.size) ===
+                normalizeSize(
+                  variant.size
+                )
+                ? {
+                    ...item,
+                    quantity:
+                      item.quantity -
+                      requested.quantity,
+                  }
+                : item
+            )
+            .filter(
+              (item) =>
+                item.quantity > 0
+            );
+      }
+
       const reservationRef = doc(collection(db, "reservations"));
-      const unitPrice = Math.max(safeNumber(product.salePrice), 0);
-      const costPrice = Math.max(safeNumber(product.costPrice), 0);
-      const subtotal = unitPrice * requested.quantity;
+
+      /*
+       * El modo promocional debe venir marcado desde el carrito y además
+       * existir stock promocional real para esa talla. El servidor valida
+       * ambas cosas dentro de la transacción.
+       */
+      const regularUnitPrice = Math.max(
+        safeNumber(product.salePrice),
+        0
+      );
+
+      const promotionActive =
+        requestedPromotion;
+
+      const promotionPrice = promotionActive
+        ? Math.max(
+            safeNumber(product.promotionPrice),
+            0
+          )
+        : 0;
+
+      const promotionNote = promotionActive
+        ? safeString(product.promotionNote)
+        : "";
+
+      const unitPrice =
+        promotionActive
+          ? promotionPrice
+          : regularUnitPrice;
+
+      if (
+        promotionActive &&
+        (
+          !Boolean(product.isPromotion) ||
+          promotionPrice <= 0
+        )
+      ) {
+        throw new Error(
+          `La promoción de "${product.name}" ya no está disponible.`
+        );
+      }
+
+      const costPrice = Math.max(
+        safeNumber(product.costPrice),
+        0
+      );
+
+      const subtotal =
+        unitPrice * requested.quantity;
 
       lines.push({
         reservationRef,
         product,
         variant,
         requested,
+
         unitPrice,
+        regularUnitPrice,
+        promotionActive,
+        promotionPrice,
+        promotionNote,
+
         costPrice,
         subtotal,
       });
@@ -499,9 +721,20 @@ export async function createReservationCart({
     }
 
     for (const state of productStates.values()) {
+      const promotionStock =
+        getPromotionTotalStock(
+          state.promotionVariants
+        );
+
       transaction.update(state.productRef, {
         variants: state.variants,
         stock: calculateTotalStock(state.variants),
+        totalStock: calculateTotalStock(
+          state.variants
+        ),
+        promotionVariants:
+          state.promotionVariants,
+        promotionStock,
         updatedAt: serverTimestamp(),
       });
     }
@@ -558,6 +791,11 @@ export async function createReservationCart({
         size: line.variant.size,
         variantBarcode: line.variant.barcode || "",
         unitPrice: line.unitPrice,
+        regularUnitPrice: line.regularUnitPrice,
+        isPromotion: line.promotionActive,
+        promotionPrice: line.promotionPrice,
+        promotionNote: line.promotionNote,
+
         costPrice: line.costPrice,
         quantity: line.requested.quantity,
         subtotal: line.subtotal,
@@ -804,6 +1042,27 @@ export async function completeReservationGroupSale({
         categoryName: reservation.categoryName || "",
         quantity,
         unitPrice,
+
+        regularUnitPrice: Math.max(
+          safeNumber(
+            reservation.regularUnitPrice,
+            unitPrice
+          ),
+          0
+        ),
+        isPromotion: Boolean(
+          reservation.isPromotion
+        ),
+        promotionPrice: Math.max(
+          safeNumber(
+            reservation.promotionPrice
+          ),
+          0
+        ),
+        promotionNote: safeString(
+          reservation.promotionNote
+        ),
+
         costPrice,
         subtotal: unitPrice * quantity,
         totalCost: costPrice * quantity,
@@ -1048,9 +1307,19 @@ async function closeReservationGroup({
     productSnapshots.forEach((snapshot, index) => {
       if (!snapshot.exists()) return;
 
+      const product = snapshot.data();
+      const variants =
+        normalizeVariants(product);
+
       states.set(snapshot.id, {
         ref: productRefs[index],
-        variants: normalizeVariants(snapshot.data()),
+        product,
+        variants,
+        promotionVariants:
+          normalizePromotionVariants(
+            product,
+            variants
+          ),
       });
     });
 
@@ -1077,15 +1346,88 @@ async function closeReservationGroup({
 
       state.variants = state.variants.map((variant, index) =>
         index === variantIndex
-          ? { ...variant, stock: variant.stock + quantity }
+          ? {
+              ...variant,
+              stock:
+                variant.stock +
+                quantity,
+            }
           : variant
       );
+
+      if (
+        Boolean(reservation.isPromotion) &&
+        Boolean(
+          state.product?.isPromotion
+        ) &&
+        safeNumber(
+          state.product?.promotionPrice
+        ) > 0
+      ) {
+        const existingIndex =
+          state.promotionVariants.findIndex(
+            (item) =>
+              item.variantId ===
+                state.variants[
+                  variantIndex
+                ].id ||
+              normalizeSize(item.size) ===
+                normalizeSize(
+                  state.variants[
+                    variantIndex
+                  ].size
+                )
+          );
+
+        if (existingIndex >= 0) {
+          state.promotionVariants =
+            state.promotionVariants.map(
+              (item, index) =>
+                index === existingIndex
+                  ? {
+                      ...item,
+                      quantity:
+                        item.quantity +
+                        quantity,
+                    }
+                  : item
+            );
+        } else {
+          state.promotionVariants = [
+            ...state.promotionVariants,
+            {
+              variantId:
+                state.variants[
+                  variantIndex
+                ].id,
+              size:
+                state.variants[
+                  variantIndex
+                ].size,
+              quantity,
+            },
+          ];
+        }
+      }
     });
 
     for (const state of states.values()) {
+      const stock =
+        calculateTotalStock(
+          state.variants
+        );
+      const promotionStock =
+        getPromotionTotalStock(
+          state.promotionVariants
+        );
+
       transaction.update(state.ref, {
         variants: state.variants,
-        stock: calculateTotalStock(state.variants),
+        stock,
+        totalStock: stock,
+        promotionVariants:
+          state.promotionVariants,
+        promotionStock,
         updatedAt: serverTimestamp(),
       });
     }

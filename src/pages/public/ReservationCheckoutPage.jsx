@@ -6,6 +6,7 @@ import {
 } from "react-router-dom";
 import {
   ArrowLeft,
+  BadgePercent,
   CalendarClock,
   CheckCircle2,
   IdCard,
@@ -161,6 +162,25 @@ export default function ReservationCheckoutPage() {
               size: item.size,
               quantity:
                 item.quantity,
+
+              /*
+               * Snapshot informativo del carrito.
+               * reservations.service.js vuelve a validar el precio
+               * directamente contra Firestore antes de guardar.
+               */
+              unitPrice: item.unitPrice,
+              regularUnitPrice:
+                item.regularUnitPrice,
+              isPromotion:
+                item.isPromotion,
+              pricingMode:
+                item.isPromotion
+                  ? "promotion"
+                  : "normal",
+              promotionPrice:
+                item.promotionPrice,
+              promotionNote:
+                item.promotionNote,
             })
           ),
         });
@@ -350,15 +370,49 @@ export default function ReservationCheckoutPage() {
                           Talla {item.size} ·{" "}
                           {item.quantity} unidad(es)
                         </p>
+
+                        {item.isPromotion && (
+                          <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                            <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-1 text-[7.5px] font-medium uppercase tracking-[0.08em] text-amber-700 ring-1 ring-amber-100">
+                              <BadgePercent size={8} />
+                              Promo
+                            </span>
+
+                            {item.promotionNote && (
+                              <span className="line-clamp-1 max-w-[240px] text-[8px] normal-case tracking-normal text-amber-800">
+                                {item.promotionNote}
+                              </span>
+                            )}
+                          </div>
+                        )}
                       </div>
                     </div>
 
-                    <p className="shrink-0 text-[12px] font-medium">
-                      {formatCurrency(
-                        item.unitPrice *
-                          item.quantity
-                      )}
-                    </p>
+                    <div className="shrink-0 text-right">
+                      <p
+                        className={`text-[12px] font-medium ${
+                          item.isPromotion
+                            ? "text-red-600"
+                            : ""
+                        }`}
+                      >
+                        {formatCurrency(
+                          item.unitPrice *
+                            item.quantity
+                        )}
+                      </p>
+
+                      {item.isPromotion &&
+                        Number(item.regularUnitPrice || 0) >
+                          Number(item.unitPrice || 0) && (
+                          <p className="mt-0.5 text-[8px] text-black/32 line-through">
+                            {formatCurrency(
+                              item.regularUnitPrice *
+                                item.quantity
+                            )}
+                          </p>
+                        )}
+                    </div>
                   </article>
                 )
               )}
@@ -612,12 +666,46 @@ export default function ReservationCheckoutPage() {
                       {item.quantity} unidad(es)
                     </p>
 
-                    <p className="mt-2 text-[12px] font-medium">
-                      {formatCurrency(
-                        item.unitPrice *
-                          item.quantity
-                      )}
-                    </p>
+                    {item.isPromotion && (
+                      <div className="mt-1.5 flex items-start gap-1.5">
+                        <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-amber-50 px-2 py-1 text-[7.5px] font-medium uppercase tracking-[0.08em] text-amber-700 ring-1 ring-amber-100">
+                          <BadgePercent size={8} />
+                          Promo
+                        </span>
+
+                        {item.promotionNote && (
+                          <span className="line-clamp-2 text-[8px] leading-4 text-amber-800">
+                            {item.promotionNote}
+                          </span>
+                        )}
+                      </div>
+                    )}
+
+                    <div className="mt-2 flex flex-wrap items-baseline gap-2">
+                      <p
+                        className={`text-[12px] font-medium ${
+                          item.isPromotion
+                            ? "text-red-600"
+                            : ""
+                        }`}
+                      >
+                        {formatCurrency(
+                          item.unitPrice *
+                            item.quantity
+                        )}
+                      </p>
+
+                      {item.isPromotion &&
+                        Number(item.regularUnitPrice || 0) >
+                          Number(item.unitPrice || 0) && (
+                          <p className="text-[8px] text-black/32 line-through">
+                            {formatCurrency(
+                              item.regularUnitPrice *
+                                item.quantity
+                            )}
+                          </p>
+                        )}
+                    </div>
                   </div>
 
                   <button
@@ -638,6 +726,27 @@ export default function ReservationCheckoutPage() {
           )}
 
           <div className="mt-4 border-t border-black/[0.08] pt-4">
+            {cart.items.some(
+              (item) => item.isPromotion
+            ) && (
+              <div className="mb-4 flex items-start gap-2.5 rounded-[14px] border border-amber-100 bg-amber-50/60 px-3 py-2.5">
+                <BadgePercent
+                  size={14}
+                  className="mt-0.5 shrink-0 text-amber-700"
+                />
+
+                <div>
+                  <p className="text-[8px] font-medium uppercase tracking-[0.1em] text-amber-700">
+                    Promoción aplicada
+                  </p>
+
+                  <p className="mt-0.5 text-[8.5px] leading-4 text-black/48">
+                    El total ya incluye los precios promocionales vigentes.
+                  </p>
+                </div>
+              </div>
+            )}
+
             <div className="flex items-center justify-between">
               <span className="text-[10px] uppercase tracking-[0.08em] text-black/42">
                 Productos diferentes

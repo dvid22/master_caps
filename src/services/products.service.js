@@ -33,6 +33,8 @@ export const MAX_PRODUCT_IMAGES = 8;
  */
 export const MAX_PRODUCT_IMAGE_SIZE = 25 * 1024 * 1024;
 
+export const NEW_PRODUCT_WINDOW_DAYS = 7;
+
 const ALLOWED_IMAGE_TYPES = [
   "image/jpeg",
   "image/jpg",
@@ -228,6 +230,229 @@ function mergeVariantOperationalState(
         "",
     };
   });
+}
+
+
+export function normalizePromotionVariants(
+  promotionVariants,
+  productVariants = []
+) {
+  const normalizedVariants = normalizeProductVariants(productVariants);
+  const variantsById = new Map(
+    normalizedVariants.map((variant) => [
+      String(variant.id || "").trim(),
+      variant,
+    ])
+  );
+  const variantsBySize = new Map(
+    normalizedVariants.map((variant) => [
+      normalizeProductSize(variant.size),
+      variant,
+    ])
+  );
+
+  const source = Array.isArray(promotionVariants)
+    ? promotionVariants
+    : [];
+
+  const grouped = new Map();
+
+  source.forEach((item) => {
+    const requestedId = String(
+      item?.variantId || item?.id || ""
+    ).trim();
+
+    const requestedSize = normalizeProductSize(
+      item?.size || ""
+    );
+
+    const variant =
+      variantsById.get(requestedId) ||
+      variantsBySize.get(requestedSize) ||
+      null;
+
+    if (!variant) {
+      return;
+    }
+
+    const quantity = Math.min(
+      normalizeStock(item?.quantity ?? item?.stock),
+      normalizeStock(variant.stock)
+    );
+
+    if (quantity <= 0) {
+      return;
+    }
+
+    const key = String(variant.id || variant.size);
+
+    grouped.set(key, {
+      variantId: variant.id,
+      size: variant.size,
+      quantity,
+    });
+  });
+
+  return Array.from(grouped.values());
+}
+
+export function getPromotionStockForVariant(
+  product,
+  variantOrSize
+) {
+  const variants = normalizeProductVariants(
+    product?.variants,
+    product?.size,
+    product?.stock
+  );
+
+  const promotionVariants =
+    normalizePromotionVariants(
+      product?.promotionVariants,
+      variants
+    );
+
+  const requestedId =
+    typeof variantOrSize === "object"
+      ? String(variantOrSize?.id || "").trim()
+      : "";
+
+  const requestedSize = normalizeProductSize(
+    typeof variantOrSize === "object"
+      ? variantOrSize?.size
+      : variantOrSize
+  );
+
+  const match = promotionVariants.find(
+    (item) =>
+      (requestedId &&
+        item.variantId === requestedId) ||
+      item.size === requestedSize
+  );
+
+  return normalizeStock(match?.quantity);
+}
+
+export function getProductPromotionStock(product) {
+  return normalizePromotionVariants(
+    product?.promotionVariants,
+    product?.variants
+  ).reduce(
+    (total, item) =>
+      total + normalizeStock(item.quantity),
+    0
+  );
+}
+
+export function normalizePromotionFields(product = {}) {
+  const salePrice = Number(product?.salePrice || 0);
+  const promotionPrice = Number(product?.promotionPrice || 0);
+  const requestedPromotion = Boolean(product?.isPromotion);
+
+  const validPromotionPrice =
+    Number.isFinite(promotionPrice) && promotionPrice > 0
+      ? promotionPrice
+      : 0;
+
+  const promotionVariants =
+    normalizePromotionVariants(
+      product?.promotionVariants,
+      product?.variants
+    );
+
+  const promotionStock =
+    promotionVariants.reduce(
+      (total, item) =>
+        total + normalizeStock(item.quantity),
+      0
+    );
+
+  const isPromotion =
+    requestedPromotion &&
+    validPromotionPrice > 0 &&
+    promotionStock > 0;
+
+  return {
+    isPromotion,
+    promotionPrice: isPromotion ? validPromotionPrice : 0,
+    promotionNote: isPromotion
+      ? String(product?.promotionNote || "").trim()
+      : "",
+    promotionVariants: isPromotion
+      ? promotionVariants
+      : [],
+    promotionStock: isPromotion
+      ? promotionStock
+      : 0,
+    effectiveSalePrice: salePrice,
+  };
+}
+
+function getProductDateMilliseconds(value) {
+  if (!value) return 0;
+
+  if (typeof value?.toMillis === "function") {
+    return value.toMillis();
+  }
+
+  if (typeof value?.toDate === "function") {
+    return value.toDate().getTime();
+  }
+
+  if (typeof value?.seconds === "number") {
+    return value.seconds * 1000;
+  }
+
+  const parsed = new Date(value);
+
+  return Number.isNaN(parsed.getTime())
+    ? 0
+    : parsed.getTime();
+}
+
+export function getProductNewUntil(product) {
+  const createdAtMs = getProductDateMilliseconds(
+    product?.createdAt
+  );
+
+  if (!createdAtMs) {
+    return null;
+  }
+
+  return new Date(
+    createdAtMs +
+      NEW_PRODUCT_WINDOW_DAYS * 24 * 60 * 60 * 1000
+  );
+}
+
+export function isProductNew(
+  product,
+  now = Date.now()
+) {
+  const createdAtMs = getProductDateMilliseconds(
+    product?.createdAt
+  );
+
+  if (!createdAtMs) {
+    return false;
+  }
+
+  const nowMs =
+    now instanceof Date
+      ? now.getTime()
+      : Number(now);
+
+  if (!Number.isFinite(nowMs)) {
+    return false;
+  }
+
+  const windowMs =
+    NEW_PRODUCT_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+
+  return (
+    nowMs >= createdAtMs &&
+    nowMs < createdAtMs + windowMs
+  );
 }
 
 /* -------------------------------------------------------------------------- */
@@ -949,11 +1174,16 @@ function normalizeProductDocument(product) {
     storeId: product?.storeId || STORE_ID,
   });
   const imagesPayload = buildImagesPayload(getProductImages(product));
+  const promotionPayload = normalizePromotionFields({
+    ...product,
+    variants: variantsPayload.variants,
+  });
 
   return {
     ...product,
 
     ...variantsPayload,
+    ...promotionPayload,
     ...imagesPayload,
   };
 }
@@ -1332,6 +1562,32 @@ export async function createProduct(
         storeId,
       });
 
+      const promotionPayload =
+        normalizePromotionFields({
+          ...productData,
+          variants: variantsPayload.variants,
+        });
+
+      if (
+        Boolean(productData?.isPromotion) &&
+        promotionPayload.promotionStock <= 0
+      ) {
+        throw new Error(
+          "Selecciona al menos una unidad de una talla para la promoción."
+        );
+      }
+
+      if (
+        promotionPayload.isPromotion &&
+        Number(productData?.salePrice || 0) > 0 &&
+        promotionPayload.promotionPrice >=
+          Number(productData.salePrice)
+      ) {
+        throw new Error(
+          "El precio de promoción debe ser menor al precio normal de venta."
+        );
+      }
+
       transaction.set(productRef, {
         ...productData,
 
@@ -1340,6 +1596,12 @@ export async function createProduct(
 
         ...variantsPayload,
         ...imagesPayload,
+
+        isPromotion: promotionPayload.isPromotion,
+        promotionPrice: promotionPayload.promotionPrice,
+        promotionNote: promotionPayload.promotionNote,
+        promotionVariants: promotionPayload.promotionVariants,
+        promotionStock: promotionPayload.promotionStock,
 
         status:
           variantsPayload.totalStock > 0
@@ -1593,6 +1855,41 @@ export async function updateProduct(
         transactionProduct.variants
       );
 
+      const promotionPayload =
+        normalizePromotionFields({
+          ...transactionProduct,
+          ...productData,
+          variants: variantsPayload.variants,
+        });
+
+      if (
+        Boolean(productData?.isPromotion) &&
+        promotionPayload.promotionStock <= 0
+      ) {
+        throw new Error(
+          "Selecciona al menos una unidad de una talla para la promoción."
+        );
+      }
+
+      if (
+        promotionPayload.isPromotion &&
+        Number(
+          productData?.salePrice ??
+            transactionProduct.salePrice ??
+            0
+        ) > 0 &&
+        promotionPayload.promotionPrice >=
+          Number(
+            productData?.salePrice ??
+              transactionProduct.salePrice ??
+              0
+          )
+      ) {
+        throw new Error(
+          "El precio de promoción debe ser menor al precio normal de venta."
+        );
+      }
+
       transaction.update(productRef, {
         ...productData,
 
@@ -1601,6 +1898,12 @@ export async function updateProduct(
 
         ...variantsPayload,
         ...imagesPayload,
+
+        isPromotion: promotionPayload.isPromotion,
+        promotionPrice: promotionPayload.promotionPrice,
+        promotionNote: promotionPayload.promotionNote,
+        promotionVariants: promotionPayload.promotionVariants,
+        promotionStock: promotionPayload.promotionStock,
 
         status:
           variantsPayload.totalStock > 0

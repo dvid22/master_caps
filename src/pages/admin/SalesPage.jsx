@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  BadgePercent,
   Barcode,
   Camera,
   CheckCircle2,
@@ -27,6 +28,8 @@ import {
 
 import {
   getProductCoverImage,
+  getProductPromotionStock,
+  getPromotionStockForVariant,
   normalizeProductVariants,
   subscribeProducts,
 } from "../../services/products.service";
@@ -75,6 +78,57 @@ function getTotalStock(product) {
   );
 }
 
+function isPromotionProduct(product) {
+  return (
+    Boolean(product?.isPromotion) &&
+    Number(product?.promotionPrice || 0) > 0 &&
+    getProductPromotionStock(product) > 0
+  );
+}
+
+function getNormalStockForVariant(
+  product,
+  variant
+) {
+  return Math.max(
+    Number(variant?.stock || 0) -
+      getPromotionStockForVariant(
+        product,
+        variant
+      ),
+    0
+  );
+}
+
+function getSaleModeStock(
+  product,
+  variant,
+  isPromotion = false
+) {
+  return isPromotion
+    ? getPromotionStockForVariant(
+        product,
+        variant
+      )
+    : getNormalStockForVariant(
+        product,
+        variant
+      );
+}
+
+function getLineUnitPrice(
+  product,
+  isPromotion = false
+) {
+  return isPromotion
+    ? Number(
+        product?.promotionPrice || 0
+      )
+    : Number(
+        product?.salePrice || 0
+      );
+}
+
 function getAvailableVariants(product) {
   return getProductVariants(product).filter(
     (variant) => Number(variant.stock || 0) > 0
@@ -114,8 +168,14 @@ function normalizeScannerValue(value) {
   return normalizeScannerBarcode(value);
 }
 
-function makeCartKey(productId, variantId) {
-  return `${productId}__${variantId}`;
+function makeCartKey(
+  productId,
+  variantId,
+  isPromotion = false
+) {
+  return `${productId}__${variantId}__${
+    isPromotion ? "promo" : "normal"
+  }`;
 }
 
 export default function SalesPage() {
@@ -172,15 +232,51 @@ export default function SalesPage() {
                 (candidate) => candidate.id === item.variantId
               );
 
-              if (!variant || Number(variant.stock || 0) <= 0) return null;
+              if (!variant) return null;
+
+              const availableStock =
+                getSaleModeStock(
+                  product,
+                  variant,
+                  item.isPromotion
+                );
+
+              if (availableStock <= 0) {
+                return null;
+              }
 
               return {
                 ...item,
                 product,
                 variant,
+                unitPrice:
+                  getLineUnitPrice(
+                    product,
+                    item.isPromotion
+                  ),
+                regularUnitPrice:
+                  Number(
+                    product.salePrice || 0
+                  ),
+                promotionPrice:
+                  item.isPromotion
+                    ? Number(
+                        product.promotionPrice ||
+                          0
+                      )
+                    : 0,
+                promotionNote:
+                  item.isPromotion
+                    ? String(
+                        product.promotionNote ||
+                          ""
+                      ).trim()
+                    : "",
                 quantity: Math.min(
-                  Number(item.quantity || 1),
-                  Number(variant.stock || 0)
+                  Number(
+                    item.quantity || 1
+                  ),
+                  availableStock
                 ),
               };
             })
@@ -373,10 +469,28 @@ export default function SalesPage() {
   }, [products, search, categoryFilter, sizeFilter, stockFilter]);
 
   const cartSummary = useMemo(() => {
+    const regularSubtotal = cart.reduce(
+      (total, item) =>
+        total +
+        Number(
+          item.regularUnitPrice ??
+            item.product.salePrice ??
+            0
+        ) *
+          Number(item.quantity || 0),
+      0
+    );
+
     const subtotal = cart.reduce(
       (total, item) =>
         total +
-        Number(item.product.salePrice || 0) * Number(item.quantity || 0),
+        Number(item.unitPrice || 0) *
+          Number(item.quantity || 0),
+      0
+    );
+
+    const promotionSavings = Math.max(
+      regularSubtotal - subtotal,
       0
     );
 
@@ -404,7 +518,9 @@ export default function SalesPage() {
         : 0;
 
     return {
+      regularSubtotal,
       subtotal,
+      promotionSavings,
       totalCost,
       profit: total - totalCost,
       totalItems,
@@ -456,23 +572,46 @@ export default function SalesPage() {
       return;
     }
 
-    if (variants.length === 1) {
-      addToCart(product, variants[0]);
+    if (
+      variants.length === 1 &&
+      !isPromotionProduct(product)
+    ) {
+      addToCart(
+        product,
+        variants[0],
+        false
+      );
       return;
     }
 
     setVariantProduct(product);
   }
 
-  function addToCart(product, variant) {
-    const stock = Number(variant.stock || 0);
+  function addToCart(
+    product,
+    variant,
+    isPromotion = false
+  ) {
+    const stock = getSaleModeStock(
+      product,
+      variant,
+      isPromotion
+    );
 
     if (stock <= 0) {
-      alert(`La talla ${variant.size} está agotada.`);
+      alert(
+        isPromotion
+          ? `La talla ${variant.size} no tiene unidades en promoción.`
+          : `La talla ${variant.size} no tiene unidades normales disponibles.`
+      );
       return;
     }
 
-    const cartKey = makeCartKey(product.id, variant.id);
+    const cartKey = makeCartKey(
+      product.id,
+      variant.id,
+      isPromotion
+    );
 
     setCart((currentCart) => {
       const existing = currentCart.find((item) => item.cartKey === cartKey);
@@ -500,6 +639,29 @@ export default function SalesPage() {
           variantId: variant.id,
           product,
           variant,
+          isPromotion,
+          unitPrice:
+            getLineUnitPrice(
+              product,
+              isPromotion
+            ),
+          regularUnitPrice: Number(
+            product.salePrice || 0
+          ),
+          promotionPrice:
+            isPromotion
+              ? Number(
+                  product.promotionPrice ||
+                    0
+                )
+              : 0,
+          promotionNote:
+            isPromotion
+              ? String(
+                  product.promotionNote ||
+                    ""
+                ).trim()
+              : "",
           quantity: 1,
         },
       ];
@@ -517,9 +679,18 @@ export default function SalesPage() {
       currentCart.map((item) => {
         if (item.cartKey !== cartKey) return item;
 
-        const stock = Number(item.variant.stock || 0);
+        const stock =
+          getSaleModeStock(
+            item.product,
+            item.variant,
+            item.isPromotion
+          );
+
         const safeQuantity = Math.min(
-          Math.max(Number(nextQuantity || 1), 1),
+          Math.max(
+            Number(nextQuantity || 1),
+            1
+          ),
           stock
         );
 
@@ -648,7 +819,11 @@ export default function SalesPage() {
     }
 
     if (match.variant) {
-      addToCart(match.product, match.variant);
+      addToCart(
+        match.product,
+        match.variant,
+        false
+      );
       return;
     }
 
@@ -718,6 +893,14 @@ export default function SalesPage() {
           variantId: item.variantId,
           size: item.variant.size,
           quantity: item.quantity,
+          isPromotion:
+            Boolean(
+              item.isPromotion
+            ),
+          pricingMode:
+            item.isPromotion
+              ? "promotion"
+              : "normal",
         })),
 
         customerId: checkout.customerId,
@@ -999,7 +1182,16 @@ export default function SalesPage() {
         <VariantSelectorModal
           product={variantProduct}
           onClose={() => setVariantProduct(null)}
-          onSelect={(variant) => addToCart(variantProduct, variant)}
+          onSelect={(
+            variant,
+            isPromotion
+          ) =>
+            addToCart(
+              variantProduct,
+              variant,
+              isPromotion
+            )
+          }
         />
       )}
 
@@ -1051,6 +1243,12 @@ function ProductSaleCard({ product, onAdd }) {
   const variants = getAvailableVariants(product);
   const coverImage = getProductCoverImage(product);
   const stockStatus = getStockStatus(stock);
+  const promotionActive =
+    isPromotionProduct(product);
+  const promotionStock =
+    getProductPromotionStock(product);
+  const regularPrice =
+    Number(product.salePrice || 0);
 
   return (
     <article className="group min-w-0 overflow-hidden rounded-[18px] bg-white shadow-[0_10px_28px_rgba(0,0,0,0.03)] ring-1 ring-black/[0.055] transition hover:-translate-y-0.5 hover:shadow-[0_16px_38px_rgba(0,0,0,0.065)]">
@@ -1073,11 +1271,20 @@ function ProductSaleCard({ product, onAdd }) {
             </div>
           )}
 
-          <span
-            className={`absolute left-2 top-2 rounded-full px-2 py-0.5 text-[8px] font-medium ${stockStatus.badgeClass}`}
-          >
-            {stockStatus.label}
-          </span>
+          <div className="absolute left-2 top-2 flex flex-wrap gap-1">
+            {promotionActive && (
+              <span className="inline-flex items-center gap-1 rounded-full bg-amber-400 px-2 py-0.5 text-[8px] font-medium text-black shadow-sm">
+                <BadgePercent size={8} />
+                PROMO
+              </span>
+            )}
+
+            <span
+              className={`rounded-full px-2 py-0.5 text-[8px] font-medium ${stockStatus.badgeClass}`}
+            >
+              {stockStatus.label}
+            </span>
+          </div>
 
           {variants.length > 0 && (
             <span className="absolute bottom-2 right-2 rounded-full bg-black/72 px-2 py-0.5 text-[8px] text-white backdrop-blur">
@@ -1115,8 +1322,20 @@ function ProductSaleCard({ product, onAdd }) {
           <div className="mt-2 flex items-end justify-between gap-2">
             <div className="min-w-0">
               <p className="truncate text-[14px] font-medium tracking-[-0.035em]">
-                {formatCurrency(product.salePrice)}
+                {formatCurrency(
+                  regularPrice
+                )}
               </p>
+
+              {promotionActive && (
+                <p className="mt-0.5 truncate text-[7.5px] font-medium text-amber-700">
+                  Promo{" "}
+                  {formatCurrency(
+                    product.promotionPrice
+                  )}{" "}
+                  · {promotionStock} u.
+                </p>
+              )}
 
               <p className={`mt-0.5 text-[9px] ${stockStatus.stockClass}`}>
                 {stock} u.
@@ -1228,8 +1447,13 @@ function EmptyCart() {
 
 function CartItem({ item, onUpdateQuantity, onRemove }) {
   const coverImage = getProductCoverImage(item.product);
+  const promotionActive =
+    Boolean(item.isPromotion);
+  const effectivePrice =
+    Number(item.unitPrice || 0);
   const subtotal =
-    Number(item.product.salePrice || 0) * Number(item.quantity || 0);
+    effectivePrice *
+    Number(item.quantity || 0);
 
   return (
     <article className="rounded-[19px] border border-black/[0.06] bg-white p-3">
@@ -1255,6 +1479,23 @@ function CartItem({ item, onUpdateQuantity, onRemove }) {
               <p className="mt-1 text-[10px] text-black/45">
                 {item.product.code} · Talla {item.variant.size}
               </p>
+
+              {promotionActive && (
+                <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                  <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[7.5px] font-medium text-amber-700 ring-1 ring-amber-100">
+                    <BadgePercent size={8} />
+                    PROMO
+                  </span>
+
+                  <span className="text-[8px] text-red-600">
+                    {formatCurrency(effectivePrice)}
+                  </span>
+
+                  <span className="text-[7.5px] text-black/30 line-through">
+                    {formatCurrency(item.regularUnitPrice)}
+                  </span>
+                </div>
+              )}
             </div>
 
             <button
@@ -1278,9 +1519,8 @@ function CartItem({ item, onUpdateQuantity, onRemove }) {
               </button>
 
               <input
-                type="number"
-                min="1"
-                max={item.variant.stock}
+                type="text"
+                inputMode="numeric"
                 value={item.quantity}
                 onChange={(event) =>
                   onUpdateQuantity(item.cartKey, event.target.value)
@@ -1480,9 +1720,8 @@ function CheckoutFields({
           <label>
             <span className="text-[10px] text-black/45">Descuento</span>
             <input
-              type="number"
-              min="0"
-              max={summary.subtotal}
+              type="text"
+              inputMode="numeric"
               value={checkout.discount}
               onChange={(event) => onUpdate("discount", event.target.value)}
               className="mt-1 h-10 w-full min-w-0 rounded-xl border border-black/[0.08] px-3 text-[12px] outline-none focus:border-red-600 focus:ring-4 focus:ring-red-600/10"
@@ -1499,8 +1738,8 @@ function CheckoutFields({
                   : "Total pagado"}
             </span>
             <input
-              type="number"
-              min="0"
+              type="text"
+              inputMode="numeric"
               value={
                 checkout.paymentMethod === "efectivo"
                   ? checkout.amountReceived
@@ -1540,6 +1779,24 @@ function CartTotals({ summary, selling, disabled, paymentMethod }) {
   return (
     <div className="border-t border-black/[0.06] bg-white px-5 py-4">
       <div className="space-y-2 text-[12px]">
+        {Number(summary.promotionSavings || 0) > 0 && (
+          <>
+            <div className="flex justify-between gap-4">
+              <span className="text-black/40">Precio normal</span>
+              <span className="text-black/40 line-through">
+                {formatCurrency(summary.regularSubtotal)}
+              </span>
+            </div>
+
+            <div className="flex justify-between gap-4 rounded-lg bg-amber-50 px-2 py-1.5 text-amber-700">
+              <span>Promociones aplicadas</span>
+              <span>
+                - {formatCurrency(summary.promotionSavings)}
+              </span>
+            </div>
+          </>
+        )}
+
         <div className="flex justify-between gap-4">
           <span className="text-black/50">Subtotal</span>
           <span>{formatCurrency(summary.subtotal)}</span>
@@ -1655,17 +1912,31 @@ function MobileCartDrawer(props) {
   );
 }
 
-function VariantSelectorModal({ product, onClose, onSelect }) {
-  const variants = getAvailableVariants(product);
-  const coverImage = getProductCoverImage(product);
+function VariantSelectorModal({
+  product,
+  onClose,
+  onSelect,
+}) {
+  const variants =
+    getAvailableVariants(product);
+  const coverImage =
+    getProductCoverImage(product);
+  const promotionActive =
+    isPromotionProduct(product);
+  const promotionStock =
+    getProductPromotionStock(product);
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/45 px-4 py-6 backdrop-blur-sm">
-      <section className="w-full max-w-[460px] overflow-hidden rounded-[28px] bg-white shadow-2xl">
+      <section className="w-full max-w-[520px] overflow-hidden rounded-[28px] bg-white shadow-2xl">
         <div className="flex items-start justify-between border-b border-black/[0.06] px-5 py-4">
           <div>
-            <p className="text-[12px] text-red-600">Seleccionar variante</p>
-            <h2 className="mt-1 text-[19px] font-medium">{product.name}</h2>
+            <p className="text-[12px] text-red-600">
+              Seleccionar talla y tipo de venta
+            </p>
+            <h2 className="mt-1 text-[19px] font-medium">
+              {product.name}
+            </h2>
           </div>
 
           <button
@@ -1677,7 +1948,7 @@ function VariantSelectorModal({ product, onClose, onSelect }) {
           </button>
         </div>
 
-        <div className="p-5">
+        <div className="max-h-[72vh] overflow-y-auto p-5">
           <div className="flex items-center gap-3 rounded-[20px] bg-black/[0.025] p-3">
             <div className="flex h-16 w-16 items-center justify-center overflow-hidden rounded-2xl bg-white">
               {coverImage.url ? (
@@ -1687,38 +1958,144 @@ function VariantSelectorModal({ product, onClose, onSelect }) {
                   className="h-full w-full object-cover"
                 />
               ) : (
-                <Camera size={22} className="text-black/25" />
+                <Camera
+                  size={22}
+                  className="text-black/25"
+                />
               )}
             </div>
 
-            <div>
-              <p className="text-[12px] text-black/45">
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-[12px] text-black/45">
                 {product.code || "Sin código"}
               </p>
-              <p className="mt-1 text-[18px] font-medium">
-                {formatCurrency(product.salePrice)}
+
+              <p className="mt-1 text-[17px] font-medium">
+                {formatCurrency(
+                  product.salePrice
+                )}
               </p>
+
+              {promotionActive && (
+                <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                  <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[7.5px] font-medium text-amber-700 ring-1 ring-amber-100">
+                    <BadgePercent size={8} />
+                    PROMO
+                  </span>
+                  <span className="text-[9px] font-medium text-red-600">
+                    {formatCurrency(
+                      product.promotionPrice
+                    )}
+                  </span>
+                  <span className="text-[8px] text-black/38">
+                    {promotionStock} u. seleccionada(s)
+                  </span>
+                </div>
+              )}
             </div>
           </div>
 
+          {promotionActive &&
+            product.promotionNote && (
+              <div className="mt-3 rounded-[14px] border border-amber-100 bg-amber-50/70 px-3 py-2.5">
+                <p className="text-[8px] font-medium uppercase tracking-[0.08em] text-amber-700">
+                  Observación de promoción
+                </p>
+                <p className="mt-1 text-[9px] leading-4 text-black/55">
+                  {product.promotionNote}
+                </p>
+              </div>
+            )}
+
           <p className="mt-5 text-[13px] font-medium">
-            ¿Qué talla deseas agregar?
+            Elige la talla y si sale del stock normal o promocional
           </p>
 
-          <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
-            {variants.map((variant) => (
-              <button
-                key={variant.id}
-                type="button"
-                onClick={() => onSelect(variant)}
-                className="rounded-2xl border border-black/[0.08] bg-white px-3 py-3 text-left transition hover:border-red-400 hover:bg-red-50"
-              >
-                <p className="text-[14px] font-medium">{variant.size}</p>
-                <p className="mt-1 text-[11px] text-emerald-600">
-                  {variant.stock} disponible(s)
-                </p>
-              </button>
-            ))}
+          <div className="mt-3 space-y-2">
+            {variants.map((variant) => {
+              const normalStock =
+                getNormalStockForVariant(
+                  product,
+                  variant
+                );
+              const promoStock =
+                getPromotionStockForVariant(
+                  product,
+                  variant
+                );
+
+              return (
+                <div
+                  key={variant.id}
+                  className="rounded-[18px] border border-black/[0.07] bg-white p-3"
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-[13px] font-medium">
+                        Talla {variant.size}
+                      </p>
+                      <p className="mt-0.5 text-[8.5px] text-black/38">
+                        Stock físico: {variant.stock} u.
+                      </p>
+                    </div>
+
+                    <span className="rounded-full bg-black/[0.035] px-2.5 py-1 text-[8px] text-black/50">
+                      {variant.stock} total
+                    </span>
+                  </div>
+
+                  <div className="mt-3 grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      disabled={normalStock <= 0}
+                      onClick={() =>
+                        onSelect(
+                          variant,
+                          false
+                        )
+                      }
+                      className="min-h-12 rounded-xl border border-black/[0.08] bg-white px-3 text-left transition hover:border-black disabled:cursor-not-allowed disabled:bg-black/[0.025] disabled:text-black/25"
+                    >
+                      <p className="text-[9px] font-medium uppercase tracking-[0.08em]">
+                        Normal
+                      </p>
+                      <p className="mt-0.5 text-[8px] text-black/42">
+                        {normalStock} u. ·{" "}
+                        {formatCurrency(
+                          product.salePrice
+                        )}
+                      </p>
+                    </button>
+
+                    <button
+                      type="button"
+                      disabled={promoStock <= 0}
+                      onClick={() =>
+                        onSelect(
+                          variant,
+                          true
+                        )
+                      }
+                      className={`min-h-12 rounded-xl border px-3 text-left transition disabled:cursor-not-allowed disabled:bg-black/[0.025] disabled:text-black/25 ${
+                        promoStock > 0
+                          ? "border-amber-200 bg-amber-50/60 hover:border-amber-400"
+                          : "border-black/[0.06]"
+                      }`}
+                    >
+                      <p className="text-[9px] font-medium uppercase tracking-[0.08em] text-amber-700">
+                        Promoción
+                      </p>
+                      <p className="mt-0.5 text-[8px] text-black/48">
+                        {promoStock} u. ·{" "}
+                        {formatCurrency(
+                          product.promotionPrice
+                        )}
+                      </p>
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </div>
       </section>

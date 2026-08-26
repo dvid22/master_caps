@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  BadgePercent,
   Barcode,
   ArrowDown,
   ArrowUp,
@@ -18,6 +19,7 @@ import {
   Plus,
   RotateCcw,
   Search,
+  Sparkles,
   Star,
   Trash2,
   X,
@@ -43,6 +45,9 @@ import {
   getProductCoverImage,
   getProductImages,
   getProductLabelPrintSummary,
+  getProductPromotionStock,
+  getPromotionStockForVariant,
+  isProductNew,
   normalizeProductVariants,
   subscribeProducts,
   updateProduct,
@@ -82,6 +87,7 @@ const createInitialVariants = () => [
     id: createVariantId(),
     size: "Talla única",
     stock: "1",
+    promotionStock: "0",
     barcode: "",
   },
 ];
@@ -95,6 +101,9 @@ const createEmptyForm = () => ({
   newSubcategoryName: "",
   costPrice: "",
   salePrice: "",
+  isPromotion: false,
+  promotionPrice: "",
+  promotionNote: "",
   variants: createInitialVariants(),
 });
 
@@ -702,6 +711,18 @@ export default function InventoryPage() {
     );
   }, [form.variants]);
 
+  const formPromotionStock = useMemo(() => {
+    if (!form.isPromotion) {
+      return 0;
+    }
+
+    return form.variants.reduce(
+      (total, variant) =>
+        total + Number(variant.promotionStock || 0),
+      0
+    );
+  }, [form.isPromotion, form.variants]);
+
   const categoriesById = useMemo(
     () =>
       new Map(
@@ -858,9 +879,47 @@ export default function InventoryPage() {
   function updateVariant(variantId, field, value) {
     setForm((current) => ({
       ...current,
-      variants: current.variants.map((variant) =>
-        variant.id === variantId ? { ...variant, [field]: value } : variant
-      ),
+      variants: current.variants.map((variant) => {
+        if (variant.id !== variantId) {
+          return variant;
+        }
+
+        if (field === "stock") {
+          const nextStock = String(value || "").replace(/\D/g, "");
+          const maxPromotionStock = Number(nextStock || 0);
+
+          return {
+            ...variant,
+            stock: nextStock,
+            promotionStock: String(
+              Math.min(
+                Number(variant.promotionStock || 0),
+                maxPromotionStock
+              )
+            ),
+          };
+        }
+
+        if (field === "promotionStock") {
+          const onlyDigits = String(value || "").replace(/\D/g, "");
+          const quantity = Math.min(
+            Number(onlyDigits || 0),
+            Number(variant.stock || 0)
+          );
+
+          return {
+            ...variant,
+            promotionStock: onlyDigits === ""
+              ? ""
+              : String(quantity),
+          };
+        }
+
+        return {
+          ...variant,
+          [field]: value,
+        };
+      }),
     }));
   }
 
@@ -873,6 +932,7 @@ export default function InventoryPage() {
           id: createVariantId(),
           size: "",
           stock: "0",
+          promotionStock: "0",
           barcode: "",
         },
       ],
@@ -1530,10 +1590,19 @@ export default function InventoryPage() {
       newSubcategoryName: "",
       costPrice: normalizeMoneyInputValue(product.costPrice),
       salePrice: normalizeMoneyInputValue(product.salePrice),
+      isPromotion: Boolean(product.isPromotion),
+      promotionPrice: normalizeMoneyInputValue(product.promotionPrice),
+      promotionNote: String(product.promotionNote || ""),
       variants: normalizedVariants.map((variant) => ({
         id: variant.id || createVariantId(),
         size: variant.size || "Talla única",
         stock: String(variant.stock || 0),
+        promotionStock: String(
+          getPromotionStockForVariant(
+            product,
+            variant
+          ) || 0
+        ),
         barcode: String(variant.barcode || ""),
       })),
     });
@@ -1605,6 +1674,12 @@ export default function InventoryPage() {
 
     const costPrice = parseMoneyInput(form.costPrice);
     const salePrice = parseMoneyInput(form.salePrice);
+    const promotionPrice = form.isPromotion
+      ? parseMoneyInput(form.promotionPrice)
+      : 0;
+    const promotionNote = form.isPromotion
+      ? String(form.promotionNote || "").trim()
+      : "";
     const normalizedVariants = validateVariants();
 
     if (!normalizedVariants) return;
@@ -1644,6 +1719,60 @@ export default function InventoryPage() {
 
     if (salePrice <= 0) {
       notify("El precio de venta debe ser mayor a cero.", "warning");
+      return;
+    }
+
+    if (form.isPromotion && promotionPrice <= 0) {
+      notify("Escribe un precio válido para la promoción.", "warning");
+      return;
+    }
+
+    if (
+      form.isPromotion &&
+      promotionPrice >= salePrice
+    ) {
+      notify(
+        "El precio de promoción debe ser menor al precio normal de venta.",
+        "warning"
+      );
+      return;
+    }
+
+    const promotionVariants = form.isPromotion
+      ? form.variants
+          .map((variant) => ({
+            variantId: variant.id,
+            size: normalizeSize(variant.size),
+            quantity: Number(variant.promotionStock || 0),
+            stock: Number(variant.stock || 0),
+          }))
+          .filter((variant) => variant.quantity > 0)
+      : [];
+
+    if (
+      form.isPromotion &&
+      promotionVariants.length === 0
+    ) {
+      notify(
+        "Selecciona al menos una talla y una cantidad para la promoción.",
+        "warning"
+      );
+      return;
+    }
+
+    const invalidPromotionStock =
+      promotionVariants.some(
+        (variant) =>
+          !Number.isInteger(variant.quantity) ||
+          variant.quantity <= 0 ||
+          variant.quantity > variant.stock
+      );
+
+    if (invalidPromotionStock) {
+      notify(
+        "La cantidad en promoción no puede superar el stock disponible de la talla.",
+        "warning"
+      );
       return;
     }
 
@@ -1704,6 +1833,16 @@ export default function InventoryPage() {
         categoryName: normalizeCategoryName(selectedCategory.name),
         costPrice,
         salePrice,
+        isPromotion: Boolean(form.isPromotion),
+        promotionPrice,
+        promotionNote,
+        promotionVariants: promotionVariants.map(
+          ({ variantId, size, quantity }) => ({
+            variantId,
+            size,
+            quantity,
+          })
+        ),
         profitMargin: profit.profitMargin,
         profitPercent: profit.profitPercent,
         variants: normalizedVariants,
@@ -2069,6 +2208,7 @@ export default function InventoryPage() {
           saving={saving}
           profit={profit}
           formTotalStock={formTotalStock}
+          formPromotionStock={formPromotionStock}
           processingImages={processingImages}
           imageProcessingProgress={imageProcessingProgress}
           openCropEditor={openCropEditor}
@@ -2156,6 +2296,13 @@ function ProductCard({
   const sizes = getProductSizes(product);
   const labelPrintSummary =
     getProductLabelPrintSummary(product);
+  const newProduct = isProductNew(product);
+  const promotionStock =
+    getProductPromotionStock(product);
+  const promotionActive =
+    Boolean(product.isPromotion) &&
+    Number(product.promotionPrice || 0) > 0 &&
+    promotionStock > 0;
   const currentCategory = categoriesById.get(
     product.categoryId
   );
@@ -2229,11 +2376,27 @@ function ProductCard({
           Lote
         </button>
 
-        <span
-          className={`rounded-full px-2.5 py-1 text-[9px] font-medium ${labelStatus.className}`}
-        >
-          {labelStatus.label}
-        </span>
+        <div className="flex flex-wrap items-center justify-end gap-1">
+          {newProduct && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-red-600 px-2.5 py-1 text-[8px] font-medium text-white shadow-sm">
+              <Sparkles size={9} />
+              NUEVO
+            </span>
+          )}
+
+          {promotionActive && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2.5 py-1 text-[8px] font-medium text-amber-700 ring-1 ring-amber-100">
+              <BadgePercent size={9} />
+              PROMO
+            </span>
+          )}
+
+          <span
+            className={`rounded-full px-2.5 py-1 text-[9px] font-medium ${labelStatus.className}`}
+          >
+            {labelStatus.label}
+          </span>
+        </div>
       </div>
 
       <div className="flex gap-3">
@@ -2307,9 +2470,36 @@ function ProductCard({
       <div className="mt-3 border-t border-black/[0.06] pt-3">
         <div className="flex items-end justify-between gap-3">
           <div>
-            <p className="text-[16px] font-medium tracking-[-0.03em] text-black">
-              {formatCurrency(product.salePrice)}
-            </p>
+            {promotionActive ? (
+              <div>
+                <div className="flex flex-wrap items-baseline gap-2">
+                  <p className="text-[16px] font-medium tracking-[-0.03em] text-red-600">
+                    {formatCurrency(product.promotionPrice)}
+                  </p>
+
+                  <p className="text-[10px] text-black/35 line-through">
+                    {formatCurrency(product.salePrice)}
+                  </p>
+                </div>
+
+                <p className="mt-1 text-[8px] font-medium text-amber-700">
+                  {promotionStock} unidad(es) seleccionada(s)
+                </p>
+
+                {product.promotionNote && (
+                  <p
+                    className="mt-1 max-w-[240px] truncate text-[9px] text-amber-700"
+                    title={product.promotionNote}
+                  >
+                    {product.promotionNote}
+                  </p>
+                )}
+              </div>
+            ) : (
+              <p className="text-[16px] font-medium tracking-[-0.03em] text-black">
+                {formatCurrency(product.salePrice)}
+              </p>
+            )}
 
             <p className="mt-1 text-[12px] text-black/45">
               Costo: {formatCurrency(product.costPrice)}
@@ -2397,6 +2587,13 @@ function ProductDetailModal({
   );
   const totalStock = getTotalStock(product);
   const stockStatus = getStockStatus(totalStock);
+  const newProduct = isProductNew(product);
+  const promotionStock =
+    getProductPromotionStock(product);
+  const promotionActive =
+    Boolean(product.isPromotion) &&
+    Number(product.promotionPrice || 0) > 0 &&
+    promotionStock > 0;
 
   const currentCategory = categoriesById.get(
     product.categoryId
@@ -2439,6 +2636,24 @@ function ProductDetailModal({
             <h2 className="mt-0.5 truncate text-[21px] font-medium tracking-[-0.035em] text-black">
               {product.name}
             </h2>
+
+            {(newProduct || promotionActive) && (
+              <div className="mt-1.5 flex flex-wrap gap-1.5">
+                {newProduct && (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-red-600 px-2.5 py-1 text-[8px] font-medium text-white">
+                    <Sparkles size={9} />
+                    NUEVO
+                  </span>
+                )}
+
+                {promotionActive && (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2.5 py-1 text-[8px] font-medium text-amber-700 ring-1 ring-amber-100">
+                    <BadgePercent size={9} />
+                    PROMOCIÓN
+                  </span>
+                )}
+              </div>
+            )}
           </div>
 
           <button
@@ -2548,6 +2763,19 @@ function ProductDetailModal({
                 label="Precio venta"
                 value={formatCurrency(product.salePrice)}
               />
+              {promotionActive && (
+                <>
+                  <DetailItem
+                    label="Precio promoción"
+                    value={formatCurrency(product.promotionPrice)}
+                    highlight
+                  />
+                  <DetailItem
+                    label="Stock en promoción"
+                    value={`${promotionStock} unidad(es)`}
+                  />
+                </>
+              )}
               <DetailItem
                 label="Ganancia"
                 value={`${formatCurrency(product.profitMargin)} · ${Number(
@@ -2560,6 +2788,47 @@ function ProductDetailModal({
                 value={`${images.length} archivo(s)`}
               />
             </div>
+
+            {promotionActive && (
+              <div className="mt-4 rounded-[20px] border border-amber-100 bg-amber-50/70 p-4">
+                <div className="flex items-center gap-2">
+                  <BadgePercent size={15} className="text-amber-700" />
+                  <p className="text-[12px] font-medium text-amber-800">
+                    Producto en promoción
+                  </p>
+                </div>
+
+                <div className="mt-2 flex flex-wrap items-baseline gap-2">
+                  <span className="text-[18px] font-medium text-red-600">
+                    {formatCurrency(product.promotionPrice)}
+                  </span>
+
+                  <span className="text-[11px] text-black/35 line-through">
+                    {formatCurrency(product.salePrice)}
+                  </span>
+                </div>
+
+                {Array.isArray(product.promotionVariants) &&
+                  product.promotionVariants.length > 0 && (
+                    <div className="mt-3 flex flex-wrap gap-1.5">
+                      {product.promotionVariants.map((item) => (
+                        <span
+                          key={`${item.variantId}-${item.size}`}
+                          className="rounded-full bg-white px-2.5 py-1 text-[8.5px] font-medium text-amber-800 ring-1 ring-amber-100"
+                        >
+                          {item.size}: {item.quantity} u.
+                        </span>
+                      ))}
+                    </div>
+                  )}
+
+                {product.promotionNote && (
+                  <p className="mt-2 text-[10px] leading-5 text-black/60">
+                    {product.promotionNote}
+                  </p>
+                )}
+              </div>
+            )}
 
             <div className="mt-4 rounded-[22px] bg-black/[0.025] p-4">
               <div className="flex items-center justify-between">
@@ -2691,6 +2960,7 @@ function ProductFormModal({
   saving,
   profit,
   formTotalStock,
+  formPromotionStock,
   processingImages,
   imageProcessingProgress,
   openCropEditor,
@@ -2873,6 +3143,62 @@ function ProductFormModal({
 
       if (parseMoneyInput(form.salePrice) <= 0) {
         notify("El precio de venta debe ser mayor a cero.", "warning");
+        return false;
+      }
+
+      if (
+        form.isPromotion &&
+        parseMoneyInput(form.promotionPrice) <= 0
+      ) {
+        notify("Escribe el precio de promoción.", "warning");
+        return false;
+      }
+
+      if (
+        form.isPromotion &&
+        parseMoneyInput(form.promotionPrice) >=
+          parseMoneyInput(form.salePrice)
+      ) {
+        notify(
+          "El precio de promoción debe ser menor al precio normal.",
+          "warning"
+        );
+        return false;
+      }
+
+      if (
+        form.isPromotion &&
+        formPromotionStock <= 0
+      ) {
+        notify(
+          "Selecciona al menos una unidad de una talla para la promoción.",
+          "warning"
+        );
+        return false;
+      }
+
+      const invalidPromotionStock =
+        form.variants.some((variant) => {
+          const promotionStock = Number(
+            variant.promotionStock || 0
+          );
+          const stock = Number(variant.stock || 0);
+
+          return (
+            promotionStock < 0 ||
+            !Number.isInteger(promotionStock) ||
+            promotionStock > stock
+          );
+        });
+
+      if (
+        form.isPromotion &&
+        invalidPromotionStock
+      ) {
+        notify(
+          "El stock promocional no puede superar el stock de cada talla.",
+          "warning"
+        );
         return false;
       }
     }
@@ -3507,8 +3833,8 @@ function ProductFormModal({
 
                         <InputField
                           label="Stock"
-                          type="number"
-                          min="0"
+                          type="text"
+                          inputMode="numeric"
                           value={variant.stock}
                           onChange={(value) =>
                             updateVariant(variant.id, "stock", value)
@@ -3552,6 +3878,25 @@ function ProductFormModal({
                   description="Completa los valores y revisa el producto antes de guardarlo."
                 />
 
+                {!editingProduct && (
+                  <div className="mt-3 flex items-start gap-2.5 rounded-[18px] border border-red-100 bg-red-50/55 px-3.5 py-3">
+                    <Sparkles
+                      size={14}
+                      className="mt-0.5 shrink-0 text-red-600"
+                    />
+
+                    <div>
+                      <p className="text-[10px] font-medium text-red-700">
+                        Se mostrará como NUEVO durante 7 días
+                      </p>
+
+                      <p className="mt-0.5 text-[8.5px] leading-4 text-black/45">
+                        La etiqueta desaparecerá sola al cumplir una semana. El producto seguirá normal en su categoría.
+                      </p>
+                    </div>
+                  </div>
+                )}
+
                 <div className="mt-5 grid gap-4 sm:grid-cols-2">
                   <MoneyInputField
                     label="Precio llegada"
@@ -3588,6 +3933,226 @@ function ProductFormModal({
                   </div>
                 </div>
 
+                <div className="mt-4 overflow-hidden rounded-[22px] border border-black/[0.06] bg-white">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const nextValue = !form.isPromotion;
+                      updateForm("isPromotion", nextValue);
+
+                      if (!nextValue) {
+                        updateForm("promotionPrice", "");
+                        updateForm("promotionNote", "");
+
+                        form.variants.forEach((variant) => {
+                          updateVariant(
+                            variant.id,
+                            "promotionStock",
+                            "0"
+                          );
+                        });
+                      }
+                    }}
+                    className="flex w-full items-center justify-between gap-4 px-4 py-3.5 text-left transition hover:bg-black/[0.015]"
+                  >
+                    <div className="flex min-w-0 items-center gap-3">
+                      <div
+                        className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${
+                          form.isPromotion
+                            ? "bg-red-50 text-red-600"
+                            : "bg-black/[0.035] text-black/40"
+                        }`}
+                      >
+                        <BadgePercent size={16} />
+                      </div>
+
+                      <div className="min-w-0">
+                        <p className="text-[12px] font-medium text-black">
+                          Producto en promoción
+                        </p>
+                        <p className="mt-0.5 text-[9px] text-black/40">
+                          Aparecerá directamente en Promociones, sin subcategorías.
+                        </p>
+                      </div>
+                    </div>
+
+                    <span
+                      className={`relative h-6 w-11 shrink-0 rounded-full transition ${
+                        form.isPromotion
+                          ? "bg-red-600"
+                          : "bg-black/15"
+                      }`}
+                    >
+                      <span
+                        className={`absolute top-1 h-4 w-4 rounded-full bg-white shadow-sm transition ${
+                          form.isPromotion ? "left-6" : "left-1"
+                        }`}
+                      />
+                    </span>
+                  </button>
+
+                  {form.isPromotion && (
+                    <div className="grid gap-3 border-t border-black/[0.06] bg-amber-50/35 p-4 sm:grid-cols-2">
+                      <MoneyInputField
+                        label="Precio promoción"
+                        value={form.promotionPrice}
+                        onChange={(value) =>
+                          updateForm("promotionPrice", value)
+                        }
+                        placeholder="59.900"
+                      />
+
+                      <label>
+                        <span className="text-[13px] font-normal text-black/65">
+                          Observación
+                        </span>
+
+                        <textarea
+                          value={form.promotionNote}
+                          onChange={(event) =>
+                            updateForm(
+                              "promotionNote",
+                              event.target.value
+                            )
+                          }
+                          rows={2}
+                          placeholder="Ej: Tiene una pequeña mancha en la manga"
+                          className="mt-2 min-h-11 w-full resize-none rounded-2xl border border-black/[0.08] bg-white px-4 py-3 text-[12px] leading-5 text-black outline-none transition placeholder:text-black/30 focus:border-red-600 focus:ring-4 focus:ring-red-600/10"
+                        />
+                      </label>
+
+                      <div className="sm:col-span-2 rounded-[18px] border border-amber-100 bg-white p-3.5">
+                        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                          <div>
+                            <p className="text-[11px] font-medium text-black">
+                              Tallas y cantidades en promoción
+                            </p>
+                            <p className="mt-0.5 text-[8.5px] text-black/42">
+                              Elige exactamente cuántas unidades de cada talla entran a promoción.
+                            </p>
+                          </div>
+
+                          <span className="inline-flex self-start rounded-full bg-amber-50 px-2.5 py-1 text-[8px] font-medium text-amber-700 ring-1 ring-amber-100 sm:self-auto">
+                            {formPromotionStock} unidad(es) promo
+                          </span>
+                        </div>
+
+                        <div className="mt-3 space-y-2">
+                          {form.variants.map((variant) => {
+                            const stock = Number(variant.stock || 0);
+                            const promoStock = Number(
+                              variant.promotionStock || 0
+                            );
+                            const normalStock = Math.max(
+                              stock - promoStock,
+                              0
+                            );
+
+                            return (
+                              <div
+                                key={variant.id}
+                                className={`grid items-center gap-2 rounded-2xl border p-2.5 sm:grid-cols-[1fr_110px_130px] ${
+                                  promoStock > 0
+                                    ? "border-amber-200 bg-amber-50/55"
+                                    : "border-black/[0.06] bg-black/[0.015]"
+                                }`}
+                              >
+                                <div className="min-w-0">
+                                  <p className="truncate text-[11px] font-medium text-black">
+                                    Talla {normalizeSize(variant.size)}
+                                  </p>
+                                  <p className="mt-0.5 text-[8px] text-black/40">
+                                    Stock físico: {stock} · Normal: {normalStock}
+                                  </p>
+                                </div>
+
+                                <div className="rounded-xl bg-white px-2.5 py-2 text-center ring-1 ring-black/[0.06]">
+                                  <p className="text-[7px] uppercase tracking-[0.08em] text-black/35">
+                                    Disponible
+                                  </p>
+                                  <p className="mt-0.5 text-[10px] font-medium">
+                                    {stock} u.
+                                  </p>
+                                </div>
+
+                                <label>
+                                  <span className="text-[8px] font-medium text-amber-700">
+                                    En promoción
+                                  </span>
+                                  <input
+                                    type="text"
+                                    inputMode="numeric"
+                                    value={variant.promotionStock ?? "0"}
+                                    onChange={(event) =>
+                                      updateVariant(
+                                        variant.id,
+                                        "promotionStock",
+                                        event.target.value
+                                      )
+                                    }
+                                    disabled={stock <= 0}
+                                    placeholder="0"
+                                    className="mt-1 h-9 w-full rounded-xl border border-amber-200 bg-white px-3 text-[11px] font-medium outline-none transition focus:border-red-600 focus:ring-4 focus:ring-red-600/10 disabled:bg-black/[0.03] disabled:text-black/30"
+                                  />
+                                </label>
+                              </div>
+                            );
+                          })}
+                        </div>
+
+                        <div className="mt-3 grid grid-cols-2 gap-2">
+                          <div className="rounded-xl bg-black/[0.025] px-3 py-2.5">
+                            <p className="text-[7.5px] text-black/35">
+                              Stock total
+                            </p>
+                            <p className="mt-0.5 text-[12px] font-medium">
+                              {formTotalStock} u.
+                            </p>
+                          </div>
+
+                          <div className="rounded-xl bg-amber-50 px-3 py-2.5">
+                            <p className="text-[7.5px] text-amber-700/70">
+                              Stock promoción
+                            </p>
+                            <p className="mt-0.5 text-[12px] font-medium text-amber-700">
+                              {formPromotionStock} u.
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="sm:col-span-2 rounded-2xl bg-white px-3.5 py-3 ring-1 ring-amber-100">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div>
+                            <p className="text-[8px] uppercase tracking-[0.1em] text-black/35">
+                              Vista de precio
+                            </p>
+
+                            <div className="mt-1 flex items-baseline gap-2">
+                              <span className="text-[17px] font-medium text-red-600">
+                                {formatCurrency(
+                                  parseMoneyInput(form.promotionPrice)
+                                )}
+                              </span>
+
+                              <span className="text-[10px] text-black/35 line-through">
+                                {formatCurrency(
+                                  parseMoneyInput(form.salePrice)
+                                )}
+                              </span>
+                            </div>
+                          </div>
+
+                          <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2.5 py-1 text-[8px] font-medium text-amber-700 ring-1 ring-amber-100">
+                            <BadgePercent size={9} />
+                            PROMO
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
                 <div className="mt-4 rounded-[24px] border border-black/[0.06] bg-white p-4">
                   <p className="text-[13px] font-medium text-black">
                     Resumen final
@@ -3617,6 +4182,16 @@ function ProductFormModal({
                     <SummaryBox
                       label="Stock total"
                       value={`${formTotalStock} unidad(es)`}
+                    />
+                    <SummaryBox
+                      label="Promoción"
+                      value={
+                        form.isPromotion
+                          ? `${formatCurrency(
+                              parseMoneyInput(form.promotionPrice)
+                            )} · ${formPromotionStock} u.`
+                          : "No"
+                      }
                     />
                   </div>
 

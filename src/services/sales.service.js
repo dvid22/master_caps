@@ -58,6 +58,97 @@ function normalizeMoney(value) {
   return Math.max(number, 0);
 }
 
+function normalizePromotionVariants(
+  product = {},
+  variants = []
+) {
+  const source = Array.isArray(
+    product.promotionVariants
+  )
+    ? product.promotionVariants
+    : [];
+
+  return source
+    .map((item) => {
+      const requestedId =
+        normalizeText(
+          item?.variantId ||
+            item?.id
+        );
+      const requestedSize =
+        normalizeSize(item?.size);
+
+      const variant =
+        variants.find(
+          (candidate) =>
+            (requestedId &&
+              candidate.id ===
+                requestedId) ||
+            normalizeSize(
+              candidate.size
+            ) === requestedSize
+        ) || null;
+
+      if (!variant) {
+        return null;
+      }
+
+      const quantity = Math.min(
+        normalizeQuantity(
+          item?.quantity ??
+            item?.stock
+        ),
+        normalizeQuantity(
+          variant.stock
+        )
+      );
+
+      if (quantity <= 0) {
+        return null;
+      }
+
+      return {
+        variantId: variant.id,
+        size: variant.size,
+        quantity,
+      };
+    })
+    .filter(Boolean);
+}
+
+function getPromotionStockForVariant(
+  promotionVariants,
+  variant
+) {
+  const match =
+    promotionVariants.find(
+      (item) =>
+        item.variantId ===
+          variant?.id ||
+        normalizeSize(item.size) ===
+          normalizeSize(
+            variant?.size
+          )
+    );
+
+  return normalizeQuantity(
+    match?.quantity
+  );
+}
+
+function getPromotionTotalStock(
+  promotionVariants
+) {
+  return promotionVariants.reduce(
+    (total, item) =>
+      total +
+      normalizeQuantity(
+        item.quantity
+      ),
+    0
+  );
+}
+
 function normalizeQuantity(value) {
   const number = Number(value || 0);
 
@@ -275,6 +366,11 @@ function normalizeRequestedItems(items) {
     const variantId = normalizeText(item?.variantId);
     const size = normalizeText(item?.size || item?.productSize);
     const quantity = normalizeQuantity(item?.quantity);
+    const isPromotion =
+      Boolean(item?.isPromotion) ||
+      normalizeText(
+        item?.pricingMode
+      ) === "promotion";
 
     if (!productId) {
       throw new Error("Uno de los productos seleccionados no es válido.");
@@ -288,8 +384,17 @@ function normalizeRequestedItems(items) {
      * Si existen dos líneas con el mismo producto y la misma talla,
      * se agrupan automáticamente.
      */
-    const variantKey = variantId || normalizeSize(size || "Talla única");
-    const groupKey = `${productId}__${variantKey}`;
+    const variantKey =
+      variantId ||
+      normalizeSize(
+        size || "Talla única"
+      );
+    const modeKey =
+      isPromotion
+        ? "promo"
+        : "normal";
+    const groupKey =
+      `${productId}__${variantKey}__${modeKey}`;
 
     const existingItem = groupedItems.get(groupKey);
 
@@ -307,6 +412,7 @@ function normalizeRequestedItems(items) {
       variantId,
       size,
       quantity,
+      isPromotion,
     });
   });
 
@@ -344,6 +450,15 @@ function normalizeLegacySaleItem(sale) {
 
     quantity: normalizeQuantity(sale.quantity),
     unitPrice: normalizeMoney(sale.unitPrice),
+
+    regularUnitPrice:
+      sale.regularUnitPrice !== undefined
+        ? normalizeMoney(sale.regularUnitPrice)
+        : normalizeMoney(sale.unitPrice),
+    isPromotion: Boolean(sale.isPromotion),
+    promotionPrice: normalizeMoney(sale.promotionPrice),
+    promotionNote: normalizeText(sale.promotionNote),
+
     costPrice: normalizeMoney(sale.costPrice),
 
     subtotal: normalizeMoney(sale.total),
@@ -391,6 +506,15 @@ function normalizeSaleItem(item, index = 0) {
 
     quantity,
     unitPrice,
+
+    regularUnitPrice:
+      item?.regularUnitPrice !== undefined
+        ? normalizeMoney(item.regularUnitPrice)
+        : unitPrice,
+    isPromotion: Boolean(item?.isPromotion),
+    promotionPrice: normalizeMoney(item?.promotionPrice),
+    promotionNote: normalizeText(item?.promotionNote),
+
     costPrice,
 
     subtotal,
@@ -896,10 +1020,17 @@ export async function createMultiItemSale({
         );
       }
 
-      const workingVariants = normalizeProductVariants(
-        productId,
-        product
-      );
+      const workingVariants =
+        normalizeProductVariants(
+          productId,
+          product
+        );
+
+      let workingPromotionVariants =
+        normalizePromotionVariants(
+          product,
+          workingVariants
+        );
 
       for (const requestedItem of productSaleItems) {
         const selectedVariant = findRequestedVariant(
@@ -917,31 +1048,118 @@ export async function createMultiItemSale({
           requestedItem.quantity
         );
 
-        const currentVariantStock = normalizeQuantity(
-          selectedVariant.stock
-        );
+        const currentVariantStock =
+          normalizeQuantity(
+            selectedVariant.stock
+          );
 
-        if (currentVariantStock <= 0) {
+        const promotionAvailable =
+          getPromotionStockForVariant(
+            workingPromotionVariants,
+            selectedVariant
+          );
+
+        const normalAvailable =
+          Math.max(
+            currentVariantStock -
+              promotionAvailable,
+            0
+          );
+
+        const promotionActive =
+          Boolean(
+            requestedItem.isPromotion
+          );
+
+        const availableForMode =
+          promotionActive
+            ? promotionAvailable
+            : normalAvailable;
+
+        if (
+          requestedQuantity >
+          availableForMode
+        ) {
           throw new Error(
-            `La talla ${selectedVariant.size} de "${product.name}" está agotada.`
+            promotionActive
+              ? `Solo hay ${availableForMode} unidad(es) en promoción de "${product.name}" talla ${selectedVariant.size}.`
+              : `Solo hay ${availableForMode} unidad(es) normales de "${product.name}" talla ${selectedVariant.size}.`
           );
         }
 
-        if (requestedQuantity > currentVariantStock) {
+        if (
+          promotionActive &&
+          (
+            !Boolean(
+              product.isPromotion
+            ) ||
+            normalizeMoney(
+              product.promotionPrice
+            ) <= 0
+          )
+        ) {
           throw new Error(
-            `No puedes vender ${requestedQuantity} unidad(es) de "${product.name}" talla ${selectedVariant.size}. Solo hay ${currentVariantStock} disponible(s).`
+            `La promoción de "${product.name}" ya no está disponible.`
           );
         }
 
-        /**
-         * Se modifica la variante dentro del arreglo de trabajo.
-         * Si hay varias líneas del mismo producto, todas afectan el mismo arreglo.
-         */
         selectedVariant.stock =
-          currentVariantStock - requestedQuantity;
+          currentVariantStock -
+          requestedQuantity;
 
-        const unitPrice = normalizeMoney(product.salePrice);
-        const costPrice = normalizeMoney(product.costPrice);
+        if (promotionActive) {
+          workingPromotionVariants =
+            workingPromotionVariants
+              .map((item) =>
+                item.variantId ===
+                  selectedVariant.id ||
+                normalizeSize(
+                  item.size
+                ) ===
+                  normalizeSize(
+                    selectedVariant.size
+                  )
+                  ? {
+                      ...item,
+                      quantity:
+                        item.quantity -
+                        requestedQuantity,
+                    }
+                  : item
+              )
+              .filter(
+                (item) =>
+                  item.quantity > 0
+              );
+        }
+
+        const regularUnitPrice =
+          normalizeMoney(
+            product.salePrice
+          );
+
+        const promotionPrice =
+          promotionActive
+            ? normalizeMoney(
+                product.promotionPrice
+              )
+            : 0;
+
+        const promotionNote =
+          promotionActive
+            ? normalizeText(
+                product.promotionNote
+              )
+            : "";
+
+        const unitPrice =
+          promotionActive
+            ? promotionPrice
+            : regularUnitPrice;
+
+        const costPrice = normalizeMoney(
+          product.costPrice
+        );
 
         const lineSubtotal = unitPrice * requestedQuantity;
         const lineTotalCost = costPrice * requestedQuantity;
@@ -971,6 +1189,11 @@ export async function createMultiItemSale({
           quantity: requestedQuantity,
 
           unitPrice,
+          regularUnitPrice,
+          isPromotion: promotionActive,
+          promotionPrice,
+          promotionNote,
+
           costPrice,
 
           subtotal: lineSubtotal,
@@ -980,10 +1203,21 @@ export async function createMultiItemSale({
       }
 
       const productVariantPayload =
-        buildProductVariantPayload(workingVariants);
+        buildProductVariantPayload(
+          workingVariants
+        );
+
+      const promotionStock =
+        getPromotionTotalStock(
+          workingPromotionVariants
+        );
 
       transaction.update(productRef, {
         ...productVariantPayload,
+
+        promotionVariants:
+          workingPromotionVariants,
+        promotionStock,
 
         updatedByUid: seller?.uid || "",
         updatedByName: seller?.name || "",

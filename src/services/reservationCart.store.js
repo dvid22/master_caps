@@ -76,23 +76,42 @@ function normalizeItem(item, storeId) {
   );
 
   const cleanStoreId = safeStoreId(storeId || item?.storeId);
+  const isPromotion = Boolean(item?.isPromotion);
+  const productId = String(item?.productId || "");
+  const variantId = String(item?.variantId || "legacy");
 
   return {
     cartKey:
-      item?.cartKey ||
-      `${cleanStoreId}__${String(item?.productId || "")}__${String(
-        item?.variantId || "legacy"
-      )}`,
+      `${cleanStoreId}__${productId}__${variantId}__${
+        isPromotion ? "promo" : "normal"
+      }`,
     storeId: cleanStoreId,
-    productId: String(item?.productId || ""),
+    productId,
     productName: String(item?.productName || "Producto"),
     productCode: String(item?.productCode || ""),
     categoryName: String(item?.categoryName || ""),
-    variantId: String(item?.variantId || "legacy"),
+    variantId,
     size: String(item?.size || "Talla única"),
     quantity,
     stock,
     unitPrice: Math.max(safeNumber(item?.unitPrice), 0),
+
+    regularUnitPrice: Math.max(
+      safeNumber(
+        item?.regularUnitPrice,
+        item?.unitPrice
+      ),
+      0
+    ),
+    isPromotion,
+    promotionPrice: Math.max(
+      safeNumber(item?.promotionPrice),
+      0
+    ),
+    promotionNote: String(
+      item?.promotionNote || ""
+    ).trim(),
+
     coverUrl: String(item?.coverUrl || ""),
   };
 }

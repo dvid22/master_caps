@@ -8,6 +8,7 @@ import {
 import {
   ArrowLeft,
   ArrowRight,
+  BadgePercent,
   CalendarClock,
   Camera,
   ChevronDown,
@@ -20,6 +21,7 @@ import {
   Plus,
   Search,
   ShieldCheck,
+  Sparkles,
   ShoppingBag,
   SlidersHorizontal,
   Truck,
@@ -36,6 +38,9 @@ import {
 import {
   getProductCoverImage,
   getProductImages,
+  getProductPromotionStock,
+  getPromotionStockForVariant,
+  isProductNew,
   normalizeProductVariants,
   subscribeProducts,
 } from "../../services/products.service";
@@ -76,6 +81,60 @@ const GLOBAL_CATALOG_GROUPS = [
       "Gorras urbanas, deportivas y agropecuarias.",
   },
 ];
+
+
+const SPECIAL_CATALOG_COLLECTIONS = [
+  {
+    id: "new",
+    name: "NUEVOS",
+    description:
+      "EXPLORA LO NUEVO DE MASTERCAPS.",
+  },
+  {
+    id: "promotions",
+    name: "PROMOCIONES",
+    description:
+      "EXPLORA LAS PROMOCIONES DE MASTERCAPS",
+  },
+];
+
+function isPromotionProduct(product) {
+  return (
+    Boolean(product?.isPromotion) &&
+    Number(product?.promotionPrice || 0) > 0 &&
+    getProductPromotionStock(product) > 0
+  );
+}
+
+function getCatalogProductPrice(
+  product,
+  promotionView = false
+) {
+  return promotionView &&
+    isPromotionProduct(product)
+    ? Number(product.promotionPrice || 0)
+    : Number(product.salePrice || 0);
+}
+
+function getCatalogVariants(
+  product,
+  promotionView = false
+) {
+  const variants = getAvailableVariants(product);
+
+  if (!promotionView) {
+    return variants;
+  }
+
+  return variants.filter(
+    (variant) =>
+      getPromotionStockForVariant(
+        product,
+        variant
+      ) > 0
+  );
+}
+
 
 function GlobalGroupImage({
   src,
@@ -316,6 +375,15 @@ export default function CatalogPage() {
   );
 
   const [
+    specialCollectionFilter,
+    setSpecialCollectionFilter,
+  ] = useState(
+    () =>
+      searchParams.get("especial") ||
+      "all"
+  );
+
+  const [
     globalGroupFilter,
     setGlobalGroupFilter,
   ] = useState(
@@ -511,6 +579,15 @@ export default function CatalogPage() {
       new URLSearchParams();
 
     if (
+      specialCollectionFilter !== "all"
+    ) {
+      nextParams.set(
+        "especial",
+        specialCollectionFilter
+      );
+    }
+
+    if (
       globalGroupFilter !== "all"
     ) {
       nextParams.set(
@@ -552,6 +629,7 @@ export default function CatalogPage() {
       replace: true,
     });
   }, [
+    specialCollectionFilter,
     globalGroupFilter,
     mainCategoryFilter,
     categoryFilter,
@@ -712,6 +790,18 @@ export default function CatalogPage() {
   ]);
 
   const productsForSizeFilter = useMemo(() => {
+    if (specialCollectionFilter === "new") {
+      return availableProducts.filter((product) =>
+        isProductNew(product)
+      );
+    }
+
+    if (specialCollectionFilter === "promotions") {
+      return availableProducts.filter(
+        isPromotionProduct
+      );
+    }
+
     if (categoryFilter !== "all") {
       return availableProducts.filter(
         (product) =>
@@ -742,6 +832,7 @@ export default function CatalogPage() {
     return availableProducts;
   }, [
     availableProducts,
+    specialCollectionFilter,
     categoryFilter,
     mainCategoryFilter,
     globalGroupFilter,
@@ -753,8 +844,10 @@ export default function CatalogPage() {
     const sizes =
       productsForSizeFilter.flatMap(
         (product) =>
-          getAvailableVariants(
-            product
+          getCatalogVariants(
+            product,
+            specialCollectionFilter ===
+              "promotions"
           ).map(
             (variant) =>
               safeText(variant.size)
@@ -816,7 +909,11 @@ export default function CatalogPage() {
     return availableProducts.filter(
       (product) => {
         const variants =
-          getAvailableVariants(product);
+          getCatalogVariants(
+            product,
+            specialCollectionFilter ===
+              "promotions"
+          );
 
         const productMainCategoryId =
           getMainCategoryForProduct(
@@ -850,7 +947,15 @@ export default function CatalogPage() {
               .includes(cleanSearch)
           );
 
+        const matchesSpecialCollection =
+          specialCollectionFilter === "all" ||
+          (specialCollectionFilter === "new" &&
+            isProductNew(product)) ||
+          (specialCollectionFilter === "promotions" &&
+            isPromotionProduct(product));
+
         const matchesGlobalGroup =
+          specialCollectionFilter !== "all" ||
           globalGroupFilter === "all" ||
           getProductGlobalGroup(
             product
@@ -878,6 +983,7 @@ export default function CatalogPage() {
 
         return (
           matchesSearch &&
+          matchesSpecialCollection &&
           matchesGlobalGroup &&
           matchesMainCategory &&
           matchesSubcategory &&
@@ -888,6 +994,7 @@ export default function CatalogPage() {
   }, [
     availableProducts,
     search,
+    specialCollectionFilter,
     globalGroupFilter,
     mainCategoryFilter,
     categoryFilter,
@@ -898,13 +1005,18 @@ export default function CatalogPage() {
   ]);
 
   const isHomeView =
+    specialCollectionFilter === "all" &&
     globalGroupFilter === "all" &&
     mainCategoryFilter === "all" &&
     categoryFilter === "all" &&
     sizeFilter === "all" &&
     !search.trim();
 
+  const isSpecialCollectionView =
+    specialCollectionFilter !== "all";
+
   const isGlobalGroupLanding =
+    specialCollectionFilter === "all" &&
     globalGroupFilter !== "all" &&
     mainCategoryFilter === "all" &&
     categoryFilter === "all" &&
@@ -912,6 +1024,7 @@ export default function CatalogPage() {
     !search.trim();
 
   const isMainCategoryLanding =
+    specialCollectionFilter === "all" &&
     mainCategoryFilter !== "all" &&
     categoryFilter === "all" &&
     sizeFilter === "all" &&
@@ -926,6 +1039,29 @@ export default function CatalogPage() {
     categoryById.get(
       categoryFilter
     ) || null;
+
+  const selectedSpecialCollection =
+    SPECIAL_CATALOG_COLLECTIONS.find(
+      (collection) =>
+        collection.id ===
+        specialCollectionFilter
+    ) || null;
+
+  const newProducts = useMemo(
+    () =>
+      availableProducts.filter((product) =>
+        isProductNew(product)
+      ),
+    [availableProducts]
+  );
+
+  const promotionProducts = useMemo(
+    () =>
+      availableProducts.filter(
+        isPromotionProduct
+      ),
+    [availableProducts]
+  );
 
   const globalGroupShowcases = useMemo(
     () =>
@@ -1221,7 +1357,28 @@ export default function CatalogPage() {
       availableProducts,
     ]);
 
+  function selectSpecialCollection(value) {
+    setSpecialCollectionFilter(value);
+    setGlobalGroupFilter("all");
+    setMainCategoryFilter("all");
+    setCategoryFilter("all");
+    setSizeFilter("all");
+    setSearch("");
+    setMobileMenuOpen(false);
+    setFiltersOpen(false);
+
+    requestAnimationFrame(() => {
+      document
+        .getElementById("catalog-products")
+        ?.scrollIntoView({
+          behavior: "smooth",
+          block: "start",
+        });
+    });
+  }
+
   function selectGlobalGroup(value) {
+    setSpecialCollectionFilter("all");
     setGlobalGroupFilter(value);
     setMainCategoryFilter("all");
     setCategoryFilter("all");
@@ -1239,6 +1396,8 @@ export default function CatalogPage() {
   }
 
   function selectMainCategory(value) {
+    setSpecialCollectionFilter("all");
+
     const selectedMain =
       mainCategoryById.get(value);
 
@@ -1291,6 +1450,8 @@ export default function CatalogPage() {
   }
 
   function selectSubcategory(value) {
+    setSpecialCollectionFilter("all");
+
     const category =
       categoryById.get(value);
 
@@ -1335,6 +1496,7 @@ export default function CatalogPage() {
   }
 
   function clearFilters() {
+    setSpecialCollectionFilter("all");
     setGlobalGroupFilter("all");
     setMainCategoryFilter("all");
     setCategoryFilter("all");
@@ -1413,6 +1575,8 @@ export default function CatalogPage() {
         <CatalogHeader
           storeId={storeId}
           globalGroups={GLOBAL_CATALOG_GROUPS}
+          specialCollections={SPECIAL_CATALOG_COLLECTIONS}
+          activeSpecialCollection={specialCollectionFilter}
           activeGlobalGroup={globalGroupFilter}
           cart={cart}
           onOpenCart={() =>
@@ -1423,6 +1587,9 @@ export default function CatalogPage() {
           }
           onOpenSearch={() =>
             setSearchOpen(true)
+          }
+          onSelectSpecialCollection={
+            selectSpecialCollection
           }
           onSelectGlobalGroup={
             selectGlobalGroup
@@ -1444,6 +1611,54 @@ export default function CatalogPage() {
                   onNext={nextHero}
                   onSelectSlide={setHeroIndex}
                 />
+
+                {newProducts.length > 0 && (
+                  <ProductEditorialSection
+                    title="NUEVOS"
+                    description="EXPLORA LO NUEVO DE MASTERCAPS"
+                    products={newProducts.slice(0, 8)}
+                    storeId={storeId}
+                    catalogSearch={location.search}
+                    categoryById={categoryById}
+                    mainCategoryById={mainCategoryById}
+                    navigationState={{
+                      specialCollectionFilter,
+                      mainCategoryFilter,
+                      categoryFilter,
+                      sizeFilter,
+                      search,
+                    }}
+                    promotionView={false}
+                    actionLabel="VER TODOS LOS NUEVOS"
+                    onAction={() =>
+                      selectSpecialCollection("new")
+                    }
+                  />
+                )}
+
+                {promotionProducts.length > 0 && (
+                  <ProductEditorialSection
+                    title="PROMOCIONES"
+                    description="Productos con precio especial. Revisa la observación de cada referencia antes de apartarla."
+                    products={promotionProducts.slice(0, 8)}
+                    storeId={storeId}
+                    catalogSearch={location.search}
+                    categoryById={categoryById}
+                    mainCategoryById={mainCategoryById}
+                    navigationState={{
+                      specialCollectionFilter,
+                      mainCategoryFilter,
+                      categoryFilter,
+                      sizeFilter,
+                      search,
+                    }}
+                    promotionView
+                    actionLabel="VER TODAS LAS PROMOCIONES"
+                    onAction={() =>
+                      selectSpecialCollection("promotions")
+                    }
+                  />
+                )}
 
                 <CategoryShowcaseSection
                   categories={
@@ -1506,6 +1721,9 @@ export default function CatalogPage() {
             >
               <CatalogToolbar
                 isHomeView={isHomeView}
+                specialCollection={
+                  selectedSpecialCollection
+                }
                 search={search}
                 onSearchChange={
                   setSearch
@@ -1576,11 +1794,16 @@ export default function CatalogPage() {
                           mainCategoryById
                         )}
                         navigationState={{
+                          specialCollectionFilter,
                           mainCategoryFilter,
                           categoryFilter,
                           sizeFilter,
                           search,
                         }}
+                        promotionView={
+                          specialCollectionFilter ===
+                          "promotions"
+                        }
                       />
                     )
                   )}
@@ -1597,6 +1820,12 @@ export default function CatalogPage() {
           <MobileCatalogMenu
             globalGroups={
               GLOBAL_CATALOG_GROUPS
+            }
+            specialCollections={
+              SPECIAL_CATALOG_COLLECTIONS
+            }
+            activeSpecialCollection={
+              specialCollectionFilter
             }
             activeGlobalGroup={
               globalGroupFilter
@@ -1615,6 +1844,9 @@ export default function CatalogPage() {
               setMobileMenuOpen(false);
               setCartOpen(true);
             }}
+            onSelectSpecialCollection={
+              selectSpecialCollection
+            }
             onSelectGlobalGroup={
               selectGlobalGroup
             }
@@ -1705,11 +1937,14 @@ export default function CatalogPage() {
 
 function CatalogHeader({
   globalGroups,
+  specialCollections,
+  activeSpecialCollection,
   activeGlobalGroup,
   cart,
   onOpenCart,
   onOpenMenu,
   onOpenSearch,
+  onSelectSpecialCollection,
   onSelectGlobalGroup,
   onHome,
 }) {
@@ -1741,7 +1976,26 @@ function CatalogHeader({
           />
         </button>
 
-        <nav className="hidden flex-1 items-center justify-center gap-10 lg:flex">
+        <nav className="hidden flex-1 items-center justify-center gap-6 xl:gap-8 lg:flex">
+          {specialCollections.map((collection) => (
+            <button
+              key={collection.id}
+              type="button"
+              onClick={() =>
+                onSelectSpecialCollection(collection.id)
+              }
+              className={`border-b-2 pb-2 text-[11px] font-medium uppercase tracking-[0.11em] transition xl:text-[12px] ${
+                activeSpecialCollection === collection.id
+                  ? "border-red-600 text-red-600"
+                  : "border-transparent text-black/58 hover:border-red-600 hover:text-red-600"
+              }`}
+            >
+              {collection.name}
+            </button>
+          ))}
+
+          <span className="h-5 w-px bg-black/10" />
+
           {globalGroups.map(
             (group) => (
               <button
@@ -1752,7 +2006,8 @@ function CatalogHeader({
                     group.id
                   )
                 }
-                className={`border-b-2 pb-2 text-[12px] font-medium uppercase tracking-[0.12em] transition xl:text-[13px] ${
+                className={`border-b-2 pb-2 text-[11px] font-medium uppercase tracking-[0.11em] transition xl:text-[12px] ${
+                  activeSpecialCollection === "all" &&
                   activeGlobalGroup ===
                   group.id
                     ? "border-black text-black"
@@ -1906,7 +2161,7 @@ function CategoryShowcaseSection({
           </p>
         </div>
 
-        <div className="-mx-4 flex snap-x snap-mandatory gap-4 overflow-x-auto px-4 pb-3 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden sm:mx-0 sm:grid sm:grid-cols-2 sm:overflow-visible sm:px-0 sm:pb-0 lg:grid-cols-3 2xl:grid-cols-4">
+        <div className="-mx-4 flex snap-x snap-mandatory gap-4 overflow-x-auto overscroll-x-contain px-4 pb-3 scroll-px-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden sm:mx-0 sm:grid sm:grid-cols-2 sm:overflow-visible sm:px-0 sm:pb-0 lg:grid-cols-3 2xl:grid-cols-4">
           {categories.map(
             (category, categoryIndex) => (
               <button
@@ -1915,7 +2170,7 @@ function CategoryShowcaseSection({
                 onClick={() =>
                   onSelect(category.id)
                 }
-                className="group flex min-h-[430px] w-[82vw] max-w-[340px] shrink-0 snap-start flex-col text-left sm:min-h-[470px] sm:w-auto sm:max-w-none"
+                className="group flex min-h-[430px] w-[calc(100vw-2rem)] max-w-[360px] shrink-0 snap-center flex-col text-left sm:min-h-[470px] sm:w-auto sm:max-w-none sm:snap-start"
               >
                 <div className="relative aspect-[4/4.35] w-full overflow-hidden bg-white">
                   <GlobalGroupImage
@@ -1935,7 +2190,7 @@ function CategoryShowcaseSection({
                   />
                 </div>
 
-                <div className="flex flex-1 flex-col border-t border-black/[0.09] bg-white px-1 pb-2 pt-4 text-black">
+                <div className="flex flex-1 flex-col border-t border-black/[0.09] bg-white px-3 pb-3 pt-4 text-black sm:px-1 sm:pb-2">
                   <p className="text-[9px] uppercase tracking-[0.18em] text-black/40">
                     {category.products.length} producto(s)
                   </p>
@@ -2306,7 +2561,7 @@ function SubcategoryLandingSection({
             </p>
           </div>
         ) : (
-          <div className="-mx-4 mt-8 flex snap-x snap-mandatory gap-4 overflow-x-auto px-4 pb-3 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden sm:mx-0 sm:grid sm:grid-cols-2 sm:overflow-visible sm:px-0 sm:pb-0 lg:grid-cols-3 2xl:grid-cols-4">
+          <div className="-mx-4 mt-8 flex snap-x snap-mandatory gap-4 overflow-x-auto overscroll-x-contain px-4 pb-3 scroll-px-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden sm:mx-0 sm:grid sm:grid-cols-2 sm:overflow-visible sm:px-0 sm:pb-0 lg:grid-cols-3 2xl:grid-cols-4">
             {subcategories.map(
               (subcategory, subcategoryIndex) => (
                 <button
@@ -2315,7 +2570,7 @@ function SubcategoryLandingSection({
                   onClick={() =>
                     onSelect(subcategory.id)
                   }
-                  className="group flex min-h-[430px] w-[82vw] max-w-[340px] shrink-0 snap-start flex-col text-left sm:min-h-[470px] sm:w-auto sm:max-w-none"
+                  className="group flex min-h-[430px] w-[calc(100vw-2rem)] max-w-[360px] shrink-0 snap-center flex-col text-left sm:min-h-[470px] sm:w-auto sm:max-w-none sm:snap-start"
                 >
                   <div className="relative aspect-[4/4.35] w-full overflow-hidden bg-white">
                     {subcategory.imageUrl ? (
@@ -2334,7 +2589,7 @@ function SubcategoryLandingSection({
                     )}
                   </div>
 
-                  <div className="flex flex-1 flex-col border-t border-black/[0.09] bg-white px-1 pb-2 pt-4 text-black">
+                  <div className="flex flex-1 flex-col border-t border-black/[0.09] bg-white px-3 pb-3 pt-4 text-black sm:px-1 sm:pb-2">
                     <p className="text-[9px] uppercase tracking-[0.18em] text-black/40">
                       {subcategory.products.length} producto(s)
                     </p>
@@ -2367,6 +2622,7 @@ function ProductEditorialSection({
   categoryById,
   mainCategoryById,
   navigationState,
+  promotionView = false,
   actionLabel,
   onAction,
 }) {
@@ -2415,8 +2671,16 @@ function ProductEditorialSection({
                 categoryById,
                 mainCategoryById
               )}
-              navigationState={
-                navigationState
+              navigationState={{
+                ...navigationState,
+                specialCollectionFilter:
+                  promotionView
+                    ? "promotions"
+                    : navigationState
+                        ?.specialCollectionFilter,
+              }}
+              promotionView={
+                promotionView
               }
             />
           ))}
@@ -2428,6 +2692,7 @@ function ProductEditorialSection({
 
 function CatalogToolbar({
   isHomeView,
+  specialCollection,
   search,
   onSearchChange,
   selectedMainCategory,
@@ -2446,6 +2711,7 @@ function CatalogToolbar({
   onClearFilters,
 }) {
   const title =
+    specialCollection?.name ||
     selectedSubcategory?.name ||
     selectedMainCategory?.name ||
     (isHomeView
@@ -2593,11 +2859,17 @@ function EditorialProductCard({
   catalogSearch,
   categoryPath,
   navigationState,
+  promotionView = false,
 }) {
   const variants =
-    getAvailableVariants(product);
+    getCatalogVariants(
+      product,
+      promotionView
+    );
   const totalStock =
-    getTotalStock(product);
+    promotionView
+      ? getProductPromotionStock(product)
+      : getTotalStock(product);
   const images =
     getProductImages(product).filter(
       (image) => Boolean(image?.url)
@@ -2606,11 +2878,44 @@ function EditorialProductCard({
     getProductCoverImage(product);
   const hoverImage =
     images[1]?.url || "";
+  const newProduct = isProductNew(product);
+  const promotionActive =
+    isPromotionProduct(product);
+  const displayPrice =
+    getCatalogProductPrice(
+      product,
+      promotionView
+    );
+
+  const productSearch = useMemo(() => {
+    if (!promotionView) {
+      return catalogSearch || "";
+    }
+
+    const params = new URLSearchParams(
+      String(catalogSearch || "").replace(
+        /^\?/,
+        ""
+      )
+    );
+
+    params.set(
+      "especial",
+      "promotions"
+    );
+
+    const query = params.toString();
+
+    return query ? `?${query}` : "";
+  }, [
+    catalogSearch,
+    promotionView,
+  ]);
 
   return (
     <article className="group min-w-0">
       <Link
-        to={`/catalogo/${storeId}/apartar/${product.id}${catalogSearch || ""}`}
+        to={`/catalogo/${storeId}/apartar/${product.id}${productSearch}`}
         state={{
           catalogNavigation: {
             ...navigationState,
@@ -2653,13 +2958,31 @@ function EditorialProductCard({
             </div>
           )}
 
-          <div className="absolute inset-x-0 top-0 flex items-start justify-between p-3">
-            <span className="bg-white px-2.5 py-1 text-[8px] font-medium uppercase tracking-[0.14em] text-black shadow-sm">
-              Disponible
-            </span>
+          <div className="absolute inset-x-0 top-0 flex items-start justify-between gap-2 p-3">
+            <div className="flex flex-wrap gap-1.5">
+              {newProduct && (
+                <span className="inline-flex items-center gap-1 bg-red-600 px-2.5 py-1 text-[8px] font-medium uppercase tracking-[0.12em] text-white shadow-sm">
+                  <Sparkles size={9} />
+                  Nuevo
+                </span>
+              )}
+
+              {promotionActive && (
+                <span className="inline-flex items-center gap-1 bg-amber-400 px-2.5 py-1 text-[8px] font-medium uppercase tracking-[0.12em] text-black shadow-sm">
+                  <BadgePercent size={9} />
+                  Promo
+                </span>
+              )}
+
+              {!newProduct && !promotionActive && (
+                <span className="bg-white px-2.5 py-1 text-[8px] font-medium uppercase tracking-[0.14em] text-black shadow-sm">
+                  Disponible
+                </span>
+              )}
+            </div>
 
             {images.length > 1 && (
-              <span className="inline-flex items-center gap-1 bg-black/75 px-2 py-1 text-[8px] text-white">
+              <span className="inline-flex shrink-0 items-center gap-1 bg-black/75 px-2 py-1 text-[8px] text-white">
                 <Images size={10} />
                 {images.length}
               </span>
@@ -2687,11 +3010,30 @@ function EditorialProductCard({
             {product.name}
           </h3>
 
-          <p className="mt-1.5 text-[13px] font-medium sm:text-[15px]">
-            {formatCurrency(
-              product.salePrice
+          {promotionView &&
+          promotionActive ? (
+            <div className="mt-1.5 flex flex-wrap items-baseline gap-2">
+              <p className="text-[13px] font-medium text-red-600 sm:text-[15px]">
+                {formatCurrency(displayPrice)}
+              </p>
+
+              <p className="text-[9px] text-black/35 line-through sm:text-[10px]">
+                {formatCurrency(product.salePrice)}
+              </p>
+            </div>
+          ) : (
+            <p className="mt-1.5 text-[13px] font-medium sm:text-[15px]">
+              {formatCurrency(displayPrice)}
+            </p>
+          )}
+
+          {promotionView &&
+            promotionActive &&
+            product.promotionNote && (
+              <p className="mt-1.5 line-clamp-2 text-[8px] leading-4 text-amber-800 sm:text-[9px]">
+                {product.promotionNote}
+              </p>
             )}
-          </p>
 
           <div className="mt-2 flex min-h-[26px] flex-wrap gap-1">
             {variants
@@ -2702,6 +3044,12 @@ function EditorialProductCard({
                   className="border border-black/[0.16] px-2 py-1 text-[8px] uppercase"
                 >
                   {variant.size}
+                  {promotionView
+                    ? ` · ${getPromotionStockForVariant(
+                        product,
+                        variant
+                      )} u.`
+                    : ""}
                 </span>
               ))}
 
@@ -2713,7 +3061,10 @@ function EditorialProductCard({
           </div>
 
           <p className="mt-2 text-[9px] text-emerald-700">
-            {totalStock} unidad(es) disponibles
+            {totalStock} unidad(es){" "}
+            {promotionView
+              ? "en promoción"
+              : "disponibles"}
           </p>
         </div>
       </Link>
@@ -2770,7 +3121,7 @@ function BenefitsSection({
       <div className="mx-auto max-w-[1800px]">
         {/* CARRUSEL AUTOMÁTICO MÓVIL */}
         <div className="sm:hidden">
-          <div className="overflow-hidden">
+          <div className="overflow-hidden px-px">
             <div
               className="flex transition-transform duration-700 ease-[cubic-bezier(0.22,1,0.36,1)]"
               style={{
@@ -3198,12 +3549,15 @@ function CatalogLoading() {
 
 function MobileCatalogMenu({
   globalGroups,
+  specialCollections,
+  activeSpecialCollection,
   activeGlobalGroup,
   mainCategories,
   categories,
   cartCount,
   onClose,
   onOpenCart,
+  onSelectSpecialCollection,
   onSelectGlobalGroup,
   onSelectMainCategory,
   onSelectSubcategory,
@@ -3325,6 +3679,36 @@ function MobileCatalogMenu({
               )
             )}
           </div>
+        </div>
+
+        <div className="grid shrink-0 grid-cols-2 gap-2 border-b border-black/[0.08] bg-white px-5 py-3">
+          {specialCollections.map((collection) => {
+            const active =
+              activeSpecialCollection === collection.id;
+
+            return (
+              <button
+                key={collection.id}
+                type="button"
+                onClick={() => {
+                  onSelectSpecialCollection(collection.id);
+                  onClose();
+                }}
+                className={`inline-flex h-10 items-center justify-center gap-1.5 rounded-xl border text-[8.5px] font-medium uppercase tracking-[0.1em] transition ${
+                  active
+                    ? "border-red-600 bg-red-600 text-white"
+                    : "border-black/[0.08] bg-white text-black/60"
+                }`}
+              >
+                {collection.id === "new" ? (
+                  <Sparkles size={12} />
+                ) : (
+                  <BadgePercent size={12} />
+                )}
+                {collection.name}
+              </button>
+            );
+          })}
         </div>
 
         {/* IMAGEN COMPLETA Y FIJA */}

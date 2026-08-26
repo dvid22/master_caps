@@ -6,6 +6,7 @@ import {
 } from "react-router-dom";
 import {
   ArrowLeft,
+  BadgePercent,
   CalendarClock,
   Camera,
   Check,
@@ -16,11 +17,15 @@ import {
   Plus,
   ShieldCheck,
   ShoppingBag,
+  Sparkles,
   Truck,
 } from "lucide-react";
 
 import {
   getProductImages,
+  getProductPromotionStock,
+  getPromotionStockForVariant,
+  isProductNew,
   normalizeProductVariants,
   subscribeProducts,
 } from "../../services/products.service";
@@ -50,6 +55,28 @@ function safeText(value) {
   return String(value ?? "").trim();
 }
 
+function isPromotionProduct(product) {
+  return (
+    Boolean(product?.isPromotion) &&
+    Number(product?.promotionPrice || 0) > 0 &&
+    getProductPromotionStock(product) > 0
+  );
+}
+
+function getNormalStockForVariant(
+  product,
+  variant
+) {
+  return Math.max(
+    Number(variant?.stock || 0) -
+      getPromotionStockForVariant(
+        product,
+        variant
+      ),
+    0
+  );
+}
+
 export default function ReserveProductPage() {
   const {
     storeId = "master-caps",
@@ -64,6 +91,22 @@ export default function ReserveProductPage() {
   const catalogUrl = `/catalogo/${storeId}${location.search || ""}`;
   const catalogNavigationState =
     location.state?.catalogNavigation || null;
+
+  const isPromotionRoute = useMemo(
+    () =>
+      new URLSearchParams(
+        location.search
+      ).get("especial") ===
+      "promotions",
+    [location.search]
+  );
+
+  const [purchaseMode, setPurchaseMode] =
+    useState(
+      isPromotionRoute
+        ? "promotion"
+        : "normal"
+    );
 
   const [products, setProducts] =
     useState([]);
@@ -165,6 +208,60 @@ export default function ReserveProductPage() {
     [products, productId]
   );
 
+  const newProduct = useMemo(
+    () =>
+      product ? isProductNew(product) : false,
+    [product]
+  );
+
+  const promotionActive = useMemo(
+    () =>
+      product
+        ? isPromotionProduct(product)
+        : false,
+    [product]
+  );
+
+  useEffect(() => {
+    if (!product) {
+      return;
+    }
+
+    if (
+      isPromotionRoute &&
+      isPromotionProduct(product)
+    ) {
+      setPurchaseMode("promotion");
+      return;
+    }
+
+    setPurchaseMode("normal");
+  }, [
+    product,
+    isPromotionRoute,
+  ]);
+
+  const isPromotionPurchase =
+    purchaseMode === "promotion" &&
+    promotionActive;
+
+  const effectiveUnitPrice = useMemo(
+    () =>
+      product
+        ? isPromotionPurchase
+          ? Number(
+              product.promotionPrice || 0
+            )
+          : Number(
+              product.salePrice || 0
+            )
+        : 0,
+    [
+      product,
+      isPromotionPurchase,
+    ]
+  );
+
   const variants = useMemo(
     () =>
       product
@@ -177,12 +274,31 @@ export default function ReserveProductPage() {
     useMemo(
       () =>
         variants.filter(
-          (variant) =>
-            Number(
-              variant.stock || 0
-            ) > 0
+          (variant) => {
+            if (
+              isPromotionPurchase
+            ) {
+              return (
+                getPromotionStockForVariant(
+                  product,
+                  variant
+                ) > 0
+              );
+            }
+
+            return (
+              getNormalStockForVariant(
+                product,
+                variant
+              ) > 0
+            );
+          }
         ),
-      [variants]
+      [
+        variants,
+        product,
+        isPromotionPurchase,
+      ]
     );
 
   const images = useMemo(() => {
@@ -234,13 +350,21 @@ export default function ReserveProductPage() {
               variant.id === current
           );
 
-        if (
-          currentVariant &&
-          Number(
-            currentVariant.stock || 0
-          ) > 0
-        ) {
-          return current;
+        if (currentVariant) {
+          const currentAvailable =
+            isPromotionPurchase
+              ? getPromotionStockForVariant(
+                  product,
+                  currentVariant
+                )
+              : getNormalStockForVariant(
+                  product,
+                  currentVariant
+                );
+
+          if (currentAvailable > 0) {
+            return current;
+          }
         }
 
         return (
@@ -254,6 +378,7 @@ export default function ReserveProductPage() {
     product,
     variants,
     availableVariants,
+    isPromotionPurchase,
   ]);
 
   useEffect(() => {
@@ -286,9 +411,18 @@ export default function ReserveProductPage() {
     ]
   );
 
-  const availableStock = Number(
-    selectedVariant?.stock || 0
-  );
+  const availableStock =
+    selectedVariant
+      ? isPromotionPurchase
+        ? getPromotionStockForVariant(
+            product,
+            selectedVariant
+          )
+        : getNormalStockForVariant(
+            product,
+            selectedVariant
+          )
+      : 0;
 
   const isAvailable =
     availableStock > 0;
@@ -316,11 +450,9 @@ export default function ReserveProductPage() {
 
   const totalSelection = useMemo(
     () =>
-      Number(
-        product?.salePrice || 0
-      ) * cleanQuantity,
+      effectiveUnitPrice * cleanQuantity,
     [
-      product?.salePrice,
+      effectiveUnitPrice,
       cleanQuantity,
     ]
   );
@@ -365,11 +497,18 @@ export default function ReserveProductPage() {
   ]);
 
   function selectVariant(variant) {
-    if (
-      Number(
-        variant.stock || 0
-      ) <= 0
-    ) {
+    const variantAvailable =
+      isPromotionPurchase
+        ? getPromotionStockForVariant(
+            product,
+            variant
+          )
+        : getNormalStockForVariant(
+            product,
+            variant
+          );
+
+    if (variantAvailable <= 0) {
       return;
     }
 
@@ -493,9 +632,24 @@ export default function ReserveProductPage() {
         size: selectedVariant.size,
         quantity: cleanQuantity,
         stock: availableStock,
-        unitPrice: Number(
+        unitPrice: effectiveUnitPrice,
+        regularUnitPrice: Number(
           product.salePrice || 0
         ),
+        isPromotion:
+          isPromotionPurchase,
+        promotionPrice:
+          isPromotionPurchase
+            ? Number(
+                product.promotionPrice || 0
+              )
+            : 0,
+        promotionNote:
+          isPromotionPurchase
+            ? safeText(
+                product.promotionNote
+              )
+            : "",
         coverUrl:
           images[0]?.url || "",
       });
@@ -695,6 +849,24 @@ export default function ReserveProductPage() {
                   </>
                 )}
 
+                {(newProduct || promotionActive) && (
+                  <div className="absolute left-3 top-3 flex flex-wrap gap-1.5">
+                    {newProduct && (
+                      <span className="inline-flex items-center gap-1 bg-red-600 px-2.5 py-1 text-[8px] font-medium uppercase tracking-[0.1em] text-white shadow-sm">
+                        <Sparkles size={9} />
+                        Nuevo
+                      </span>
+                    )}
+
+                    {isPromotionPurchase && (
+                      <span className="inline-flex items-center gap-1 bg-amber-400 px-2.5 py-1 text-[8px] font-medium uppercase tracking-[0.1em] text-black shadow-sm">
+                        <BadgePercent size={9} />
+                        Promo
+                      </span>
+                    )}
+                  </div>
+                )}
+
                 <span className="absolute bottom-4 right-4 bg-white/95 px-3 py-1.5 text-[9px] font-medium text-black shadow-sm">
                   {images.length > 0 ? activeImageIndex + 1 : 0} / {images.length}
                 </span>
@@ -753,9 +925,27 @@ export default function ReserveProductPage() {
                     />
 
                     {index === 0 && (
-                      <span className="absolute left-4 top-4 bg-black px-3 py-1.5 text-[8px] font-medium uppercase tracking-[0.16em] text-white">
-                        Portada
-                      </span>
+                      <div className="absolute left-4 top-4 flex flex-wrap gap-1.5">
+                        {newProduct && (
+                          <span className="inline-flex items-center gap-1 bg-red-600 px-2.5 py-1.5 text-[8px] font-medium uppercase tracking-[0.12em] text-white">
+                            <Sparkles size={9} />
+                            Nuevo
+                          </span>
+                        )}
+
+                        {isPromotionPurchase && (
+                          <span className="inline-flex items-center gap-1 bg-amber-400 px-2.5 py-1.5 text-[8px] font-medium uppercase tracking-[0.12em] text-black">
+                            <BadgePercent size={9} />
+                            Promo
+                          </span>
+                        )}
+
+                        {!newProduct && !promotionActive && (
+                          <span className="bg-black px-3 py-1.5 text-[8px] font-medium uppercase tracking-[0.16em] text-white">
+                            Portada
+                          </span>
+                        )}
+                      </div>
                     )}
 
                     <span className="absolute bottom-4 right-4 bg-white/95 px-3 py-1.5 text-[9px] text-black shadow-sm">
@@ -774,6 +964,24 @@ export default function ReserveProductPage() {
           <aside className="min-w-0 bg-white">
             <div className="lg:sticky lg:top-[126px]">
               <div className="px-5 py-8 sm:px-7 lg:px-8 lg:py-10 xl:px-10">
+                {(newProduct || promotionActive) && (
+                  <div className="mb-3 flex flex-wrap gap-1.5">
+                    {newProduct && (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-red-600 px-2.5 py-1 text-[8px] font-medium uppercase tracking-[0.1em] text-white">
+                        <Sparkles size={9} />
+                        Nuevo
+                      </span>
+                    )}
+
+                    {isPromotionPurchase && (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-amber-400 px-2.5 py-1 text-[8px] font-medium uppercase tracking-[0.1em] text-black">
+                        <BadgePercent size={9} />
+                        Promoción
+                      </span>
+                    )}
+                  </div>
+                )}
+
                 <p className="text-[9px] font-medium uppercase tracking-[0.18em] text-black/40">
                   {normalizeDisplayName(
                     product.categoryName ||
@@ -785,11 +993,84 @@ export default function ReserveProductPage() {
                   {product.name}
                 </h1>
 
-                <p className="mt-5 text-[29px] font-medium tracking-[-0.045em]">
-                  {formatCurrency(
-                    product.salePrice
-                  )}
-                </p>
+                {promotionActive && (
+                  <div className="mt-5 grid grid-cols-2 gap-2 rounded-[16px] bg-black/[0.025] p-1.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPurchaseMode("normal");
+                        setQuantity("1");
+                      }}
+                      className={`min-h-11 rounded-[12px] px-3 text-[9px] font-medium uppercase tracking-[0.08em] transition ${
+                        !isPromotionPurchase
+                          ? "bg-black text-white"
+                          : "bg-white text-black/55"
+                      }`}
+                    >
+                      Compra normal
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPurchaseMode("promotion");
+                        setQuantity("1");
+                      }}
+                      className={`min-h-11 rounded-[12px] px-3 text-[9px] font-medium uppercase tracking-[0.08em] transition ${
+                        isPromotionPurchase
+                          ? "bg-amber-400 text-black"
+                          : "bg-white text-black/55"
+                      }`}
+                    >
+                      Promoción · {getProductPromotionStock(product)} u.
+                    </button>
+                  </div>
+                )}
+
+                {isPromotionPurchase ? (
+                  <div className="mt-5">
+                    <div className="flex flex-wrap items-baseline gap-3">
+                      <p className="text-[29px] font-medium tracking-[-0.045em] text-red-600">
+                        {formatCurrency(
+                          effectiveUnitPrice
+                        )}
+                      </p>
+
+                      <p className="text-[13px] text-black/35 line-through">
+                        {formatCurrency(
+                          product.salePrice
+                        )}
+                      </p>
+                    </div>
+
+                    {product.promotionNote && (
+                      <div className="mt-3 rounded-[16px] border border-amber-100 bg-amber-50/70 px-3.5 py-3">
+                        <div className="flex items-start gap-2">
+                          <BadgePercent
+                            size={13}
+                            className="mt-0.5 shrink-0 text-amber-700"
+                          />
+
+                          <div>
+                            <p className="text-[8px] font-medium uppercase tracking-[0.1em] text-amber-700">
+                              Observación de promoción
+                            </p>
+
+                            <p className="mt-1 text-[10px] leading-5 text-black/60">
+                              {product.promotionNote}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <p className="mt-5 text-[29px] font-medium tracking-[-0.045em]">
+                    {formatCurrency(
+                      effectiveUnitPrice
+                    )}
+                  </p>
+                )}
 
                 <div className="mt-7 border-t border-black/[0.1] pt-6">
                   <div className="flex items-center justify-between gap-3">
@@ -809,10 +1090,15 @@ export default function ReserveProductPage() {
                     {variants.map(
                       (variant) => {
                         const stock =
-                          Number(
-                            variant.stock ||
-                              0
-                          );
+                          isPromotionPurchase
+                            ? getPromotionStockForVariant(
+                                product,
+                                variant
+                              )
+                            : getNormalStockForVariant(
+                                product,
+                                variant
+                              );
 
                         const active =
                           selectedVariant?.id ===
@@ -838,7 +1124,21 @@ export default function ReserveProductPage() {
                                   : "cursor-not-allowed border-black/[0.08] bg-black/[0.025] text-black/25"
                             }`}
                           >
-                            {variant.size}
+                            <span className="block">
+                              {variant.size}
+                            </span>
+
+                            {stock > 0 && (
+                              <span className={`mt-0.5 block text-[7px] ${
+                                active
+                                  ? "text-white/65"
+                                  : isPromotionPurchase
+                                    ? "text-amber-700"
+                                    : "text-black/38"
+                              }`}>
+                                {stock} u.
+                              </span>
+                            )}
 
                             {stock <= 0 && (
                               <span className="absolute inset-0 flex items-center justify-center">
@@ -866,9 +1166,15 @@ export default function ReserveProductPage() {
                       </p>
                     </div>
 
-                    <p className="text-[10px] text-black/45">
-                      Stock:{" "}
-                      {availableStock}
+                    <p className={`text-[10px] ${
+                      isPromotionPurchase
+                        ? "text-amber-700"
+                        : "text-black/45"
+                    }`}>
+                      {isPromotionPurchase
+                        ? "Stock promo"
+                        : "Stock normal"}
+                      : {availableStock}
                     </p>
                   </div>
 
@@ -888,9 +1194,8 @@ export default function ReserveProductPage() {
                     </button>
 
                     <input
-                      type="number"
-                      min="1"
-                      max={availableStock}
+                      type="text"
+                      inputMode="numeric"
                       value={quantity}
                       onChange={(event) =>
                         handleQuantityChange(
@@ -924,11 +1229,19 @@ export default function ReserveProductPage() {
                       Total seleccionado
                     </p>
 
-                    <p className="mt-2 text-[28px] font-medium tracking-[-0.045em]">
+                    <p className={`mt-2 text-[28px] font-medium tracking-[-0.045em] ${
+                      isPromotionPurchase ? "text-red-600" : ""
+                    }`}>
                       {formatCurrency(
                         totalSelection
                       )}
                     </p>
+
+                    {isPromotionPurchase && (
+                      <p className="mt-1 text-[8px] uppercase tracking-[0.08em] text-amber-700">
+                        Precio promocional aplicado
+                      </p>
+                    )}
                   </div>
 
                   <ShoppingBag
