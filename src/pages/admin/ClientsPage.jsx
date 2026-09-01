@@ -146,84 +146,93 @@ function getRelativeCustomerFilter(customer, filter) {
   return getCustomerLevel(customer).id === filter;
 }
 
+function compareCustomersByRanking(a, b) {
+  const productsDiff =
+    Number(b.totalProducts || 0) -
+    Number(a.totalProducts || 0);
+
+  if (productsDiff !== 0) {
+    return productsDiff;
+  }
+
+  const purchasesDiff =
+    Number(b.purchases || 0) -
+    Number(a.purchases || 0);
+
+  if (purchasesDiff !== 0) {
+    return purchasesDiff;
+  }
+
+  const spentDiff =
+    Number(b.totalSpent || 0) -
+    Number(a.totalSpent || 0);
+
+  if (spentDiff !== 0) {
+    return spentDiff;
+  }
+
+  return String(a.fullName || "").localeCompare(
+    String(b.fullName || ""),
+    "es-CO"
+  );
+}
+
 export default function ClientsPage() {
-  const [customers, setCustomers] =
-    useState([]);
-  const [sales, setSales] =
-    useState([]);
+  const [customers, setCustomers] = useState([]);
+  const [sales, setSales] = useState([]);
 
-  const [loading, setLoading] =
-    useState(true);
-  const [saving, setSaving] =
-    useState(false);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
 
-  const [search, setSearch] =
-    useState("");
-  const [levelFilter, setLevelFilter] =
-    useState("all");
-  const [statusFilter, setStatusFilter] =
-    useState("all");
+  const [search, setSearch] = useState("");
+  const [levelFilter, setLevelFilter] = useState("all");
+  const [statusFilter, setStatusFilter] = useState("all");
 
-  const [page, setPage] =
-    useState(1);
+  const [page, setPage] = useState(1);
 
-  const [formOpen, setFormOpen] =
-    useState(false);
-  const [editingCustomer, setEditingCustomer] =
-    useState(null);
-  const [customerForm, setCustomerForm] =
-    useState(emptyCustomerForm);
+  const [formOpen, setFormOpen] = useState(false);
+  const [editingCustomer, setEditingCustomer] = useState(null);
+  const [customerForm, setCustomerForm] = useState(emptyCustomerForm);
 
   useEffect(() => {
     let loadedCustomers = false;
     let loadedSales = false;
 
     function updateLoading() {
-      if (
-        loadedCustomers &&
-        loadedSales
-      ) {
+      if (loadedCustomers && loadedSales) {
         setLoading(false);
       }
     }
 
-    const unsubscribeCustomers =
-      subscribeCustomers(
-        (customersData) => {
-          loadedCustomers = true;
-          setCustomers(customersData);
-          updateLoading();
-        },
-        (error) => {
-          console.error(error);
-          loadedCustomers = true;
-          updateLoading();
+    const unsubscribeCustomers = subscribeCustomers(
+      (customersData) => {
+        loadedCustomers = true;
+        setCustomers(customersData);
+        updateLoading();
+      },
+      (error) => {
+        console.error(error);
+        loadedCustomers = true;
+        updateLoading();
+        alert("No se pudieron cargar los clientes.");
+      },
+      STORE_ID
+    );
 
-          alert(
-            "No se pudieron cargar los clientes."
-          );
-        },
-        STORE_ID
-      );
-
-    const unsubscribeSales =
-      subscribeSales(
-        (salesData) => {
-          loadedSales = true;
-          setSales(salesData);
-          updateLoading();
-        },
-        (error) => {
-          console.error(error);
-          loadedSales = true;
-          updateLoading();
-
-          alert(
-            "No se pudieron cargar las ventas."
-          );
-        },
-        STORE_ID
-      );
+    const unsubscribeSales = subscribeSales(
+      (salesData) => {
+        loadedSales = true;
+        setSales(salesData);
+        updateLoading();
+      },
+      (error) => {
+        console.error(error);
+        loadedSales = true;
+        updateLoading();
+        alert("No se pudieron cargar las ventas.");
+      },
+      STORE_ID
+    );
 
     return () => {
       unsubscribeCustomers();
@@ -243,127 +252,102 @@ export default function ClientsPage() {
   const rankedCustomers = useMemo(
     () =>
       [...customerMetrics].sort(
-        (a, b) =>
-          Number(b.totalSpent || 0) -
-          Number(a.totalSpent || 0)
+        compareCustomersByRanking
       ),
     [customerMetrics]
   );
 
+  const rankingByCustomerId = useMemo(
+    () =>
+      new Map(
+        rankedCustomers.map((customer, index) => [
+          customer.id,
+          index + 1,
+        ])
+      ),
+    [rankedCustomers]
+  );
+
   const stats = useMemo(() => {
-    const totalCustomers =
-      customerMetrics.length;
+    const totalCustomers = customerMetrics.length;
 
-    const frequentCustomers =
-      customerMetrics.filter(
-        (customer) => {
-          const level =
-            getCustomerLevel(
-              customer
-            ).id;
+    const frequentCustomers = customerMetrics.filter(
+      (customer) => {
+        const level = getCustomerLevel(customer).id;
 
-          return (
-            level === "vip" ||
-            level === "frequent"
-          );
-        }
-      ).length;
+        return (
+          level === "vip" ||
+          level === "frequent"
+        );
+      }
+    ).length;
 
-    const bestCustomer =
-      rankedCustomers[0] || null;
+    const bestCustomer = rankedCustomers[0] || null;
 
-    const accumulatedSales =
-      customerMetrics.reduce(
-        (total, customer) =>
-          total +
-          Number(
-            customer.totalSpent || 0
-          ),
-        0
-      );
+    const accumulatedSales = customerMetrics.reduce(
+      (total, customer) =>
+        total + Number(customer.totalSpent || 0),
+      0
+    );
+
+    const accumulatedProducts = customerMetrics.reduce(
+      (total, customer) =>
+        total + Number(customer.totalProducts || 0),
+      0
+    );
 
     return {
       totalCustomers,
       frequentCustomers,
       bestCustomer,
       accumulatedSales,
+      accumulatedProducts,
     };
+  }, [customerMetrics, rankedCustomers]);
+
+  const filteredCustomers = useMemo(() => {
+    const cleanSearch = normalizeText(search);
+
+    return customerMetrics
+      .filter((customer) => {
+        const haystack = normalizeText(
+          [
+            customer.fullName,
+            customer.documentNumber,
+            customer.phone,
+          ].join(" ")
+        );
+
+        const matchesSearch =
+          !cleanSearch ||
+          haystack.includes(cleanSearch);
+
+        const matchesLevel =
+          getRelativeCustomerFilter(
+            customer,
+            levelFilter
+          );
+
+        const matchesStatus =
+          statusFilter === "all" ||
+          (statusFilter === "active" &&
+            customer.isActive !== false) ||
+          (statusFilter === "inactive" &&
+            customer.isActive === false);
+
+        return (
+          matchesSearch &&
+          matchesLevel &&
+          matchesStatus
+        );
+      })
+      .sort(compareCustomersByRanking);
   }, [
     customerMetrics,
-    rankedCustomers,
+    search,
+    levelFilter,
+    statusFilter,
   ]);
-
-  const filteredCustomers =
-    useMemo(() => {
-      const cleanSearch =
-        normalizeText(search);
-
-      return customerMetrics
-        .filter((customer) => {
-          const haystack =
-            normalizeText(
-              [
-                customer.fullName,
-                customer.documentNumber,
-                customer.phone,
-              ].join(" ")
-            );
-
-          const matchesSearch =
-            !cleanSearch ||
-            haystack.includes(
-              cleanSearch
-            );
-
-          const matchesLevel =
-            getRelativeCustomerFilter(
-              customer,
-              levelFilter
-            );
-
-          const matchesStatus =
-            statusFilter === "all" ||
-            (statusFilter ===
-              "active" &&
-              customer.isActive !==
-                false) ||
-            (statusFilter ===
-              "inactive" &&
-              customer.isActive ===
-                false);
-
-          return (
-            matchesSearch &&
-            matchesLevel &&
-            matchesStatus
-          );
-        })
-        .sort((a, b) => {
-          const spentDiff =
-            Number(
-              b.totalSpent || 0
-            ) -
-            Number(
-              a.totalSpent || 0
-            );
-
-          if (spentDiff !== 0) {
-            return spentDiff;
-          }
-
-          return String(
-            a.fullName
-          ).localeCompare(
-            String(b.fullName),
-            "es-CO"
-          );
-        });
-    }, [
-      customerMetrics,
-      search,
-      levelFilter,
-      statusFilter,
-    ]);
 
   useEffect(() => {
     setPage(1);
@@ -387,38 +371,32 @@ export default function ClientsPage() {
     }
   }, [page, totalPages]);
 
-  const paginatedCustomers =
-    useMemo(() => {
-      const start =
-        (page - 1) *
-        PAGE_SIZE;
+  const paginatedCustomers = useMemo(() => {
+    const start =
+      (page - 1) *
+      PAGE_SIZE;
 
-      return filteredCustomers.slice(
-        start,
-        start + PAGE_SIZE
-      );
-    }, [
-      filteredCustomers,
-      page,
-    ]);
+    return filteredCustomers.slice(
+      start,
+      start + PAGE_SIZE
+    );
+  }, [
+    filteredCustomers,
+    page,
+  ]);
 
   function openNewCustomer() {
     setEditingCustomer(null);
-    setCustomerForm(
-      emptyCustomerForm
-    );
+    setCustomerForm(emptyCustomerForm);
     setFormOpen(true);
   }
 
-  function openEditCustomer(
-    customer
-  ) {
+  function openEditCustomer(customer) {
     setEditingCustomer(customer);
 
     setCustomerForm({
       documentNumber:
-        customer.documentNumber ||
-        "",
+        customer.documentNumber || "",
       fullName:
         customer.fullName || "",
       phone:
@@ -432,39 +410,28 @@ export default function ClientsPage() {
     setFormOpen(true);
   }
 
-  function updateCustomerForm(
-    field,
-    value
-  ) {
-    setCustomerForm(
-      (current) => ({
-        ...current,
-        [field]: value,
-      })
-    );
+  function updateCustomerForm(field, value) {
+    setCustomerForm((current) => ({
+      ...current,
+      [field]: value,
+    }));
   }
 
-  async function handleSaveCustomer(
-    event
-  ) {
+  async function handleSaveCustomer(event) {
     event.preventDefault();
 
     if (
       !String(
-        customerForm.documentNumber ||
-          ""
+        customerForm.documentNumber || ""
       ).trim()
     ) {
-      alert(
-        "La cédula es obligatoria."
-      );
+      alert("La cédula es obligatoria.");
       return;
     }
 
     if (
       !String(
-        customerForm.fullName ||
-          ""
+        customerForm.fullName || ""
       ).trim()
     ) {
       alert(
@@ -476,8 +443,7 @@ export default function ClientsPage() {
     try {
       setSaving(true);
 
-      const actor =
-        getCurrentUserActor();
+      const actor = getCurrentUserActor();
 
       if (editingCustomer) {
         await updateCustomer(
@@ -496,26 +462,24 @@ export default function ClientsPage() {
         );
       } else {
         await createCustomer({
-            documentNumber:
-              customerForm.documentNumber,
-            fullName:
-              customerForm.fullName,
-            phone:
-              customerForm.phone,
-            notes:
-              customerForm.notes,
-            isActive:
-              customerForm.isActive,
-            storeId: STORE_ID,
-            actor,
-          });
+          documentNumber:
+            customerForm.documentNumber,
+          fullName:
+            customerForm.fullName,
+          phone:
+            customerForm.phone,
+          notes:
+            customerForm.notes,
+          isActive:
+            customerForm.isActive,
+          storeId: STORE_ID,
+          actor,
+        });
       }
 
       setFormOpen(false);
       setEditingCustomer(null);
-      setCustomerForm(
-        emptyCustomerForm
-      );
+      setCustomerForm(emptyCustomerForm);
     } catch (error) {
       console.error(error);
 
@@ -542,7 +506,7 @@ export default function ClientsPage() {
             </h1>
 
             <p className="mt-1 text-[13px] text-black/48">
-              Fidelización, historial y valor comercial de tus compradores
+              Fidelización, historial y volumen real de compra de tus clientes
             </p>
           </div>
 
@@ -567,9 +531,7 @@ export default function ClientsPage() {
           <StatCard
             icon={Star}
             label="Clientes frecuentes"
-            value={
-              stats.frequentCustomers
-            }
+            value={stats.frequentCustomers}
             helper="Frecuentes y VIP"
           />
 
@@ -577,16 +539,18 @@ export default function ClientsPage() {
             icon={Sparkles}
             label="Mayor comprador"
             value={
-              stats.bestCustomer
-                ?.fullName ||
+              stats.bestCustomer?.fullName ||
               "Sin datos"
             }
             helper={
               stats.bestCustomer
-                ? formatCurrency(
-                    stats.bestCustomer
-                      .totalSpent
-                  )
+                ? `${Number(
+                    stats.bestCustomer.totalProducts || 0
+                  ).toLocaleString(
+                    "es-CO"
+                  )} producto(s) · ${formatCurrency(
+                    stats.bestCustomer.totalSpent || 0
+                  )}`
                 : "Sin compras"
             }
             compactValue
@@ -598,7 +562,11 @@ export default function ClientsPage() {
             value={formatCurrency(
               stats.accumulatedSales
             )}
-            helper="Compras asociadas a clientes"
+            helper={`${Number(
+              stats.accumulatedProducts || 0
+            ).toLocaleString(
+              "es-CO"
+            )} producto(s) comprados`}
             compactValue
           />
         </section>
@@ -606,6 +574,21 @@ export default function ClientsPage() {
         <section className="mt-4">
           <div className="min-w-0 overflow-hidden rounded-[28px] border border-black/[0.06] bg-white shadow-[0_18px_55px_rgba(0,0,0,0.045)]">
             <div className="border-b border-black/[0.06] p-4 sm:p-5">
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <p className="text-[12px] font-medium text-black/70">
+                    Ranking de clientes
+                  </p>
+                  <p className="mt-0.5 text-[10px] text-black/38">
+                    Prioridad: productos comprados → compras realizadas → dinero gastado.
+                  </p>
+                </div>
+
+                <span className="rounded-full border border-red-100 bg-red-50 px-3 py-1.5 text-[9px] font-medium text-red-600">
+                  Más productos = mejor posición
+                </span>
+              </div>
+
               <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_180px_180px]">
                 <label className="relative block">
                   <Search
@@ -678,9 +661,12 @@ export default function ClientsPage() {
             </div>
 
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[900px] border-collapse">
+              <table className="w-full min-w-[1040px] border-collapse">
                 <thead>
                   <tr className="border-b border-black/[0.06] bg-black/[0.015] text-left">
+                    <TableHead>
+                      Rank
+                    </TableHead>
                     <TableHead>
                       Cliente
                     </TableHead>
@@ -692,6 +678,9 @@ export default function ClientsPage() {
                     </TableHead>
                     <TableHead>
                       Última compra
+                    </TableHead>
+                    <TableHead>
+                      Productos
                     </TableHead>
                     <TableHead>
                       Compras
@@ -712,7 +701,7 @@ export default function ClientsPage() {
                   {loading ? (
                     <tr>
                       <td
-                        colSpan={8}
+                        colSpan={10}
                         className="px-5 py-12 text-center text-[12px] text-black/40"
                       >
                         Cargando clientes y ventas...
@@ -722,7 +711,7 @@ export default function ClientsPage() {
                     0 ? (
                     <tr>
                       <td
-                        colSpan={8}
+                        colSpan={10}
                         className="px-5 py-12 text-center"
                       >
                         <UserRound
@@ -743,11 +732,12 @@ export default function ClientsPage() {
                     paginatedCustomers.map(
                       (customer) => (
                         <CustomerRow
-                          key={
-                            customer.id
-                          }
-                          customer={
-                            customer
+                          key={customer.id}
+                          customer={customer}
+                          rankingPosition={
+                            rankingByCustomerId.get(
+                              customer.id
+                            ) || 0
                           }
                           onEdit={() =>
                             openEditCustomer(
@@ -765,8 +755,7 @@ export default function ClientsPage() {
             <div className="flex flex-col gap-3 border-t border-black/[0.06] px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
               <p className="text-[11px] text-black/42">
                 Mostrando{" "}
-                {filteredCustomers.length ===
-                0
+                {filteredCustomers.length === 0
                   ? 0
                   : (page - 1) *
                       PAGE_SIZE +
@@ -778,9 +767,7 @@ export default function ClientsPage() {
                   filteredCustomers.length
                 )}{" "}
                 de{" "}
-                {
-                  filteredCustomers.length
-                }{" "}
+                {filteredCustomers.length}{" "}
                 cliente(s)
               </p>
 
@@ -805,15 +792,13 @@ export default function ClientsPage() {
                 </button>
 
                 <span className="min-w-[76px] text-center text-[11px] text-black/55">
-                  {page} /{" "}
-                  {totalPages}
+                  {page} / {totalPages}
                 </span>
 
                 <button
                   type="button"
                   disabled={
-                    page >=
-                    totalPages
+                    page >= totalPages
                   }
                   onClick={() =>
                     setPage(
@@ -833,7 +818,6 @@ export default function ClientsPage() {
               </div>
             </div>
           </div>
-
         </section>
       </section>
 
@@ -844,18 +828,14 @@ export default function ClientsPage() {
           }
           form={customerForm}
           saving={saving}
-          onChange={
-            updateCustomerForm
-          }
+          onChange={updateCustomerForm}
           onClose={() => {
             if (saving) {
               return;
             }
 
             setFormOpen(false);
-            setEditingCustomer(
-              null
-            );
+            setEditingCustomer(null);
           }}
           onSubmit={
             handleSaveCustomer
@@ -926,6 +906,7 @@ function TableHead({
 
 function CustomerRow({
   customer,
+  rankingPosition,
   onEdit,
 }) {
   const level =
@@ -933,6 +914,19 @@ function CustomerRow({
 
   return (
     <tr className="border-b border-black/[0.055] transition last:border-0 hover:bg-black/[0.012]">
+      <td className="px-4 py-3">
+        <span
+          className={`inline-flex h-7 min-w-7 items-center justify-center rounded-full px-2 text-[10px] font-semibold ${
+            rankingPosition > 0 &&
+            rankingPosition <= 3
+              ? "bg-red-50 text-red-600 ring-1 ring-red-100"
+              : "bg-black/[0.035] text-black/45"
+          }`}
+        >
+          #{rankingPosition || "-"}
+        </span>
+      </td>
+
       <td className="px-4 py-3">
         <div className="flex min-w-0 items-center gap-3 text-left">
           <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-black text-[10px] font-medium text-white">
@@ -970,6 +964,16 @@ function CustomerRow({
         {formatDate(
           customer.lastPurchaseAt
         )}
+      </td>
+
+      <td className="px-4 py-3">
+        <span className="inline-flex min-w-9 items-center justify-center rounded-full bg-blue-50 px-2.5 py-1 text-[10px] font-semibold text-blue-700">
+          {Number(
+            customer.totalProducts || 0
+          ).toLocaleString(
+            "es-CO"
+          )}
+        </span>
       </td>
 
       <td className="px-4 py-3 text-[10px] font-medium">

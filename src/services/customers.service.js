@@ -520,6 +520,7 @@ export function buildCustomerSalesMetrics(customers, sales) {
     metricsByCustomerId.set(customer.id, {
       customerId: customer.id,
       purchases: 0,
+      totalProducts: 0,
       totalSpent: 0,
       lastPurchaseAt: null,
       productQuantities: new Map(),
@@ -570,14 +571,45 @@ export function buildCustomerSalesMetrics(customers, sales) {
       metrics.lastPurchaseAt = createdAt;
     }
 
-    const items = Array.isArray(sale.items) ? sale.items : [];
+    const items =
+      Array.isArray(sale.items) && sale.items.length > 0
+        ? sale.items
+        : [
+            {
+              productId: sale.productId || "",
+              productName: sale.productName || "",
+              quantity: sale.quantity || 0,
+            },
+          ];
+
+    const itemsQuantity = items.reduce(
+      (total, item) => {
+        const quantity = Number(item?.quantity || 0);
+
+        return total + (Number.isFinite(quantity) ? quantity : 0);
+      },
+      0
+    );
+
+    const totalProductsFromSale =
+      sale.totalItems !== undefined
+        ? Number(sale.totalItems || 0)
+        : itemsQuantity;
+
+    metrics.totalProducts += Number.isFinite(totalProductsFromSale)
+      ? Math.max(totalProductsFromSale, 0)
+      : 0;
 
     items.forEach((item) => {
-      const productId = cleanText(item.productId);
+      const productId =
+        cleanText(item.productId) ||
+        cleanText(item.productName);
 
       if (!productId) {
         return;
       }
+
+      const quantity = Number(item.quantity || 0);
 
       const current = metrics.productQuantities.get(productId) || {
         productId,
@@ -585,7 +617,9 @@ export function buildCustomerSalesMetrics(customers, sales) {
         quantity: 0,
       };
 
-      current.quantity += Number(item.quantity || 0);
+      current.quantity += Number.isFinite(quantity)
+        ? Math.max(quantity, 0)
+        : 0;
 
       if (!current.productName && item.productName) {
         current.productName = cleanText(item.productName);
@@ -598,6 +632,7 @@ export function buildCustomerSalesMetrics(customers, sales) {
   return safeCustomers.map((customer) => {
     const metrics = metricsByCustomerId.get(customer.id) || {
       purchases: 0,
+      totalProducts: 0,
       totalSpent: 0,
       lastPurchaseAt: null,
       productQuantities: new Map(),
@@ -612,6 +647,7 @@ export function buildCustomerSalesMetrics(customers, sales) {
     return {
       ...customer,
       purchases: metrics.purchases,
+      totalProducts: metrics.totalProducts,
       totalSpent: metrics.totalSpent,
       averageTicket:
         metrics.purchases > 0
