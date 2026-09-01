@@ -25,6 +25,7 @@ import {
 
 const DEFAULT_PAYMENT_METHOD = "efectivo";
 const DEFAULT_SOURCE = "pos";
+const CASH_TIME_ZONE = "America/Bogota";
 
 const VALID_PAYMENT_METHODS = [
   "efectivo",
@@ -58,97 +59,6 @@ function normalizeMoney(value) {
   return Math.max(number, 0);
 }
 
-function normalizePromotionVariants(
-  product = {},
-  variants = []
-) {
-  const source = Array.isArray(
-    product.promotionVariants
-  )
-    ? product.promotionVariants
-    : [];
-
-  return source
-    .map((item) => {
-      const requestedId =
-        normalizeText(
-          item?.variantId ||
-            item?.id
-        );
-      const requestedSize =
-        normalizeSize(item?.size);
-
-      const variant =
-        variants.find(
-          (candidate) =>
-            (requestedId &&
-              candidate.id ===
-                requestedId) ||
-            normalizeSize(
-              candidate.size
-            ) === requestedSize
-        ) || null;
-
-      if (!variant) {
-        return null;
-      }
-
-      const quantity = Math.min(
-        normalizeQuantity(
-          item?.quantity ??
-            item?.stock
-        ),
-        normalizeQuantity(
-          variant.stock
-        )
-      );
-
-      if (quantity <= 0) {
-        return null;
-      }
-
-      return {
-        variantId: variant.id,
-        size: variant.size,
-        quantity,
-      };
-    })
-    .filter(Boolean);
-}
-
-function getPromotionStockForVariant(
-  promotionVariants,
-  variant
-) {
-  const match =
-    promotionVariants.find(
-      (item) =>
-        item.variantId ===
-          variant?.id ||
-        normalizeSize(item.size) ===
-          normalizeSize(
-            variant?.size
-          )
-    );
-
-  return normalizeQuantity(
-    match?.quantity
-  );
-}
-
-function getPromotionTotalStock(
-  promotionVariants
-) {
-  return promotionVariants.reduce(
-    (total, item) =>
-      total +
-      normalizeQuantity(
-        item.quantity
-      ),
-    0
-  );
-}
-
 function normalizeQuantity(value) {
   const number = Number(value || 0);
 
@@ -179,13 +89,41 @@ function normalizeSize(value) {
   return aliases[normalizedValue] || normalizedValue;
 }
 
-function createFallbackVariantId(productId, size) {
-  return `variant-${String(productId || "product")}-${normalizeSize(size)
+function safeCashId(value) {
+  return normalizeText(value)
     .toLowerCase()
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
-    .replace(/\s+/g, "-")
-    .replace(/[^a-z0-9-_]/g, "")}`;
+    .replace(/[^a-z0-9-_]/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+}
+
+function getBogotaBusinessDate(date = new Date()) {
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone: CASH_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+
+  const parts = formatter.formatToParts(date);
+  const year = parts.find((item) => item.type === "year")?.value || "0000";
+  const month = parts.find((item) => item.type === "month")?.value || "00";
+  const day = parts.find((item) => item.type === "day")?.value || "00";
+
+  return `${year}-${month}-${day}`;
+}
+
+function getRequiredCashSessionId(storeId, sellerUid, businessDate) {
+  const cleanStoreId = safeCashId(storeId);
+  const cleanSellerUid = safeCashId(sellerUid);
+
+  if (!cleanStoreId || !cleanSellerUid || !businessDate) {
+    return "";
+  }
+
+  return `${cleanStoreId}__${cleanSellerUid}__${businessDate}`;
 }
 
 function normalizeSettlementDate(value) {
@@ -214,17 +152,15 @@ function normalizeSettlementDate(value) {
 /*                                  VARIANTES                                  */
 /* -------------------------------------------------------------------------- */
 
-/**
- * Convierte tanto productos nuevos como antiguos a una estructura uniforme:
- *
- * [
- *   {
- *     id: "variant-m",
- *     size: "M",
- *     stock: 5
- *   }
- * ]
- */
+function createFallbackVariantId(productId, size) {
+  return `variant-${String(productId || "product")}-${normalizeSize(size)
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, "-")
+    .replace(/[^a-z0-9-_]/g, "")}`;
+}
+
 function normalizeProductVariants(productId, product = {}) {
   if (Array.isArray(product.variants) && product.variants.length > 0) {
     return product.variants.map((variant, index) => {
@@ -236,7 +172,6 @@ function normalizeProductVariants(productId, product = {}) {
         id:
           normalizeText(variant?.id) ||
           createFallbackVariantId(productId, `${size}-${index}`),
-
         size,
         stock: normalizeQuantity(variant?.stock),
       };
@@ -325,6 +260,66 @@ function findRequestedVariant(variants, item) {
 }
 
 /* -------------------------------------------------------------------------- */
+/*                               PROMOCIONES                                   */
+/* -------------------------------------------------------------------------- */
+
+function normalizePromotionVariants(product = {}, variants = []) {
+  const source = Array.isArray(product.promotionVariants)
+    ? product.promotionVariants
+    : [];
+
+  return source
+    .map((item) => {
+      const requestedId = normalizeText(item?.variantId || item?.id);
+      const requestedSize = normalizeSize(item?.size);
+
+      const variant =
+        variants.find(
+          (candidate) =>
+            (requestedId && candidate.id === requestedId) ||
+            normalizeSize(candidate.size) === requestedSize
+        ) || null;
+
+      if (!variant) {
+        return null;
+      }
+
+      const quantity = Math.min(
+        normalizeQuantity(item?.quantity ?? item?.stock),
+        normalizeQuantity(variant.stock)
+      );
+
+      if (quantity <= 0) {
+        return null;
+      }
+
+      return {
+        variantId: variant.id,
+        size: variant.size,
+        quantity,
+      };
+    })
+    .filter(Boolean);
+}
+
+function getPromotionStockForVariant(promotionVariants, variant) {
+  const match = promotionVariants.find(
+    (item) =>
+      item.variantId === variant?.id ||
+      normalizeSize(item.size) === normalizeSize(variant?.size)
+  );
+
+  return normalizeQuantity(match?.quantity);
+}
+
+function getPromotionTotalStock(promotionVariants) {
+  return promotionVariants.reduce(
+    (total, item) => total + normalizeQuantity(item.quantity),
+    0
+  );
+}
+
+/* -------------------------------------------------------------------------- */
 /*                              NÚMERO DE VENTA                                */
 /* -------------------------------------------------------------------------- */
 
@@ -351,7 +346,7 @@ async function getNextSaleNumber(transaction, storeId) {
 }
 
 /* -------------------------------------------------------------------------- */
-/*                         NORMALIZACIÓN DE ÍTEMS DEL CARRITO                   */
+/*                         NORMALIZACIÓN DE ÍTEMS                              */
 /* -------------------------------------------------------------------------- */
 
 function normalizeRequestedItems(items) {
@@ -368,9 +363,7 @@ function normalizeRequestedItems(items) {
     const quantity = normalizeQuantity(item?.quantity);
     const isPromotion =
       Boolean(item?.isPromotion) ||
-      normalizeText(
-        item?.pricingMode
-      ) === "promotion";
+      normalizeText(item?.pricingMode) === "promotion";
 
     if (!productId) {
       throw new Error("Uno de los productos seleccionados no es válido.");
@@ -380,22 +373,9 @@ function normalizeRequestedItems(items) {
       throw new Error("La cantidad de cada producto debe ser mayor a cero.");
     }
 
-    /**
-     * Si existen dos líneas con el mismo producto y la misma talla,
-     * se agrupan automáticamente.
-     */
-    const variantKey =
-      variantId ||
-      normalizeSize(
-        size || "Talla única"
-      );
-    const modeKey =
-      isPromotion
-        ? "promo"
-        : "normal";
-    const groupKey =
-      `${productId}__${variantKey}__${modeKey}`;
-
+    const variantKey = variantId || normalizeSize(size || "Talla única");
+    const modeKey = isPromotion ? "promo" : "normal";
+    const groupKey = `${productId}__${variantKey}__${modeKey}`;
     const existingItem = groupedItems.get(groupKey);
 
     if (existingItem) {
@@ -403,7 +383,6 @@ function normalizeRequestedItems(items) {
         ...existingItem,
         quantity: existingItem.quantity + quantity,
       });
-
       return;
     }
 
@@ -422,16 +401,14 @@ function normalizeRequestedItems(items) {
 function groupItemsByProduct(items) {
   return items.reduce((groups, item) => {
     const productItems = groups.get(item.productId) || [];
-
     productItems.push(item);
     groups.set(item.productId, productItems);
-
     return groups;
   }, new Map());
 }
 
 /* -------------------------------------------------------------------------- */
-/*                         NORMALIZACIÓN DE VENTAS LEÍDAS                       */
+/*                         NORMALIZACIÓN DE VENTAS LEÍDAS                      */
 /* -------------------------------------------------------------------------- */
 
 function normalizeLegacySaleItem(sale) {
@@ -500,9 +477,7 @@ function normalizeSaleItem(item, index = 0) {
     categoryId: normalizeText(item?.categoryId),
     categoryName: normalizeText(item?.categoryName),
 
-    imageUrl: normalizeText(
-      item?.imageUrl || item?.coverImageUrl
-    ),
+    imageUrl: normalizeText(item?.imageUrl || item?.coverImageUrl),
 
     quantity,
     unitPrice,
@@ -516,7 +491,6 @@ function normalizeSaleItem(item, index = 0) {
     promotionNote: normalizeText(item?.promotionNote),
 
     costPrice,
-
     subtotal,
     totalCost,
     profit,
@@ -645,6 +619,8 @@ function normalizeSaleDocument(sale) {
     addiReference: normalizeText(sale.addiReference),
     addiNotes: normalizeText(sale.addiNotes),
 
+    cashSessionId: normalizeText(sale.cashSessionId),
+
     notes: normalizeText(sale.notes),
     source: normalizeText(sale.source) || "direct",
   };
@@ -674,35 +650,153 @@ function mapSalesSnapshot(snapshot) {
 }
 
 /* -------------------------------------------------------------------------- */
-/*                          CONSULTAS Y SUSCRIPCIONES                           */
+/*                  LISTENER COMPARTIDO + CACHÉ EN MEMORIA                    */
 /* -------------------------------------------------------------------------- */
+
+const salesRealtimeRegistry = new Map();
+
+function normalizeStoreId(storeId = STORE_ID) {
+  const cleanStoreId = normalizeText(storeId || STORE_ID);
+  return cleanStoreId || STORE_ID;
+}
+
+function getSalesRealtimeEntry(storeId = STORE_ID) {
+  const cleanStoreId = normalizeStoreId(storeId);
+
+  if (!salesRealtimeRegistry.has(cleanStoreId)) {
+    salesRealtimeRegistry.set(cleanStoreId, {
+      storeId: cleanStoreId,
+      subscribers: new Set(),
+      sales: [],
+      hasSnapshot: false,
+      unsubscribeFirestore: null,
+      lastError: null,
+    });
+  }
+
+  return salesRealtimeRegistry.get(cleanStoreId);
+}
+
+function notifySalesSubscribers(entry) {
+  entry.subscribers.forEach((subscriber) => {
+    try {
+      subscriber.callback(entry.sales);
+    } catch (error) {
+      console.error("Error entregando ventas a un suscriptor:", error);
+    }
+  });
+}
+
+function notifySalesSubscribersError(entry, error) {
+  entry.subscribers.forEach((subscriber) => {
+    if (typeof subscriber.onError !== "function") return;
+
+    try {
+      subscriber.onError(error);
+    } catch (subscriberError) {
+      console.error(
+        "Error ejecutando el manejador de ventas:",
+        subscriberError
+      );
+    }
+  });
+}
+
+function ensureSalesRealtimeListener(entry) {
+  if (entry.unsubscribeFirestore) return;
+
+  const salesRef = collection(db, "sales");
+  const salesQuery = query(
+    salesRef,
+    where("storeId", "==", entry.storeId)
+  );
+
+  entry.unsubscribeFirestore = onSnapshot(
+    salesQuery,
+    (snapshot) => {
+      entry.sales = mapSalesSnapshot(snapshot);
+      entry.hasSnapshot = true;
+      entry.lastError = null;
+      notifySalesSubscribers(entry);
+    },
+    (error) => {
+      console.error("Error escuchando ventas:", error);
+      entry.lastError = error;
+      entry.unsubscribeFirestore = null;
+      notifySalesSubscribersError(entry, error);
+    }
+  );
+}
 
 export function subscribeSales(
   callback,
   onError,
   storeId = STORE_ID
 ) {
-  const salesRef = collection(db, "sales");
+  if (typeof callback !== "function") {
+    throw new TypeError("subscribeSales necesita una función callback.");
+  }
 
-  const salesQuery = query(
-    salesRef,
-    where("storeId", "==", storeId)
-  );
+  const entry = getSalesRealtimeEntry(storeId);
+  const subscriber = {
+    callback,
+    onError: typeof onError === "function" ? onError : null,
+  };
 
-  return onSnapshot(
-    salesQuery,
-    (snapshot) => {
-      callback(mapSalesSnapshot(snapshot));
-    },
-    (error) => {
-      console.error("Error escuchando ventas:", error);
+  entry.subscribers.add(subscriber);
 
-      if (onError) {
-        onError(error);
-      }
+  if (entry.hasSnapshot) {
+    try {
+      callback(entry.sales);
+    } catch (error) {
+      console.error("Error entregando ventas desde caché:", error);
     }
-  );
+  }
+
+  ensureSalesRealtimeListener(entry);
+
+  let active = true;
+
+  return () => {
+    if (!active) return;
+
+    active = false;
+    entry.subscribers.delete(subscriber);
+
+    if (
+      entry.subscribers.size === 0 &&
+      typeof entry.unsubscribeFirestore === "function"
+    ) {
+      entry.unsubscribeFirestore();
+      entry.unsubscribeFirestore = null;
+    }
+  };
 }
+
+export function clearSalesRealtimeCache(storeId) {
+  if (storeId !== undefined && storeId !== null) {
+    const cleanStoreId = normalizeStoreId(storeId);
+    const entry = salesRealtimeRegistry.get(cleanStoreId);
+
+    if (!entry) return;
+
+    entry.unsubscribeFirestore?.();
+    entry.subscribers.clear();
+    salesRealtimeRegistry.delete(cleanStoreId);
+    return;
+  }
+
+  salesRealtimeRegistry.forEach((entry) => {
+    entry.unsubscribeFirestore?.();
+    entry.subscribers.clear();
+  });
+
+  salesRealtimeRegistry.clear();
+}
+
+/* -------------------------------------------------------------------------- */
+/*                          CONSULTAS PUNTUALES                                */
+/* -------------------------------------------------------------------------- */
 
 export async function getSales(storeId = STORE_ID) {
   const salesRef = collection(db, "sales");
@@ -743,9 +837,19 @@ export function subscribeAddiSales(
   return subscribeSales(
     (sales) => {
       callback(
-        sales.filter(
-          (sale) => sale.paymentMethod === ADDI_PAYMENT_METHOD
-        )
+        sales.filter((sale) => {
+          if (sale.paymentMethod === ADDI_PAYMENT_METHOD) {
+            return true;
+          }
+
+          return Array.isArray(sale.payments)
+            ? sale.payments.some(
+                (payment) =>
+                  normalizeText(payment?.method) === ADDI_PAYMENT_METHOD &&
+                  normalizeMoney(payment?.amount) > 0
+              )
+            : false;
+        })
       );
     },
     onError,
@@ -756,10 +860,24 @@ export function subscribeAddiSales(
 export async function getAddiSales(storeId = STORE_ID) {
   const sales = await getSales(storeId);
 
-  return sales.filter(
-    (sale) => sale.paymentMethod === ADDI_PAYMENT_METHOD
-  );
+  return sales.filter((sale) => {
+    if (sale.paymentMethod === ADDI_PAYMENT_METHOD) {
+      return true;
+    }
+
+    return Array.isArray(sale.payments)
+      ? sale.payments.some(
+          (payment) =>
+            normalizeText(payment?.method) === ADDI_PAYMENT_METHOD &&
+            normalizeMoney(payment?.amount) > 0
+        )
+      : false;
+  });
 }
+
+/* -------------------------------------------------------------------------- */
+/*                                ADDI                                         */
+/* -------------------------------------------------------------------------- */
 
 export async function settleAddiSale({
   saleId,
@@ -789,7 +907,18 @@ export async function settleAddiSale({
       ...saleSnapshot.data(),
     });
 
-    if (currentSale.paymentMethod !== ADDI_PAYMENT_METHOD) {
+    const addiPayment = Array.isArray(currentSale.payments)
+      ? currentSale.payments.find(
+          (payment) =>
+            normalizeText(payment?.method) === ADDI_PAYMENT_METHOD &&
+            normalizeMoney(payment?.amount) > 0
+        )
+      : null;
+
+    const isAddiSale =
+      currentSale.paymentMethod === ADDI_PAYMENT_METHOD || Boolean(addiPayment);
+
+    if (!isAddiSale) {
       throw new Error("Esta venta no corresponde a un pago por Addi.");
     }
 
@@ -798,7 +927,9 @@ export async function settleAddiSale({
     }
 
     const expectedAmount = normalizeMoney(
-      currentSale.addiExpectedAmount || currentSale.total
+      currentSale.addiExpectedAmount ||
+        addiPayment?.amount ||
+        currentSale.total
     );
 
     const finalSettledAmount =
@@ -809,13 +940,10 @@ export async function settleAddiSale({
         : normalizeMoney(settledAmount);
 
     if (finalSettledAmount <= 0) {
-      throw new Error(
-        "El valor recibido de Addi debe ser mayor a cero."
-      );
+      throw new Error("El valor recibido de Addi debe ser mayor a cero.");
     }
 
-    const explicitSettlementDate =
-      normalizeSettlementDate(settledAt);
+    const explicitSettlementDate = normalizeSettlementDate(settledAt);
 
     transaction.update(saleRef, {
       paymentStatus: "paid",
@@ -823,8 +951,7 @@ export async function settleAddiSale({
       addiStatus: ADDI_STATUS_SETTLED,
       addiExpectedAmount: expectedAmount,
       addiSettledAmount: finalSettledAmount,
-      addiSettledAt:
-        explicitSettlementDate || serverTimestamp(),
+      addiSettledAt: explicitSettlementDate || serverTimestamp(),
       addiReference: normalizeText(reference),
       addiNotes: normalizeText(notes),
 
@@ -846,38 +973,9 @@ export async function settleAddiSale({
 }
 
 /* -------------------------------------------------------------------------- */
-/*                           CREAR VENTA MULTIPRODUCTO                          */
+/*                           CREAR VENTA MULTIPRODUCTO                         */
 /* -------------------------------------------------------------------------- */
 
-/**
- * Firma recomendada:
- *
- * createMultiItemSale({
- *   items: [
- *     {
- *       productId: "...",
- *       variantId: "...",
- *       size: "M",
- *       quantity: 2
- *     }
- *   ],
- *
- *   customerId: "",
- *   customerName: "",
- *   customerDocument: "",
- *   customerPhone: "",
- *   customerEmail: "",
- *
- *   paymentMethod: "efectivo",
- *   discount: 0,
- *   amountReceived: 100000,
- *
- *   notes: "",
- *   source: "pos",
- *   storeId: STORE_ID,
- *   seller: {}
- * })
- */
 export async function createMultiItemSale({
   items,
   customerId = "",
@@ -906,9 +1004,7 @@ export async function createMultiItemSale({
 
   const cleanDiscount = normalizeMoney(discount);
 
-  const cleanCustomerDocument = normalizeCustomerDocument(
-    customerDocument
-  );
+  const cleanCustomerDocument = normalizeCustomerDocument(customerDocument);
   const cleanCustomerName = normalizeText(customerName);
   const cleanCustomerPhone = normalizeCustomerPhone(customerPhone);
   const cleanCustomerEmail = normalizeText(customerEmail);
@@ -927,14 +1023,60 @@ export async function createMultiItemSale({
     );
   }
 
+  const cleanSource = normalizeText(source) || DEFAULT_SOURCE;
+  const requiresOpenCash = cleanSource === "pos";
+  const businessDate = requiresOpenCash ? getBogotaBusinessDate() : "";
+  const cashSessionId = requiresOpenCash
+    ? getRequiredCashSessionId(storeId, seller?.uid, businessDate)
+    : "";
+
+  if (requiresOpenCash && !cashSessionId) {
+    throw new Error(
+      "No se pudo identificar la caja del vendedor. Vuelve a iniciar sesión e inténtalo nuevamente."
+    );
+  }
+
+  const cashSessionRef = cashSessionId
+    ? doc(db, "cashSessions", cashSessionId)
+    : null;
+
   const saleRef = doc(collection(db, "sales"));
 
   const saleResult = await runTransaction(db, async (transaction) => {
-    /**
-     * Primero se leen el contador y todos los productos.
-     * Después se realizan todas las escrituras.
-     */
     const saleCounter = await getNextSaleNumber(transaction, storeId);
+
+    if (cashSessionRef) {
+      const cashSessionSnapshot = await transaction.get(cashSessionRef);
+
+      if (!cashSessionSnapshot.exists()) {
+        throw new Error("Debes abrir la caja de hoy antes de registrar ventas.");
+      }
+
+      const cashSession = cashSessionSnapshot.data();
+
+      if (cashSession.storeId !== storeId) {
+        throw new Error("La caja abierta no pertenece a esta tienda.");
+      }
+
+      if (cashSession.status !== "open") {
+        throw new Error(
+          "La caja de hoy ya está cerrada. No se pueden registrar más ventas en esta sesión."
+        );
+      }
+
+      if (cashSession.businessDate !== businessDate) {
+        throw new Error(
+          "La caja abierta pertenece a otro día. Abre la caja de hoy antes de vender."
+        );
+      }
+
+      if (
+        normalizeText(cashSession.operatorUid) !==
+        normalizeText(seller?.uid)
+      ) {
+        throw new Error("La caja abierta pertenece a otro operador.");
+      }
+    }
 
     let customerRef = null;
     let customerSnapshot = null;
@@ -970,20 +1112,15 @@ export async function createMultiItemSale({
         const existingCustomer = customerSnapshot.data();
 
         if (existingCustomer.storeId !== storeId) {
-          throw new Error(
-            "El cliente encontrado no pertenece a esta tienda."
-          );
+          throw new Error("El cliente encontrado no pertenece a esta tienda.");
         }
 
         finalCustomerName =
-          normalizeText(existingCustomer.fullName) ||
-          cleanCustomerName;
+          normalizeText(existingCustomer.fullName) || cleanCustomerName;
         finalCustomerPhone =
-          normalizeCustomerPhone(existingCustomer.phone) ||
-          cleanCustomerPhone;
+          normalizeCustomerPhone(existingCustomer.phone) || cleanCustomerPhone;
         finalCustomerEmail =
-          normalizeText(existingCustomer.email) ||
-          cleanCustomerEmail;
+          normalizeText(existingCustomer.email) || cleanCustomerEmail;
       } else {
         if (!cleanCustomerName) {
           throw new Error(
@@ -1007,9 +1144,7 @@ export async function createMultiItemSale({
       const productRef = productEntry?.ref;
 
       if (!productSnapshot?.exists()) {
-        throw new Error(
-          "Uno de los productos seleccionados ya no existe."
-        );
+        throw new Error("Uno de los productos seleccionados ya no existe.");
       }
 
       const product = productSnapshot.data();
@@ -1020,17 +1155,11 @@ export async function createMultiItemSale({
         );
       }
 
-      const workingVariants =
-        normalizeProductVariants(
-          productId,
-          product
-        );
-
-      let workingPromotionVariants =
-        normalizePromotionVariants(
-          product,
-          workingVariants
-        );
+      const workingVariants = normalizeProductVariants(productId, product);
+      let workingPromotionVariants = normalizePromotionVariants(
+        product,
+        workingVariants
+      );
 
       for (const requestedItem of productSaleItems) {
         const selectedVariant = findRequestedVariant(
@@ -1044,42 +1173,25 @@ export async function createMultiItemSale({
           );
         }
 
-        const requestedQuantity = normalizeQuantity(
-          requestedItem.quantity
+        const requestedQuantity = normalizeQuantity(requestedItem.quantity);
+        const currentVariantStock = normalizeQuantity(selectedVariant.stock);
+
+        const promotionAvailable = getPromotionStockForVariant(
+          workingPromotionVariants,
+          selectedVariant
         );
 
-        const currentVariantStock =
-          normalizeQuantity(
-            selectedVariant.stock
-          );
+        const normalAvailable = Math.max(
+          currentVariantStock - promotionAvailable,
+          0
+        );
 
-        const promotionAvailable =
-          getPromotionStockForVariant(
-            workingPromotionVariants,
-            selectedVariant
-          );
+        const promotionActive = Boolean(requestedItem.isPromotion);
+        const availableForMode = promotionActive
+          ? promotionAvailable
+          : normalAvailable;
 
-        const normalAvailable =
-          Math.max(
-            currentVariantStock -
-              promotionAvailable,
-            0
-          );
-
-        const promotionActive =
-          Boolean(
-            requestedItem.isPromotion
-          );
-
-        const availableForMode =
-          promotionActive
-            ? promotionAvailable
-            : normalAvailable;
-
-        if (
-          requestedQuantity >
-          availableForMode
-        ) {
+        if (requestedQuantity > availableForMode) {
           throw new Error(
             promotionActive
               ? `Solo hay ${availableForMode} unidad(es) en promoción de "${product.name}" talla ${selectedVariant.size}.`
@@ -1089,77 +1201,43 @@ export async function createMultiItemSale({
 
         if (
           promotionActive &&
-          (
-            !Boolean(
-              product.isPromotion
-            ) ||
-            normalizeMoney(
-              product.promotionPrice
-            ) <= 0
-          )
+          (!Boolean(product.isPromotion) ||
+            normalizeMoney(product.promotionPrice) <= 0)
         ) {
-          throw new Error(
-            `La promoción de "${product.name}" ya no está disponible.`
-          );
+          throw new Error(`La promoción de "${product.name}" ya no está disponible.`);
         }
 
-        selectedVariant.stock =
-          currentVariantStock -
-          requestedQuantity;
+        selectedVariant.stock = currentVariantStock - requestedQuantity;
 
         if (promotionActive) {
-          workingPromotionVariants =
-            workingPromotionVariants
-              .map((item) =>
-                item.variantId ===
-                  selectedVariant.id ||
-                normalizeSize(
-                  item.size
-                ) ===
-                  normalizeSize(
-                    selectedVariant.size
-                  )
-                  ? {
-                      ...item,
-                      quantity:
-                        item.quantity -
-                        requestedQuantity,
-                    }
-                  : item
-              )
-              .filter(
-                (item) =>
-                  item.quantity > 0
-              );
+          workingPromotionVariants = workingPromotionVariants
+            .map((item) =>
+              item.variantId === selectedVariant.id ||
+              normalizeSize(item.size) === normalizeSize(selectedVariant.size)
+                ? {
+                    ...item,
+                    quantity: item.quantity - requestedQuantity,
+                  }
+                : item
+            )
+            .filter((item) => item.quantity > 0);
         }
 
-        const regularUnitPrice =
-          normalizeMoney(
-            product.salePrice
-          );
+        const regularUnitPrice = normalizeMoney(product.salePrice);
 
-        const promotionPrice =
-          promotionActive
-            ? normalizeMoney(
-                product.promotionPrice
-              )
-            : 0;
+        const promotionPrice = promotionActive
+          ? normalizeMoney(product.promotionPrice)
+          : 0;
 
-        const promotionNote =
-          promotionActive
-            ? normalizeText(
-                product.promotionNote
-              )
-            : "";
+        const promotionNote = promotionActive
+          ? normalizeText(product.promotionNote)
+          : "";
 
-        const unitPrice =
-          promotionActive
-            ? promotionPrice
-            : regularUnitPrice;
+        const unitPrice = promotionActive
+          ? promotionPrice
+          : regularUnitPrice;
 
-        const costPrice = normalizeMoney(
-          product.costPrice
-        );
+        const costPrice = normalizeMoney(product.costPrice);
 
         const lineSubtotal = unitPrice * requestedQuantity;
         const lineTotalCost = costPrice * requestedQuantity;
@@ -1202,21 +1280,13 @@ export async function createMultiItemSale({
         });
       }
 
-      const productVariantPayload =
-        buildProductVariantPayload(
-          workingVariants
-        );
-
-      const promotionStock =
-        getPromotionTotalStock(
-          workingPromotionVariants
-        );
+      const productVariantPayload = buildProductVariantPayload(workingVariants);
+      const promotionStock = getPromotionTotalStock(workingPromotionVariants);
 
       transaction.update(productRef, {
         ...productVariantPayload,
 
-        promotionVariants:
-          workingPromotionVariants,
+        promotionVariants: workingPromotionVariants,
         promotionStock,
 
         updatedByUid: seller?.uid || "",
@@ -1228,12 +1298,11 @@ export async function createMultiItemSale({
     }
 
     if (cleanDiscount > subtotal) {
-      throw new Error(
-        "El descuento no puede ser mayor al subtotal de la venta."
-      );
+      throw new Error("El descuento no puede ser mayor al subtotal de la venta.");
     }
 
     const total = Math.max(subtotal - cleanDiscount, 0);
+
     const finalAmountReceived =
       amountReceived === null ||
       amountReceived === undefined ||
@@ -1255,21 +1324,10 @@ export async function createMultiItemSale({
         ? Math.max(finalAmountReceived - total, 0)
         : 0;
 
-    const isAddiPayment =
-      cleanPaymentMethod === ADDI_PAYMENT_METHOD;
-
-    const paymentStatus = isAddiPayment
-      ? "pending_settlement"
-      : "paid";
-
-    const addiStatus = isAddiPayment
-      ? ADDI_STATUS_PENDING
-      : "";
-
-    const addiExpectedAmount = isAddiPayment
-      ? total
-      : 0;
-
+    const isAddiPayment = cleanPaymentMethod === ADDI_PAYMENT_METHOD;
+    const paymentStatus = isAddiPayment ? "pending_settlement" : "paid";
+    const addiStatus = isAddiPayment ? ADDI_STATUS_PENDING : "";
+    const addiExpectedAmount = isAddiPayment ? total : 0;
     const profit = total - totalCost;
 
     if (shouldCreateCustomer && customerRef) {
@@ -1349,7 +1407,8 @@ export async function createMultiItemSale({
       addiNotes: "",
 
       notes: normalizeText(notes),
-      source: normalizeText(source) || DEFAULT_SOURCE,
+      source: cleanSource,
+      cashSessionId,
 
       reservationId: reservationId || null,
 
@@ -1357,9 +1416,6 @@ export async function createMultiItemSale({
       sellerName: seller?.name || "",
       sellerEmail: seller?.email || "",
 
-      /**
-       * Datos útiles para impresión y auditoría.
-       */
       receiptPrinted: false,
       receiptPrintCount: 0,
       lastReceiptPrintedAt: null,
@@ -1400,7 +1456,8 @@ export async function createMultiItemSale({
       customerEmail: finalCustomerEmail,
 
       notes: normalizeText(notes),
-      source: normalizeText(source) || DEFAULT_SOURCE,
+      source: cleanSource,
+      cashSessionId,
 
       sellerUid: seller?.uid || "",
       sellerName: seller?.name || "",
@@ -1412,22 +1469,9 @@ export async function createMultiItemSale({
 }
 
 /* -------------------------------------------------------------------------- */
-/*                   COMPATIBILIDAD CON LA VENTA ANTERIOR                      */
+/*                   COMPATIBILIDAD CON LA VENTA ANTERIOR                     */
 /* -------------------------------------------------------------------------- */
 
-/**
- * Esta función conserva temporalmente la firma anterior:
- *
- * createDirectSale({
- *   productId,
- *   quantity,
- *   ...
- * })
- *
- * Internamente crea una venta multítem con un solo producto.
- *
- * Se recomienda que el nuevo SalesPage utilice createMultiItemSale().
- */
 export async function createDirectSale({
   productId,
   variantId = "",
@@ -1479,9 +1523,5 @@ export async function createDirectSale({
     seller,
   });
 
-  /**
-   * La implementación anterior devolvía únicamente saleId.
-   * Se mantiene ese comportamiento para no romper SalesPage.jsx.
-   */
   return result.id;
 }

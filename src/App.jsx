@@ -9,6 +9,8 @@ import LoginPage from "./pages/auth/LoginPage";
 import DashboardPage from "./pages/admin/DashboardPage";
 import InventoryPage from "./pages/admin/InventoryPage";
 import SalesPage from "./pages/admin/SalesPage";
+import SalesHistoryPage from "./pages/admin/SalesHistoryPage";
+import CashPage from "./pages/admin/CashPage";
 import ReservationsPage from "./pages/admin/ReservationsPage";
 import ClientsPage from "./pages/admin/ClientsPage";
 import SpecialOrdersPage from "./pages/admin/SpecialOrdersPage";
@@ -66,6 +68,24 @@ export default function App() {
           element={
             <RoleGuard allowedRoles={["admin", "seller"]}>
               <SalesPage />
+            </RoleGuard>
+          }
+        />
+
+        <Route
+          path="ventas/historial"
+          element={
+            <RoleGuard allowedRoles={["admin", "seller"]}>
+              <SalesHistoryPage />
+            </RoleGuard>
+          }
+        />
+
+        <Route
+          path="caja"
+          element={
+            <RoleGuard allowedRoles={["admin", "seller"]}>
+              <CashPage />
             </RoleGuard>
           }
         />

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import {
+  Banknote,
   ExternalLink,
   FileClock,
   LayoutDashboard,
@@ -40,6 +41,12 @@ const navItems = [
     label: "Ventas",
     path: "/admin/ventas",
     icon: ShoppingBag,
+    roles: ["admin", "seller"],
+  },
+  {
+    label: "Caja",
+    path: "/admin/caja",
+    icon: Banknote,
     roles: ["admin", "seller"],
   },
   {

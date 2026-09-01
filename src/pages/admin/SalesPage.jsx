@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   BadgePercent,
   Barcode,
@@ -179,6 +180,7 @@ function makeCartKey(
 }
 
 export default function SalesPage() {
+  const navigate = useNavigate();
   const [products, setProducts] = useState([]);
   const [categories, setCategories] = useState([]);
   const [sales, setSales] = useState([]);
@@ -953,8 +955,9 @@ export default function SalesPage() {
 
           <div className="flex flex-wrap gap-2">
             <button
-              type="button"
-              onClick={() => setShowHistory(true)}
+               type="button"
+  onClick={() => navigate("/admin/ventas/historial")}
+
               className="inline-flex h-11 items-center justify-center gap-2 rounded-2xl border border-black/[0.08] bg-white px-4 text-[13px] font-medium shadow-[0_10px_30px_rgba(0,0,0,0.035)] transition hover:bg-black/[0.025]"
             >
               <ReceiptText size={16} />
