@@ -139,6 +139,31 @@ function normalizeDays(value, fallback = DEFAULT_RESERVATION_DAYS) {
   return Math.min(Math.max(days, 1), 365);
 }
 
+function normalizeDiscount(value, subtotal = 0) {
+  const cleanSubtotal = Math.max(safeNumber(subtotal), 0);
+  const discount = Math.max(safeNumber(value), 0);
+
+  if (discount > cleanSubtotal) {
+    throw new Error(
+      "El descuento no puede superar el subtotal del apartado."
+    );
+  }
+
+  return discount;
+}
+
+function getReservationLineKey({
+  productId,
+  variantId,
+  isPromotion = false,
+} = {}) {
+  return [
+    safeString(productId),
+    safeString(variantId) || "legacy-variant",
+    isPromotion ? "promo" : "normal",
+  ].join("__");
+}
+
 function normalizeSize(value) {
   const clean = safeString(value);
   if (!clean) return "Talla única";
@@ -401,6 +426,7 @@ export async function createReservationCart({
   reservationDays,
   initialPayment = 0,
   initialPaymentMethod = "efectivo",
+  discount = 0,
   notes = "",
   actor = null,
   clientVisitorId = "",
@@ -672,16 +698,27 @@ export async function createReservationCart({
       (total, line) => total + line.requested.quantity,
       0
     );
-    const subtotal = lines.reduce((total, line) => total + line.subtotal, 0);
+    const subtotal = lines.reduce(
+      (total, line) => total + line.subtotal,
+      0
+    );
+    const cleanDiscount = normalizeDiscount(
+      discount,
+      subtotal
+    );
+    const total = Math.max(
+      subtotal - cleanDiscount,
+      0
+    );
 
-    if (requestedInitialPayment > subtotal) {
+    if (requestedInitialPayment > total) {
       throw new Error(
-        "El valor entregado no puede superar el total del apartado."
+        "El valor entregado no puede superar el total del apartado después del descuento."
       );
     }
 
     const amountPaid = requestedInitialPayment;
-    const balanceDue = Math.max(subtotal - amountPaid, 0);
+    const balanceDue = Math.max(total - amountPaid, 0);
 
     const paymentHistory =
       amountPaid > 0
@@ -754,6 +791,8 @@ export async function createReservationCart({
       totalLines: lines.length,
       totalItems,
       subtotal,
+      discount: cleanDiscount,
+      total,
       amountPaid,
       balanceDue,
       initialPayment: amountPaid,
@@ -834,6 +873,8 @@ export async function createReservationCart({
       totalLines: lines.length,
       totalItems,
       subtotal,
+      discount: cleanDiscount,
+      total,
       amountPaid,
       balanceDue,
       reservationDays: finalReservationDays,
@@ -902,9 +943,15 @@ export async function addReservationGroupPayment({
       throw new Error("Solo puedes registrar abonos en apartados activos.");
     }
 
-    const subtotal = Math.max(safeNumber(group.subtotal), 0);
+    const total = Math.max(
+      safeNumber(
+        group.total,
+        safeNumber(group.subtotal)
+      ),
+      0
+    );
     const amountPaid = Math.max(safeNumber(group.amountPaid), 0);
-    const balanceDue = Math.max(subtotal - amountPaid, 0);
+    const balanceDue = Math.max(total - amountPaid, 0);
 
     if (cleanAmount > balanceDue) {
       throw new Error(
@@ -913,7 +960,7 @@ export async function addReservationGroupPayment({
     }
 
     const nextPaid = amountPaid + cleanAmount;
-    const nextBalance = Math.max(subtotal - nextPaid, 0);
+    const nextBalance = Math.max(total - nextPaid, 0);
     const payment = buildPaymentEntry({
       amount: cleanAmount,
       paymentMethod,
@@ -933,6 +980,723 @@ export async function addReservationGroupPayment({
       amountPaid: nextPaid,
       balanceDue: nextBalance,
       payment,
+    };
+  });
+}
+
+
+export async function updateReservationGroup({
+  groupId,
+  items = [],
+  customerId = "",
+  customerName,
+  customerDocument,
+  customerPhone = "",
+  reservationDays,
+  discount = 0,
+  notes = "",
+  actor = null,
+}) {
+  const cleanGroupId = safeString(groupId);
+
+  if (!cleanGroupId) {
+    throw new Error("No se encontró el apartado.");
+  }
+
+  const normalizedItems = normalizeCartItems(items);
+
+  return runTransaction(db, async (transaction) => {
+    const groupRef = doc(
+      db,
+      "reservationGroups",
+      cleanGroupId
+    );
+    const groupSnap = await transaction.get(groupRef);
+
+    if (!groupSnap.exists()) {
+      throw new Error("El apartado no existe.");
+    }
+
+    const group = groupSnap.data();
+
+    if (group.status !== "active") {
+      throw new Error(
+        "Solo puedes editar apartados activos."
+      );
+    }
+
+    const cleanStoreId =
+      safeString(group.storeId) || STORE_ID;
+
+    const customer = validateCustomer({
+      customerId,
+      customerName,
+      customerDocument,
+      customerPhone,
+      storeId: cleanStoreId,
+    });
+
+    const oldReservationIds = Array.isArray(
+      group.reservationIds
+    )
+      ? group.reservationIds.map(safeString).filter(Boolean)
+      : [];
+
+    if (oldReservationIds.length === 0) {
+      throw new Error(
+        "Este apartado no tiene líneas editables."
+      );
+    }
+
+    const oldRefs = oldReservationIds.map(
+      (id) => doc(db, "reservations", id)
+    );
+
+    const oldSnapshots = [];
+    for (const ref of oldRefs) {
+      oldSnapshots.push(await transaction.get(ref));
+    }
+
+    const oldLines = oldSnapshots
+      .filter((snapshot) => snapshot.exists())
+      .map((snapshot) => ({
+        id: snapshot.id,
+        ref: snapshot.ref,
+        ...snapshot.data(),
+      }));
+
+    const allProductIds = [
+      ...new Set([
+        ...oldLines
+          .map((line) => safeString(line.productId))
+          .filter(Boolean),
+        ...normalizedItems
+          .map((item) => item.productId)
+          .filter(Boolean),
+      ]),
+    ];
+
+    const productRefs = allProductIds.map(
+      (id) => doc(db, "products", id)
+    );
+
+    const productSnapshots = [];
+    for (const ref of productRefs) {
+      productSnapshots.push(await transaction.get(ref));
+    }
+
+    const customerRef = doc(
+      db,
+      "customers",
+      customer.customerId
+    );
+    const customerSnapshot =
+      await transaction.get(customerRef);
+
+    const states = new Map();
+
+    productSnapshots.forEach((snapshot, index) => {
+      if (!snapshot.exists()) {
+        throw new Error(
+          "Uno de los productos del apartado ya no existe."
+        );
+      }
+
+      const product = snapshot.data();
+
+      if (safeString(product.storeId) !== cleanStoreId) {
+        throw new Error(
+          `El producto "${product.name || "sin nombre"}" no pertenece a esta tienda.`
+        );
+      }
+
+      const variants = normalizeVariants(product);
+
+      states.set(snapshot.id, {
+        ref: productRefs[index],
+        product,
+        variants,
+        promotionVariants:
+          normalizePromotionVariants(
+            product,
+            variants
+          ),
+      });
+    });
+
+    /*
+     * Restauramos el stock del apartado actual en memoria.
+     * Nada se escribe todavía. Luego aplicamos la nueva composición
+     * y Firestore confirma todo de forma atómica.
+     */
+    oldLines.forEach((line) => {
+      if (line.status !== "active") {
+        throw new Error(
+          "Una de las líneas del apartado ya no está activa."
+        );
+      }
+
+      const state = states.get(
+        safeString(line.productId)
+      );
+
+      if (!state) {
+        throw new Error(
+          "No se pudo reconstruir el inventario anterior."
+        );
+      }
+
+      const variantId =
+        safeString(line.variantId) ||
+        "legacy-variant";
+
+      const variantIndex =
+        state.variants.findIndex(
+          (variant) =>
+            variant.id === variantId
+        );
+
+      if (variantIndex < 0) {
+        throw new Error(
+          `La talla ${normalizeSize(
+            line.productSize || line.size
+          )} ya no existe.`
+        );
+      }
+
+      const quantity = Math.max(
+        Math.trunc(safeNumber(line.quantity, 1)),
+        1
+      );
+
+      const restoredVariant = {
+        ...state.variants[variantIndex],
+        stock:
+          state.variants[variantIndex].stock +
+          quantity,
+      };
+
+      state.variants =
+        state.variants.map(
+          (variant, index) =>
+            index === variantIndex
+              ? restoredVariant
+              : variant
+        );
+
+      if (
+        Boolean(line.isPromotion) &&
+        Boolean(state.product?.isPromotion) &&
+        safeNumber(state.product?.promotionPrice) > 0
+      ) {
+        const promotionIndex =
+          state.promotionVariants.findIndex(
+            (item) =>
+              item.variantId === restoredVariant.id ||
+              normalizeSize(item.size) ===
+                normalizeSize(restoredVariant.size)
+          );
+
+        if (promotionIndex >= 0) {
+          state.promotionVariants =
+            state.promotionVariants.map(
+              (item, index) =>
+                index === promotionIndex
+                  ? {
+                      ...item,
+                      quantity:
+                        item.quantity + quantity,
+                    }
+                  : item
+            );
+        } else {
+          state.promotionVariants = [
+            ...state.promotionVariants,
+            {
+              variantId: restoredVariant.id,
+              size: restoredVariant.size,
+              quantity,
+            },
+          ];
+        }
+      }
+    });
+
+    const oldLinesByKey = new Map();
+
+    oldLines.forEach((line) => {
+      const key = getReservationLineKey({
+        productId: line.productId,
+        variantId:
+          safeString(line.variantId) ||
+          "legacy-variant",
+        isPromotion: Boolean(line.isPromotion),
+      });
+
+      if (!oldLinesByKey.has(key)) {
+        oldLinesByKey.set(key, []);
+      }
+
+      oldLinesByKey.get(key).push(line);
+    });
+
+    const resolvedLines = [];
+
+    for (
+      let index = 0;
+      index < normalizedItems.length;
+      index += 1
+    ) {
+      const requested = normalizedItems[index];
+      const state = states.get(requested.productId);
+
+      if (!state) {
+        throw new Error(
+          `El producto de la línea ${index + 1} no existe.`
+        );
+      }
+
+      const variantIndex =
+        state.variants.findIndex(
+          (variant) =>
+            variant.id === requested.variantId
+        );
+
+      if (variantIndex < 0) {
+        throw new Error(
+          `La talla ${requested.size} de "${state.product.name}" ya no existe.`
+        );
+      }
+
+      const variant = state.variants[variantIndex];
+
+      const key = getReservationLineKey({
+        productId: requested.productId,
+        variantId: requested.variantId,
+        isPromotion: Boolean(requested.isPromotion),
+      });
+
+      const oldCandidates =
+        oldLinesByKey.get(key) || [];
+      const previousLine =
+        oldCandidates.shift() || null;
+
+      const promotionAvailable =
+        getPromotionStockForVariant(
+          state.promotionVariants,
+          variant
+        );
+
+      const normalAvailable =
+        Math.max(
+          variant.stock - promotionAvailable,
+          0
+        );
+
+      const isPromotion =
+        Boolean(requested.isPromotion);
+
+      const availableForMode =
+        isPromotion
+          ? promotionAvailable
+          : normalAvailable;
+
+      if (requested.quantity > availableForMode) {
+        throw new Error(
+          isPromotion
+            ? `Solo hay ${availableForMode} unidad(es) promocionales de "${state.product.name}" talla ${variant.size}.`
+            : `Solo hay ${availableForMode} unidad(es) normales de "${state.product.name}" talla ${variant.size}.`
+        );
+      }
+
+      state.variants =
+        state.variants.map(
+          (currentVariant, currentIndex) =>
+            currentIndex === variantIndex
+              ? {
+                  ...currentVariant,
+                  stock:
+                    currentVariant.stock -
+                    requested.quantity,
+                }
+              : currentVariant
+        );
+
+      if (isPromotion) {
+        state.promotionVariants =
+          state.promotionVariants
+            .map((item) =>
+              item.variantId === variant.id ||
+              normalizeSize(item.size) ===
+                normalizeSize(variant.size)
+                ? {
+                    ...item,
+                    quantity:
+                      item.quantity -
+                      requested.quantity,
+                  }
+                : item
+            )
+            .filter((item) => item.quantity > 0);
+      }
+
+      /*
+       * Si la línea ya existía, mantenemos su precio histórico.
+       * Editar cliente/días/cantidad no debe cambiar silenciosamente
+       * el precio que ya había sido acordado.
+       */
+      const regularUnitPrice = Math.max(
+        safeNumber(
+          previousLine?.regularUnitPrice,
+          state.product.salePrice
+        ),
+        0
+      );
+
+      let promotionPrice = 0;
+      let promotionNote = "";
+      let unitPrice = regularUnitPrice;
+
+      if (isPromotion) {
+        if (previousLine) {
+          promotionPrice = Math.max(
+            safeNumber(
+              previousLine.promotionPrice,
+              previousLine.unitPrice
+            ),
+            0
+          );
+          promotionNote =
+            safeString(previousLine.promotionNote);
+          unitPrice = Math.max(
+            safeNumber(
+              previousLine.unitPrice,
+              promotionPrice
+            ),
+            0
+          );
+        } else {
+          promotionPrice = Math.max(
+            safeNumber(state.product.promotionPrice),
+            0
+          );
+
+          if (
+            !Boolean(state.product.isPromotion) ||
+            promotionPrice <= 0
+          ) {
+            throw new Error(
+              `La promoción de "${state.product.name}" ya no está disponible.`
+            );
+          }
+
+          promotionNote =
+            safeString(state.product.promotionNote);
+          unitPrice = promotionPrice;
+        }
+      } else if (previousLine) {
+        unitPrice = Math.max(
+          safeNumber(
+            previousLine.unitPrice,
+            regularUnitPrice
+          ),
+          0
+        );
+      }
+
+      const costPrice = Math.max(
+        safeNumber(
+          previousLine?.costPrice,
+          state.product.costPrice
+        ),
+        0
+      );
+
+      const reservationRef =
+        previousLine?.ref ||
+        doc(collection(db, "reservations"));
+
+      resolvedLines.push({
+        reservationRef,
+        previousLine,
+        product: state.product,
+        variant,
+        requested,
+        unitPrice,
+        regularUnitPrice,
+        isPromotion,
+        promotionPrice,
+        promotionNote,
+        costPrice,
+        subtotal:
+          unitPrice * requested.quantity,
+      });
+    }
+
+    const totalItems = resolvedLines.reduce(
+      (sum, line) =>
+        sum + line.requested.quantity,
+      0
+    );
+
+    const subtotal = resolvedLines.reduce(
+      (sum, line) => sum + line.subtotal,
+      0
+    );
+
+    const cleanDiscount =
+      normalizeDiscount(discount, subtotal);
+
+    const total = Math.max(
+      subtotal - cleanDiscount,
+      0
+    );
+
+    const amountPaid = Math.max(
+      safeNumber(group.amountPaid),
+      0
+    );
+
+    if (total < amountPaid) {
+      throw new Error(
+        `El nuevo total (${total.toLocaleString(
+          "es-CO"
+        )}) no puede quedar por debajo de lo ya pagado (${amountPaid.toLocaleString(
+          "es-CO"
+        )}).`
+      );
+    }
+
+    const finalReservationDays =
+      normalizeDays(
+        reservationDays,
+        group.reservationDays ||
+          DEFAULT_RESERVATION_DAYS
+      );
+
+    const expiresAtDate = new Date(
+      Date.now() +
+        finalReservationDays *
+          24 *
+          60 *
+          60 *
+          1000
+    );
+
+    let finalCustomerName =
+      customer.customerName;
+    let finalCustomerPhone =
+      customer.customerPhone;
+
+    if (customerSnapshot.exists()) {
+      const existingCustomer =
+        customerSnapshot.data();
+
+      if (
+        safeString(existingCustomer.storeId) !==
+        cleanStoreId
+      ) {
+        throw new Error(
+          "El cliente encontrado no pertenece a esta tienda."
+        );
+      }
+
+      finalCustomerName =
+        safeString(existingCustomer.fullName) ||
+        finalCustomerName;
+
+      finalCustomerPhone =
+        normalizeCustomerPhone(existingCustomer.phone) ||
+        finalCustomerPhone;
+    } else {
+      if (!finalCustomerName) {
+        throw new Error(
+          "Completa el nombre del cliente."
+        );
+      }
+
+      transaction.set(customerRef, {
+        storeId: cleanStoreId,
+        documentNumber: customer.customerDocument,
+        normalizedDocument: customer.customerDocument,
+        firstName: "",
+        lastName: "",
+        fullName: finalCustomerName,
+        phone: finalCustomerPhone,
+        email: "",
+        address: "",
+        notes: "",
+        isActive: true,
+        createdByUid: actor?.uid || "",
+        createdByName: actor?.name || "",
+        createdByEmail: actor?.email || "",
+        updatedByUid: actor?.uid || "",
+        updatedByName: actor?.name || "",
+        updatedByEmail: actor?.email || "",
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    }
+
+    for (const state of states.values()) {
+      const stock =
+        calculateTotalStock(state.variants);
+      const promotionStock =
+        getPromotionTotalStock(
+          state.promotionVariants
+        );
+
+      transaction.update(state.ref, {
+        variants: state.variants,
+        stock,
+        totalStock: stock,
+        promotionVariants:
+          state.promotionVariants,
+        promotionStock,
+        updatedAt: serverTimestamp(),
+      });
+    }
+
+    const reusedIds = new Set(
+      resolvedLines
+        .filter((line) => Boolean(line.previousLine))
+        .map((line) => line.previousLine.id)
+    );
+
+    oldLines.forEach((line) => {
+      if (!reusedIds.has(line.id)) {
+        transaction.delete(line.ref);
+      }
+    });
+
+    resolvedLines.forEach((line, index) => {
+      transaction.set(
+        line.reservationRef,
+        {
+          storeId: cleanStoreId,
+          reservationGroupId: cleanGroupId,
+          reservationGroupNumber:
+            group.groupNumber || "",
+          lineNumber: index + 1,
+          productId: line.requested.productId,
+          productName:
+            line.product.name || "",
+          productCode:
+            line.product.code || "",
+          productImageUrl:
+            getProductCoverUrl(line.product),
+          categoryId:
+            line.product.categoryId || "",
+          categoryName:
+            line.product.categoryName || "",
+          variantId: line.variant.id,
+          productSize: line.variant.size,
+          size: line.variant.size,
+          variantBarcode:
+            line.variant.barcode || "",
+          unitPrice: line.unitPrice,
+          regularUnitPrice:
+            line.regularUnitPrice,
+          isPromotion: line.isPromotion,
+          promotionPrice:
+            line.promotionPrice,
+          promotionNote:
+            line.promotionNote,
+          costPrice: line.costPrice,
+          quantity: line.requested.quantity,
+          subtotal: line.subtotal,
+          customerId: customer.customerId,
+          customerName:
+            finalCustomerName,
+          customerDocument:
+            customer.customerDocument,
+          customerPhone:
+            finalCustomerPhone,
+          status: "active",
+          source:
+            group.source || "manual",
+          clientVisitorId:
+            safeString(group.clientVisitorId),
+          clientSessionId:
+            safeString(group.clientSessionId),
+          reservationDays:
+            finalReservationDays,
+          expiresAt:
+            Timestamp.fromDate(expiresAtDate),
+          updatedAt: serverTimestamp(),
+          updatedByUid: actor?.uid || "",
+          updatedByName: actor?.name || "",
+          updatedByEmail: actor?.email || "",
+          ...(line.previousLine
+            ? {}
+            : {
+                reservedAt: serverTimestamp(),
+                createdAt: serverTimestamp(),
+                notificationRead: true,
+                notificationReadAt:
+                  serverTimestamp(),
+                notificationReadByUid:
+                  actor?.uid || "",
+                notificationReadByName:
+                  actor?.name || "",
+                notificationReadByEmail:
+                  actor?.email || "",
+                completedAt: null,
+                expiredAt: null,
+                cancelledAt: null,
+                saleId: null,
+              }),
+        },
+        { merge: true }
+      );
+    });
+
+    const reservationIds =
+      resolvedLines.map(
+        (line) => line.reservationRef.id
+      );
+
+    transaction.update(groupRef, {
+      customerId: customer.customerId,
+      customerName: finalCustomerName,
+      customerDocument:
+        customer.customerDocument,
+      customerPhone: finalCustomerPhone,
+      reservationDays:
+        finalReservationDays,
+      totalLines: resolvedLines.length,
+      totalItems,
+      subtotal,
+      discount: cleanDiscount,
+      total,
+      balanceDue:
+        Math.max(total - amountPaid, 0),
+      notes: safeString(notes),
+      reservationIds,
+      expiresAt:
+        Timestamp.fromDate(expiresAtDate),
+      updatedAt: serverTimestamp(),
+      updatedByUid: actor?.uid || "",
+      updatedByName: actor?.name || "",
+      updatedByEmail: actor?.email || "",
+    });
+
+    return {
+      reservationGroupId: cleanGroupId,
+      reservationGroupNumber:
+        group.groupNumber || "",
+      reservationIds,
+      subtotal,
+      discount: cleanDiscount,
+      total,
+      amountPaid,
+      balanceDue:
+        Math.max(total - amountPaid, 0),
+      totalItems,
+      totalLines: resolvedLines.length,
+      reservationDays:
+        finalReservationDays,
+      expiresAt: expiresAtDate,
     };
   });
 }
@@ -1069,9 +1833,30 @@ export async function completeReservationGroupSale({
       };
     });
 
-    const total = items.reduce((sum, item) => sum + item.subtotal, 0);
-    const totalCost = items.reduce((sum, item) => sum + item.totalCost, 0);
+    const subtotal = items.reduce(
+      (sum, item) => sum + item.subtotal,
+      0
+    );
+    const discount = Math.min(
+      Math.max(safeNumber(group.discount), 0),
+      subtotal
+    );
+    const total = Math.max(
+      subtotal - discount,
+      0
+    );
+    const totalCost = items.reduce(
+      (sum, item) => sum + item.totalCost,
+      0
+    );
     const amountPaid = Math.max(safeNumber(group.amountPaid), 0);
+
+    if (amountPaid > total) {
+      throw new Error(
+        "El apartado tiene pagos superiores al total actual. Edita el apartado antes de finalizar la venta."
+      );
+    }
+
     const finalPayment = Math.max(total - amountPaid, 0);
     const totalPaid = amountPaid + finalPayment;
 
@@ -1110,11 +1895,11 @@ export async function completeReservationGroupSale({
       items,
       totalItems: items.reduce((sum, item) => sum + item.quantity, 0),
       uniqueItems: items.length,
-      subtotal: total,
+      subtotal,
       total,
       totalCost,
       profit: total - totalCost,
-      discount: 0,
+      discount,
       amountPaidBeforeSale: amountPaid,
       finalPayment,
       totalPaid,

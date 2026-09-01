@@ -8,6 +8,7 @@ import {
   HandCoins,
   Minus,
   PackageSearch,
+  Pencil,
   Plus,
   RefreshCcw,
   Search,
@@ -27,11 +28,13 @@ import {
   subscribeReservationGroups,
   subscribeReservations,
   subscribeReservationSettings,
+  updateReservationGroup,
   updateReservationSettings,
 } from "../../services/reservations.service";
 
 import {
   getProductCoverImage,
+  getPromotionStockForVariant,
   normalizeProductVariants,
   subscribeProducts,
 } from "../../services/products.service";
@@ -57,6 +60,28 @@ const emptyPaymentForm = {
   paymentMethod: "efectivo",
   notes: "",
 };
+
+function parseMoneyInput(value) {
+  return Math.max(
+    Number(
+      String(value || "")
+        .replace(/[^0-9]/g, "")
+    ) || 0,
+    0
+  );
+}
+
+function formatMoneyInput(value) {
+  const number = parseMoneyInput(value);
+
+  if (!number) {
+    return "";
+  }
+
+  return new Intl.NumberFormat("es-CO", {
+    maximumFractionDigits: 0,
+  }).format(number);
+}
 
 function formatDate(value) {
   const date = value?.toDate?.();
@@ -216,6 +241,8 @@ function buildFallbackGroup(groupKey, lines) {
     clientSessionId: first.clientSessionId || "",
     reservationDays: first.reservationDays || 7,
     subtotal,
+    discount: 0,
+    total: subtotal,
     amountPaid,
     balanceDue: Math.max(subtotal - amountPaid, 0),
     totalItems,
@@ -318,6 +345,7 @@ export default function ReservationsPage() {
   const [paymentForm, setPaymentForm] = useState(emptyPaymentForm);
 
   const [manualOpen, setManualOpen] = useState(false);
+  const [editingGroup, setEditingGroup] = useState(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [paymentOpen, setPaymentOpen] = useState(false);
 
@@ -586,7 +614,10 @@ export default function ReservationsPage() {
 
             <button
               type="button"
-              onClick={() => setManualOpen(true)}
+              onClick={() => {
+                setEditingGroup(null);
+                setManualOpen(true);
+              }}
               className="inline-flex h-11 items-center gap-2 rounded-2xl bg-red-600 px-5 text-[13px] font-medium text-white shadow-lg shadow-red-600/20"
             >
               <Plus size={16} />
@@ -694,6 +725,24 @@ export default function ReservationsPage() {
                       }}
                       onCancel={() => handleCancel(group)}
                       onView={() => setDetailGroup(group)}
+                      onEdit={() => {
+                        if (group.legacy) {
+                          alert(
+                            "Este apartado antiguo debe migrarse antes de editarlo."
+                          );
+                          return;
+                        }
+
+                        if (group.status !== "active") {
+                          alert(
+                            "Solo puedes editar apartados activos."
+                          );
+                          return;
+                        }
+
+                        setEditingGroup(group);
+                        setManualOpen(true);
+                      }}
                     />
                   ))}
                 </div>
@@ -738,22 +787,47 @@ export default function ReservationsPage() {
           products={products}
           categories={categories}
           defaultDays={settings.defaultReservationDays}
+          initialGroup={editingGroup}
           processing={processing}
-          onClose={() => setManualOpen(false)}
+          onClose={() => {
+            setManualOpen(false);
+            setEditingGroup(null);
+          }}
           onSubmit={async (payload) => {
             try {
               setProcessing(true);
 
-              await createManualReservation({
-                ...payload,
-                storeId: STORE_ID,
-                actor: getCurrentUserActor(),
-              });
+              if (editingGroup?.id) {
+                await updateReservationGroup({
+                  groupId: editingGroup.id,
+                  ...payload,
+                  actor: getCurrentUserActor(),
+                });
+
+                alert(
+                  "Apartado actualizado correctamente."
+                );
+              } else {
+                await createManualReservation({
+                  ...payload,
+                  storeId: STORE_ID,
+                  actor: getCurrentUserActor(),
+                });
+
+                alert(
+                  "Apartado manual creado correctamente."
+                );
+              }
 
               setManualOpen(false);
-              alert("Apartado manual creado correctamente.");
+              setEditingGroup(null);
             } catch (error) {
-              alert(error.message || "No se pudo crear el apartado.");
+              alert(
+                error.message ||
+                  (editingGroup?.id
+                    ? "No se pudo actualizar el apartado."
+                    : "No se pudo crear el apartado.")
+              );
             } finally {
               setProcessing(false);
             }
@@ -901,8 +975,13 @@ function ReservationGroupCard({
   onPayment,
   onCancel,
   onView,
+  onEdit,
 }) {
-  const total = Number(group.subtotal || 0);
+  const subtotal = Number(group.subtotal || 0);
+  const discount = Math.max(Number(group.discount || 0), 0);
+  const total = Number(
+    group.total ?? Math.max(subtotal - discount, 0)
+  );
   const paid = Number(group.amountPaid || 0);
   const balance = Math.max(Number(group.balanceDue ?? total - paid), 0);
   const isActive = group.status === "active";
@@ -945,10 +1024,26 @@ function ReservationGroupCard({
           })}
         </div>
 
-        <button type="button" onClick={onView} className="mt-3 inline-flex h-9 w-full items-center justify-center gap-2 rounded-xl border border-black/[0.07] text-[9px] font-medium text-black/60 transition hover:border-red-200 hover:bg-red-50 hover:text-red-600">
-          <Eye size={13} />
-          Ver todos los productos y detalles
-        </button>
+        <div className="mt-3 grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            onClick={onView}
+            className="inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-black/[0.07] text-[9px] font-medium text-black/60 transition hover:border-red-200 hover:bg-red-50 hover:text-red-600"
+          >
+            <Eye size={13} />
+            Ver detalles
+          </button>
+
+          <button
+            type="button"
+            onClick={onEdit}
+            disabled={!isActive || processing}
+            className="inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-black/[0.07] text-[9px] font-medium text-black/60 transition hover:border-red-200 hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-30"
+          >
+            <Pencil size={12} />
+            Editar
+          </button>
+        </div>
       </div>
 
       <div className="border-t border-black/[0.055] bg-black/[0.015] px-3.5 py-3">
@@ -985,16 +1080,21 @@ function ReservationMetric({ label, value, danger = false, success = false }) {
 
 function ReservationGroupDetailModal({ group, onClose, onPayment, onSell }) {
   const lines = Array.isArray(group.lines) ? group.lines : [];
-  const total = Number(group.subtotal || 0);
+  const subtotal = Number(group.subtotal || 0);
+  const discount = Math.max(Number(group.discount || 0), 0);
+  const total = Number(
+    group.total ?? Math.max(subtotal - discount, 0)
+  );
   const paid = Number(group.amountPaid || 0);
   const balance = Math.max(Number(group.balanceDue ?? total - paid), 0);
   const canOperate = group.status === "active" && (getDaysLeft(group.expiresAt) === null || getDaysLeft(group.expiresAt) >= 0);
 
   return (
     <ModalShell title={`Detalle · ${group.groupNumber}`} subtitle={`${group.customerName || "Sin cliente"} · ${group.totalItems || 0} prenda(s)`} onClose={onClose} maxWidth="max-w-[860px]">
-      <div className="grid gap-3 sm:grid-cols-4">
-        <DetailSummary label="Productos" value={String(group.totalLines || lines.length)} />
-        <DetailSummary label="Unidades" value={String(group.totalItems || 0)} />
+      <div className="grid gap-3 sm:grid-cols-5">
+        <DetailSummary label="Subtotal" value={formatCurrency(subtotal)} />
+        <DetailSummary label="Descuento" value={formatCurrency(discount)} danger={discount > 0} />
+        <DetailSummary label="Total" value={formatCurrency(total)} />
         <DetailSummary label="Pagado" value={formatCurrency(paid)} success />
         <DetailSummary label="Saldo" value={formatCurrency(balance)} danger={balance > 0} />
       </div>
@@ -1076,22 +1176,167 @@ function ManualReservationModal({
   products,
   categories,
   defaultDays,
+  initialGroup = null,
   processing,
   onClose,
   onSubmit,
 }) {
-  const [form, setForm] = useState({
-    customerId: "",
-    customerName: "",
-    customerDocument: "",
-    customerPhone: "",
-    reservationDays: String(defaultDays || 7),
-    initialPayment: "",
-    initialPaymentMethod: "efectivo",
-    notes: "",
-  });
+  const isEditing = Boolean(initialGroup?.id);
 
-  const [items, setItems] = useState([]);
+  const [form, setForm] = useState(() => ({
+    customerId: initialGroup?.customerId || "",
+    customerName: initialGroup?.customerName || "",
+    customerDocument:
+      initialGroup?.customerDocument || "",
+    customerPhone:
+      initialGroup?.customerPhone || "",
+    reservationDays: String(
+      initialGroup?.reservationDays ||
+        defaultDays ||
+        7
+    ),
+    initialPayment: isEditing
+      ? formatMoneyInput(
+          initialGroup?.amountPaid || 0
+        )
+      : "",
+    initialPaymentMethod:
+      initialGroup?.initialPaymentMethod ||
+      "efectivo",
+    discount: formatMoneyInput(
+      initialGroup?.discount || 0
+    ),
+    notes: initialGroup?.notes || "",
+  }));
+
+  function lineMatches(
+    line,
+    productId,
+    variantId,
+    promotionMode
+  ) {
+    return (
+      String(line?.productId || "") ===
+        String(productId || "") &&
+      String(
+        line?.variantId || "legacy-variant"
+      ) ===
+        String(variantId || "legacy-variant") &&
+      Boolean(line?.isPromotion) ===
+        Boolean(promotionMode)
+    );
+  }
+
+  function getReservedByVariant(
+    productId,
+    variantId,
+    promotionMode = false
+  ) {
+    return (initialGroup?.lines || []).reduce(
+      (total, line) =>
+        lineMatches(
+          line,
+          productId,
+          variantId,
+          promotionMode
+        )
+          ? total + Number(line.quantity || 0)
+          : total,
+      0
+    );
+  }
+
+  function getEditAvailableStock(
+    product,
+    variant,
+    promotionMode = false
+  ) {
+    const reserved = getReservedByVariant(
+      product.id,
+      variant.id,
+      promotionMode
+    );
+
+    const currentPromotionStock =
+      getPromotionStockForVariant(
+        product,
+        variant
+      );
+
+    if (promotionMode) {
+      return currentPromotionStock + reserved;
+    }
+
+    return (
+      Math.max(
+        Number(variant.stock || 0) -
+          currentPromotionStock,
+        0
+      ) + reserved
+    );
+  }
+
+  const [items, setItems] = useState(() =>
+    (initialGroup?.lines || [])
+      .map((line) => {
+        const product = products.find(
+          (item) => item.id === line.productId
+        );
+
+        if (!product) return null;
+
+        const variant =
+          normalizeManualVariants(product).find(
+            (item) =>
+              item.id ===
+              (line.variantId || "legacy-variant")
+          ) || null;
+
+        if (!variant) return null;
+
+        const isPromotion =
+          Boolean(line.isPromotion);
+
+        return {
+          key: `${product.id}__${variant.id}__${
+            isPromotion ? "promo" : "normal"
+          }`,
+          productId: product.id,
+          productName:
+            line.productName || product.name,
+          productCode:
+            line.productCode ||
+            product.code ||
+            "",
+          product,
+          variantId: variant.id,
+          size:
+            line.productSize ||
+            line.size ||
+            variant.size ||
+            "Talla única",
+          variant,
+          quantity: Number(line.quantity || 1),
+          stock: getEditAvailableStock(
+            product,
+            variant,
+            isPromotion
+          ),
+          unitPrice: Number(
+            line.unitPrice ||
+              product.salePrice ||
+              0
+          ),
+          isPromotion,
+          promotionPrice: Number(
+            line.promotionPrice || 0
+          ),
+          promotionNote:
+            line.promotionNote || "",
+        };
+      })
+      .filter(Boolean)
+  );
   const [search, setSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [sizeFilter, setSizeFilter] = useState("all");
@@ -1263,15 +1508,31 @@ function ManualReservationModal({
     [items]
   );
 
-  const initialPayment = Math.max(Number(form.initialPayment || 0), 0);
-  const balance = Math.max(subtotal - initialPayment, 0);
+  const discount = parseMoneyInput(form.discount);
+  const total = Math.max(subtotal - discount, 0);
+  const initialPayment = isEditing
+    ? Math.max(
+        Number(initialGroup?.amountPaid || 0),
+        0
+      )
+    : parseMoneyInput(form.initialPayment);
+  const balance = Math.max(total - initialPayment, 0);
   const totalItems = items.reduce(
     (total, item) => total + Number(item.quantity || 0),
     0
   );
 
   function openProduct(product) {
-    const variants = getManualAvailableVariants(product);
+    const variants = normalizeManualVariants(
+      product
+    ).filter(
+      (variant) =>
+        getEditAvailableStock(
+          product,
+          variant,
+          false
+        ) > 0
+    );
 
     if (variants.length === 0) {
       alert("Este producto no tiene stock disponible.");
@@ -1286,15 +1547,25 @@ function ManualReservationModal({
     setVariantProduct(product);
   }
 
-  function addToCart(product, variant) {
-    const stock = Number(variant.stock || 0);
+  function addToCart(
+    product,
+    variant,
+    isPromotion = false
+  ) {
+    const stock = getEditAvailableStock(
+      product,
+      variant,
+      isPromotion
+    );
 
     if (stock <= 0) {
       alert(`La talla ${variant.size} está agotada.`);
       return;
     }
 
-    const key = `${product.id}__${variant.id}`;
+    const key = `${product.id}__${variant.id}__${
+      isPromotion ? "promo" : "normal"
+    }`;
 
     setItems((current) => {
       const existing = current.find((item) => item.key === key);
@@ -1327,7 +1598,16 @@ function ManualReservationModal({
           variant,
           quantity: 1,
           stock,
-          unitPrice: Number(product.salePrice || 0),
+          unitPrice: isPromotion
+            ? Number(product.promotionPrice || 0)
+            : Number(product.salePrice || 0),
+          isPromotion,
+          promotionPrice: isPromotion
+            ? Number(product.promotionPrice || 0)
+            : 0,
+          promotionNote: isPromotion
+            ? String(product.promotionNote || "")
+            : "",
         },
       ];
     });
@@ -1382,8 +1662,19 @@ function ManualReservationModal({
       return;
     }
 
-    if (initialPayment > subtotal) {
-      alert("El valor entregado no puede superar el total.");
+    if (discount > subtotal) {
+      alert(
+        "El descuento no puede superar el subtotal."
+      );
+      return;
+    }
+
+    if (initialPayment > total) {
+      alert(
+        isEditing
+          ? "El total del apartado no puede quedar por debajo de lo que el cliente ya ha pagado."
+          : "El valor entregado no puede superar el total después del descuento."
+      );
       return;
     }
 
@@ -1393,6 +1684,10 @@ function ManualReservationModal({
         variantId: item.variantId,
         size: item.size,
         quantity: item.quantity,
+        isPromotion: Boolean(item.isPromotion),
+        pricingMode: item.isPromotion
+          ? "promotion"
+          : "normal",
       })),
       customerId: form.customerId,
       customerName: form.customerName,
@@ -1401,54 +1696,53 @@ function ManualReservationModal({
       reservationDays: form.reservationDays,
       initialPayment,
       initialPaymentMethod: form.initialPaymentMethod,
+      discount,
       notes: form.notes,
     });
   }
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/45 px-3 py-3 backdrop-blur-sm sm:px-5 sm:py-5">
-      <section className="mx-auto flex h-full w-full max-w-[1580px] flex-col overflow-hidden rounded-[30px] bg-[radial-gradient(circle_at_top_left,_rgba(239,68,68,0.055),_transparent_28%),linear-gradient(180deg,#fafafa_0%,#f5f5f6_100%)] shadow-2xl">
-        <header className="flex shrink-0 items-start justify-between gap-4 border-b border-black/[0.06] bg-white/95 px-5 py-4 backdrop-blur-xl sm:px-6">
-          <div>
-            <p className="text-[11px] font-medium uppercase tracking-[0.12em] text-red-600">
-              Tienda física
-            </p>
+    <div className="fixed inset-0 z-50 overflow-hidden bg-black/45 p-0 backdrop-blur-sm sm:p-2 lg:p-2.5">
+      <section className="mx-auto flex h-[100svh] w-full max-w-[1580px] flex-col overflow-hidden bg-[radial-gradient(circle_at_top_left,_rgba(239,68,68,0.035),_transparent_24%),linear-gradient(180deg,#fafafa_0%,#f6f6f7_100%)] shadow-2xl sm:h-[calc(100svh-1rem)] sm:rounded-[18px] lg:h-[calc(100svh-1.25rem)] lg:rounded-[20px]">
+        <header className="flex h-[44px] shrink-0 items-center justify-between border-b border-black/[0.055] bg-white/95 px-3 backdrop-blur-xl sm:h-[46px] sm:px-3.5">
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="inline-flex h-6 shrink-0 items-center rounded-full bg-red-50 px-2 text-[7px] font-medium uppercase tracking-[0.1em] text-red-600 ring-1 ring-red-100">
+              {isEditing ? "Edición" : "Tienda física"}
+            </span>
 
-            <h2 className="mt-1 text-[24px] font-medium tracking-[-0.04em]">
-              Crear nuevo apartado
+            <h2 className="truncate text-[11px] font-medium tracking-[-0.02em] text-black sm:text-[12px]">
+              {isEditing
+                ? `Editar ${initialGroup?.groupNumber || "apartado"}`
+                : "Crear apartado"}
             </h2>
-
-            <p className="mt-1 text-[12px] text-black/45">
-              Selecciona productos visualmente, registra el pago inicial y define la vigencia.
-            </p>
           </div>
 
           <button
             type="button"
             onClick={onClose}
-            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-black/[0.07] bg-white text-black/55 transition hover:bg-red-50 hover:text-red-600"
+            className="flex h-7.5 w-7.5 shrink-0 items-center justify-center rounded-lg border border-black/[0.07] bg-white text-black/45 transition hover:bg-red-50 hover:text-red-600"
             aria-label="Cerrar nuevo apartado"
           >
-            <X size={19} />
+            <X size={15} />
           </button>
         </header>
 
         <form
           onSubmit={submit}
-          className="grid min-h-0 flex-1 gap-4 overflow-hidden p-3 sm:p-4 xl:grid-cols-[minmax(0,1fr)_400px]"
+          className="grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)_auto] gap-2 overflow-hidden p-2 sm:gap-2 sm:p-2 lg:grid-cols-[minmax(0,1fr)_clamp(330px,25vw,430px)] lg:grid-rows-1 2xl:grid-cols-[minmax(0,1fr)_clamp(390px,24vw,470px)] xl:gap-[clamp(8px,0.65vw,12px)] xl:p-[clamp(8px,0.65vw,12px)]"
         >
-          <section className="min-h-0 overflow-y-auto rounded-[28px] border border-white bg-white/95 p-3 shadow-[0_20px_65px_rgba(0,0,0,0.055)] ring-1 ring-black/[0.045] sm:p-4">
-            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-[1.4fr_.8fr_.7fr_.7fr]">
+          <section className="min-h-0 min-w-0 overflow-y-auto overscroll-contain rounded-[18px] border border-white bg-white/95 p-2.5 shadow-[0_20px_65px_rgba(0,0,0,0.055)] ring-1 ring-black/[0.045] sm:rounded-[22px] sm:p-3 lg:rounded-[24px] xl:p-4">
+            <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-[minmax(220px,1.35fr)_minmax(150px,.85fr)_minmax(120px,.65fr)_minmax(135px,.72fr)]">
               <label className="relative block">
                 <Search
-                  size={16}
-                  className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-black/35"
+                  size={13}
+                  className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-black/35"
                 />
 
                 <input
                   value={search}
                   onChange={(event) => setSearch(event.target.value)}
-                  className="h-11 w-full rounded-2xl border border-black/[0.08] bg-white pl-11 pr-4 text-[13px] outline-none transition placeholder:text-black/35 focus:border-red-600 focus:ring-4 focus:ring-red-600/10"
+                  className="h-[clamp(36px,2.4vw,44px)] w-full rounded-[clamp(10px,0.8vw,14px)] border border-black/[0.08] bg-white pl-[clamp(36px,2.4vw,42px)] pr-3 text-[clamp(10px,0.7vw,12px)] outline-none transition placeholder:text-black/35 focus:border-red-600 focus:ring-3 focus:ring-red-600/10"
                   placeholder="Buscar producto, código, categoría o talla..."
                 />
               </label>
@@ -1456,7 +1750,7 @@ function ManualReservationModal({
               <select
                 value={categoryFilter}
                 onChange={(event) => setCategoryFilter(event.target.value)}
-                className="h-11 rounded-2xl border border-black/[0.08] bg-white px-4 text-[13px] outline-none focus:border-red-600 focus:ring-4 focus:ring-red-600/10"
+                className="h-[clamp(36px,2.4vw,44px)] rounded-[clamp(10px,0.8vw,14px)] border border-black/[0.08] bg-white px-[clamp(10px,0.8vw,14px)] text-[clamp(10px,0.7vw,12px)] outline-none focus:border-red-600 focus:ring-3 focus:ring-red-600/10"
               >
                 <option value="all">Todas las categorías</option>
                 {categories.map((category) => (
@@ -1469,7 +1763,7 @@ function ManualReservationModal({
               <select
                 value={sizeFilter}
                 onChange={(event) => setSizeFilter(event.target.value)}
-                className="h-11 rounded-2xl border border-black/[0.08] bg-white px-4 text-[13px] outline-none focus:border-red-600 focus:ring-4 focus:ring-red-600/10"
+                className="h-[clamp(36px,2.4vw,44px)] rounded-[clamp(10px,0.8vw,14px)] border border-black/[0.08] bg-white px-[clamp(10px,0.8vw,14px)] text-[clamp(10px,0.7vw,12px)] outline-none focus:border-red-600 focus:ring-3 focus:ring-red-600/10"
               >
                 <option value="all">Todas las tallas</option>
                 {availableSizes.map((size) => (
@@ -1482,7 +1776,7 @@ function ManualReservationModal({
               <select
                 value={stockFilter}
                 onChange={(event) => setStockFilter(event.target.value)}
-                className="h-11 rounded-2xl border border-black/[0.08] bg-white px-4 text-[13px] outline-none focus:border-red-600 focus:ring-4 focus:ring-red-600/10"
+                className="h-[clamp(36px,2.4vw,44px)] rounded-[clamp(10px,0.8vw,14px)] border border-black/[0.08] bg-white px-[clamp(10px,0.8vw,14px)] text-[clamp(10px,0.7vw,12px)] outline-none focus:border-red-600 focus:ring-3 focus:ring-red-600/10"
               >
                 <option value="available">Disponibles</option>
                 <option value="low">Stock bajo</option>
@@ -1491,20 +1785,20 @@ function ManualReservationModal({
               </select>
             </div>
 
-            <div className="mt-4 flex items-center justify-between gap-3">
+            <div className="mt-2.5 flex items-center justify-between gap-2">
               <div>
-                <p className="text-[14px] font-medium">Productos</p>
-                <p className="mt-0.5 text-[12px] text-black/45">
+                <p className="text-[clamp(11px,0.78vw,14px)] font-medium">Productos</p>
+                <p className="mt-0.5 text-[clamp(8px,0.58vw,10px)] text-black/45">
                   {filteredProducts.length} resultado(s)
                 </p>
               </div>
 
-              <div className="rounded-full bg-red-50 px-3 py-1.5 text-[11px] text-red-600">
+              <div className="rounded-full bg-red-50 px-[clamp(8px,0.7vw,12px)] py-[clamp(4px,0.35vw,6px)] text-[clamp(7.5px,0.55vw,10px)] text-red-600">
                 Selecciona para apartar
               </div>
             </div>
 
-            <section className="mt-4">
+            <section className="mt-2.5">
               {filteredProducts.length === 0 ? (
                 <div className="rounded-[22px] bg-black/[0.025] p-10 text-center">
                   <PackageSearch size={34} className="mx-auto text-black/30" />
@@ -1516,7 +1810,13 @@ function ManualReservationModal({
                   </p>
                 </div>
               ) : (
-                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
+                <div
+                  className="grid gap-[clamp(8px,0.65vw,12px)]"
+                  style={{
+                    gridTemplateColumns:
+                      "repeat(auto-fit, minmax(min(100%, clamp(145px, 10.5vw, 205px)), 1fr))",
+                  }}
+                >
                   {filteredProducts.map((product) => (
                     <ManualProductCard
                       key={product.id}
@@ -1529,12 +1829,12 @@ function ManualReservationModal({
             </section>
           </section>
 
-          <aside className="min-h-0 overflow-hidden rounded-[28px] bg-white shadow-[0_18px_55px_rgba(0,0,0,0.07)] ring-1 ring-black/[0.07]">
-            <div className="flex h-full flex-col">
-              <div className="flex items-center justify-between border-b border-black/[0.06] px-5 py-4">
+          <aside className="min-h-0 max-h-[48svh] overflow-hidden rounded-[18px] bg-white shadow-[0_18px_55px_rgba(0,0,0,0.07)] ring-1 ring-black/[0.07] sm:rounded-[22px] lg:max-h-none lg:rounded-[22px]">
+            <div className="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)_auto]">
+              <div className="flex items-center justify-between border-b border-black/[0.06] px-3.5 py-2.5 sm:px-4 sm:py-3">
                 <div>
-                  <h3 className="text-[16px] font-medium">Apartado actual</h3>
-                  <p className="mt-0.5 text-[11px] text-black/45">
+                  <h3 className="text-[clamp(13px,0.9vw,16px)] font-medium">Apartado actual</h3>
+                  <p className="mt-0.5 text-[clamp(9px,0.62vw,11px)] text-black/45">
                     {totalItems} unidad(es) · {items.length} línea(s)
                   </p>
                 </div>
@@ -1550,212 +1850,266 @@ function ManualReservationModal({
                 )}
               </div>
 
-              <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
-                {items.length === 0 ? (
-                  <div className="rounded-[22px] bg-black/[0.025] px-5 py-8 text-center">
-                    <ShoppingBag size={30} className="mx-auto text-black/25" />
-                    <p className="mt-3 text-[14px] font-medium">
-                      El apartado está vacío
-                    </p>
-                    <p className="mt-1 text-[12px] leading-5 text-black/45">
-                      Selecciona productos y tallas para comenzar.
-                    </p>
-                  </div>
-                ) : (
-                  <div className="space-y-2">
-                    {items.map((item) => (
-                      <ManualCartItem
-                        key={item.key}
-                        item={item}
-                        onUpdateQuantity={updateItemQuantity}
-                        onRemove={removeItem}
-                      />
-                    ))}
-                  </div>
-                )}
+              <div className="min-h-0 overflow-hidden px-3 py-2.5 sm:px-3.5 lg:px-4">
+                <div className="grid h-full min-h-0 grid-rows-[minmax(58px,1fr)_auto] gap-2">
+                  <section className="min-h-0 overflow-y-auto overscroll-contain rounded-[13px] bg-black/[0.018] p-1.5 ring-1 ring-black/[0.045]">
+                    {items.length === 0 ? (
+                      <div className="flex min-h-[56px] items-center justify-center gap-2 rounded-[10px] bg-white px-2.5 py-1.5">
+                        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-black/[0.03]">
+                          <ShoppingBag size={15} className="text-black/25" />
+                        </div>
 
-                <section className="mt-4 border-t border-black/[0.06] pt-4">
-                  <div className="grid gap-2">
-                    <label className="block">
-                      <span className="text-[11px] font-medium text-black/60">
-                        Cliente por cédula
-                      </span>
+                        <div className="min-w-0">
+                          <p className="text-[9px] font-medium">
+                            Apartado vacío
+                          </p>
+                          <p className="mt-0.5 text-[7.5px] leading-3.5 text-black/42">
+                            Selecciona productos y tallas.
+                          </p>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="space-y-1.5">
+                        {items.map((item) => (
+                          <ManualCartItem
+                            key={item.key}
+                            item={item}
+                            onUpdateQuantity={updateItemQuantity}
+                            onRemove={removeItem}
+                          />
+                        ))}
+                      </div>
+                    )}
+                  </section>
 
-                      <div className="relative mt-2">
-                        <Search
-                          size={14}
-                          className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-black/35"
-                        />
+                  <section className="rounded-[13px] border border-black/[0.055] bg-white p-2.5">
+                    <div className="grid gap-1.5">
+                      <label className="block">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-[clamp(8px,0.58vw,10px)] font-medium text-black/55">
+                            Cliente por cédula
+                          </span>
 
-                        <input
-                          value={form.customerDocument}
-                          onChange={(event) =>
-                            handleCustomerDocumentChange(event.target.value)
+                          {customerLookup.status === "found" && (
+                            <span className="inline-flex items-center gap-1 text-[7px] font-medium text-emerald-600">
+                              <CheckCircle2 size={9} />
+                              Encontrado
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="relative mt-1">
+                          <Search
+                            size={12}
+                            className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-black/32"
+                          />
+
+                          <input
+                            value={form.customerDocument}
+                            onChange={(event) =>
+                              handleCustomerDocumentChange(event.target.value)
+                            }
+                            inputMode="numeric"
+                            autoComplete="off"
+                            className="h-[clamp(32px,2.3vw,40px)] w-full rounded-[clamp(8px,0.6vw,11px)] border border-black/[0.08] pl-[clamp(32px,2.3vw,38px)] pr-3 text-[clamp(9px,0.65vw,11px)] outline-none focus:border-red-600 focus:ring-3 focus:ring-red-600/10"
+                            placeholder="Cédula del cliente"
+                          />
+                        </div>
+                      </label>
+
+                      {form.customerDocument &&
+                        customerLookup.status === "searching" && (
+                          <div className="flex items-center gap-1.5 rounded-lg bg-red-50 px-2 py-1.5 text-[7.5px] text-red-600">
+                            <span className="h-2.5 w-2.5 animate-spin rounded-full border-2 border-red-200 border-t-red-600" />
+                            Verificando...
+                          </div>
+                        )}
+
+                      {form.customerDocument &&
+                        customerLookup.status === "found" && (
+                          <div className="flex items-center justify-between gap-2 rounded-lg bg-emerald-50/75 px-2 py-1.5">
+                            <div className="min-w-0">
+                              <p className="truncate text-[8.5px] font-medium text-black">
+                                {form.customerName || "Cliente registrado"}
+                              </p>
+                              <p className="mt-0.5 truncate text-[7px] text-black/42">
+                                {form.customerPhone || "Sin teléfono"}
+                              </p>
+                            </div>
+
+                            <CheckCircle2
+                              size={12}
+                              className="shrink-0 text-emerald-600"
+                            />
+                          </div>
+                        )}
+
+                      {form.customerDocument &&
+                        customerLookup.status === "not-found" && (
+                          <div className="rounded-lg border border-orange-100 bg-orange-50/55 p-2">
+                            <p className="text-[7.5px] font-medium text-orange-700">
+                              Cliente nuevo
+                            </p>
+
+                            <div className="mt-1.5 grid grid-cols-2 gap-1.5 lg:grid-cols-1 xl:grid-cols-2">
+                              <input
+                                value={form.customerName}
+                                onChange={(event) =>
+                                  setForm((current) => ({
+                                    ...current,
+                                    customerName: event.target.value,
+                                  }))
+                                }
+                                className="h-7 rounded-md border border-black/[0.08] bg-white px-2 text-[8px] outline-none placeholder:text-black/35 focus:border-red-600"
+                                placeholder="Nombre *"
+                              />
+
+                              <input
+                                value={form.customerPhone}
+                                onChange={(event) =>
+                                  setForm((current) => ({
+                                    ...current,
+                                    customerPhone: event.target.value
+                                      .replace(/\D/g, "")
+                                      .slice(0, 15),
+                                  }))
+                                }
+                                inputMode="tel"
+                                className="h-7 rounded-md border border-black/[0.08] bg-white px-2 text-[8px] outline-none placeholder:text-black/35 focus:border-red-600"
+                                placeholder="Teléfono"
+                              />
+                            </div>
+                          </div>
+                        )}
+
+                      {form.customerDocument &&
+                        customerLookup.status === "error" && (
+                          <div className="rounded-lg bg-red-50 px-2 py-1.5 text-[7.5px] text-red-700">
+                            No se pudo verificar la cédula.
+                          </div>
+                        )}
+
+                      <div className="grid grid-cols-2 gap-1.5">
+                        <Input
+                          label="Días"
+                          type="number"
+                          min="1"
+                          max="365"
+                          value={form.reservationDays}
+                          onChange={(value) =>
+                            setForm((current) => ({
+                              ...current,
+                              reservationDays: value,
+                            }))
                           }
-                          inputMode="numeric"
-                          autoComplete="off"
-                          className="h-11 w-full rounded-2xl border border-black/[0.08] pl-9 pr-3 text-[12px] outline-none focus:border-red-600 focus:ring-4 focus:ring-red-600/10"
-                          placeholder="Escribe la cédula del cliente"
+                          compact
+                        />
+
+                        <MoneyInput
+                          label="Descuento"
+                          value={form.discount}
+                          onChange={(value) =>
+                            setForm((current) => ({
+                              ...current,
+                              discount: value,
+                            }))
+                          }
+                          compact
                         />
                       </div>
-                    </label>
 
-                    {form.customerDocument && customerLookup.status === "searching" && (
-                      <div className="flex items-center gap-2 rounded-2xl border border-red-100 bg-red-50 px-3 py-2.5 text-[10px] text-red-600">
-                        <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-red-200 border-t-red-600" />
-                        Buscando cliente por cédula...
-                      </div>
-                    )}
-
-                    {form.customerDocument && customerLookup.status === "found" && (
-                      <div className="rounded-2xl border border-emerald-100 bg-emerald-50/80 p-3">
-                        <div className="flex items-start gap-2.5">
-                          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-white text-emerald-600 ring-1 ring-emerald-100">
-                            <CheckCircle2 size={16} />
-                          </div>
-
-                          <div className="min-w-0 flex-1">
-                            <p className="text-[10px] font-medium text-emerald-700">
-                              Cliente encontrado
-                            </p>
-                            <p className="mt-1 truncate text-[12px] font-medium text-black">
-                              {form.customerName || "Cliente registrado"}
-                            </p>
-                            <p className="mt-0.5 truncate text-[10px] text-black/45">
-                              {form.customerPhone || "Sin teléfono registrado"}
-                            </p>
-                          </div>
-                        </div>
-                      </div>
-                    )}
-
-                    {form.customerDocument && customerLookup.status === "not-found" && (
-                      <div className="rounded-2xl border border-orange-100 bg-orange-50/70 p-3">
-                        <div className="mb-2">
-                          <p className="text-[10px] font-medium text-orange-700">
-                            Cliente nuevo
-                          </p>
-                          <p className="mt-0.5 text-[9px] leading-4 text-black/42">
-                            Esta cédula no está registrada. Completa los datos y el cliente se creará automáticamente con el apartado.
-                          </p>
-                        </div>
-
-                        <div className="grid gap-2">
-                          <input
-                            value={form.customerName}
-                            onChange={(event) =>
+                      {!isEditing ? (
+                        <div className="grid grid-cols-2 gap-1.5">
+                          <Select
+                            label="Método"
+                            value={form.initialPaymentMethod}
+                            onChange={(value) =>
                               setForm((current) => ({
                                 ...current,
-                                customerName: event.target.value,
+                                initialPaymentMethod: value,
                               }))
                             }
-                            className="h-10 rounded-xl border border-black/[0.08] bg-white px-3 text-[12px] outline-none placeholder:text-black/35 focus:border-red-600 focus:ring-4 focus:ring-red-600/10"
-                            placeholder="Nombre completo *"
+                            compact
                           />
 
-                          <input
-                            value={form.customerPhone}
-                            onChange={(event) =>
+                          <MoneyInput
+                            label="Valor entregado"
+                            value={form.initialPayment}
+                            onChange={(value) =>
                               setForm((current) => ({
                                 ...current,
-                                customerPhone: event.target.value.replace(/\D/g, "").slice(0, 15),
+                                initialPayment: value,
                               }))
                             }
-                            inputMode="tel"
-                            className="h-10 rounded-xl border border-black/[0.08] bg-white px-3 text-[12px] outline-none placeholder:text-black/35 focus:border-red-600 focus:ring-4 focus:ring-red-600/10"
-                            placeholder="Teléfono"
+                            compact
                           />
                         </div>
-                      </div>
-                    )}
+                      ) : (
+                        <ReadOnlyCompactField
+                          label="Ya pagado"
+                          value={formatCurrency(initialPayment)}
+                          success
+                        />
+                      )}
 
-                    {form.customerDocument && customerLookup.status === "error" && (
-                      <div className="rounded-2xl border border-red-100 bg-red-50 px-3 py-2.5 text-[10px] leading-4 text-red-700">
-                        No se pudo verificar la cédula. Revisa la conexión e intenta nuevamente.
-                      </div>
-                    )}
-
-                    <div className="grid grid-cols-2 gap-2">
                       <Input
-                        label="Días del apartado"
-                        type="number"
-                        min="1"
-                        max="365"
-                        value={form.reservationDays}
+                        label="Notas"
+                        value={form.notes}
                         onChange={(value) =>
                           setForm((current) => ({
                             ...current,
-                            reservationDays: value,
+                            notes: value,
                           }))
                         }
-                      />
-
-                      <Select
-                        label="Método pago inicial"
-                        value={form.initialPaymentMethod}
-                        onChange={(value) =>
-                          setForm((current) => ({
-                            ...current,
-                            initialPaymentMethod: value,
-                          }))
-                        }
+                        compact
                       />
                     </div>
-
-                    <Input
-                      label="Valor entregado"
-                      type="number"
-                      min="0"
-                      max={subtotal}
-                      value={form.initialPayment}
-                      onChange={(value) =>
-                        setForm((current) => ({
-                          ...current,
-                          initialPayment: value,
-                        }))
-                      }
-                    />
-
-                    <Input
-                      label="Notas"
-                      value={form.notes}
-                      onChange={(value) =>
-                        setForm((current) => ({
-                          ...current,
-                          notes: value,
-                        }))
-                      }
-                    />
-                  </div>
-                </section>
+                  </section>
+                </div>
               </div>
 
-              <div className="border-t border-black/[0.06] bg-white px-5 py-4">
-                <div className="space-y-2 text-[12px]">
+              <div className="border-t border-black/[0.06] bg-white px-3.5 py-2.5 sm:px-4">
+                <div className="space-y-[clamp(4px,0.35vw,7px)] text-[clamp(9px,0.65vw,11px)]">
                   <div className="flex justify-between gap-4">
-                    <span className="text-black/50">Total</span>
+                    <span className="text-black/50">Subtotal</span>
                     <span>{formatCurrency(subtotal)}</span>
                   </div>
 
+                  {discount > 0 && (
+                    <div className="flex justify-between gap-4">
+                      <span className="text-black/50">Descuento</span>
+                      <span className="text-red-600">
+                        -{formatCurrency(discount)}
+                      </span>
+                    </div>
+                  )}
+
+                  <div className="flex justify-between gap-4 font-medium">
+                    <span className="text-black/60">Total</span>
+                    <span>{formatCurrency(total)}</span>
+                  </div>
+
                   <div className="flex justify-between gap-4">
-                    <span className="text-black/50">Valor entregado</span>
+                    <span className="text-black/50">
+                      {isEditing ? "Ya pagado" : "Valor entregado"}
+                    </span>
                     <span className="text-emerald-600">
                       {formatCurrency(initialPayment)}
                     </span>
                   </div>
 
-                  <div className="flex items-end justify-between gap-4 border-t border-black/[0.07] pt-3">
+                  <div className="flex items-end justify-between gap-3 border-t border-black/[0.07] pt-2">
                     <div>
-                      <p className="text-[11px] text-black/45">
+                      <p className="text-[8px] text-black/45 sm:text-[9px]">
                         Saldo pendiente
                       </p>
 
-                      <p className="mt-0.5 text-[25px] font-medium tracking-[-0.05em] text-red-600">
+                      <p className="mt-0.5 text-[clamp(18px,1.45vw,26px)] font-medium tracking-[-0.05em] text-red-600">
                         {formatCurrency(balance)}
                       </p>
                     </div>
 
-                    <span className="rounded-full bg-red-50 px-3 py-1.5 text-[10px] text-red-600">
+                    <span className="rounded-full bg-red-50 px-2.5 py-1 text-[8px] text-red-600">
                       {form.reservationDays || 0} día(s)
                     </span>
                   </div>
@@ -1764,12 +2118,16 @@ function ManualReservationModal({
                 <button
                   type="submit"
                   disabled={processing || items.length === 0}
-                  className="mt-4 inline-flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-red-600 px-5 text-[14px] font-medium text-white shadow-lg shadow-red-600/20 transition hover:bg-red-700 disabled:cursor-not-allowed disabled:bg-black/15 disabled:shadow-none"
+                  className="mt-[clamp(10px,0.75vw,14px)] inline-flex h-[clamp(38px,2.7vw,46px)] w-full items-center justify-center gap-2 rounded-[clamp(10px,0.75vw,14px)] bg-red-600 px-4 text-[clamp(10px,0.72vw,12px)] font-medium text-white shadow-md shadow-red-600/15 transition hover:bg-red-700 disabled:cursor-not-allowed disabled:bg-black/15 disabled:shadow-none"
                 >
                   <ShoppingBag size={17} />
                   {processing
-                    ? "Creando apartado..."
-                    : "Crear apartado manual"}
+                    ? isEditing
+                      ? "Guardando cambios..."
+                      : "Creando apartado..."
+                    : isEditing
+                      ? "Guardar cambios"
+                      : "Crear apartado manual"}
                 </button>
               </div>
             </div>
@@ -1781,7 +2139,20 @@ function ManualReservationModal({
         <ManualVariantSelectorModal
           product={variantProduct}
           onClose={() => setVariantProduct(null)}
-          onSelect={(variant) => addToCart(variantProduct, variant)}
+          getAvailableStock={(variant) =>
+            getEditAvailableStock(
+              variantProduct,
+              variant,
+              false
+            )
+          }
+          onSelect={(variant) =>
+            addToCart(
+              variantProduct,
+              variant,
+              false
+            )
+          }
         />
       )}
     </div>
@@ -1795,14 +2166,14 @@ function ManualProductCard({ product, onAdd }) {
   const stockStatus = getManualStockStatus(stock);
 
   return (
-    <article className="group overflow-hidden rounded-[22px] bg-white shadow-[0_12px_35px_rgba(0,0,0,0.035)] ring-1 ring-black/[0.06] transition hover:-translate-y-0.5 hover:shadow-[0_20px_55px_rgba(0,0,0,0.07)]">
+    <article className="group min-w-0 w-full overflow-hidden rounded-[clamp(13px,0.9vw,18px)] bg-white shadow-[0_8px_22px_rgba(0,0,0,0.028)] ring-1 ring-black/[0.06] transition hover:-translate-y-0.5 hover:shadow-[0_16px_38px_rgba(0,0,0,0.055)]">
       <button
         type="button"
         onClick={onAdd}
         disabled={stock <= 0}
         className="block w-full text-left disabled:cursor-not-allowed"
       >
-        <div className="relative aspect-[4/3.2] overflow-hidden bg-black/[0.025]">
+        <div className="relative aspect-[1.12/1] overflow-hidden bg-black/[0.025]">
           {coverImage.url ? (
             <img
               src={coverImage.url}
@@ -1816,56 +2187,56 @@ function ManualProductCard({ product, onAdd }) {
           )}
 
           <span
-            className={`absolute left-3 top-3 rounded-full px-2.5 py-1 text-[10px] ${stockStatus.badgeClass}`}
+            className={`absolute left-1.5 top-1.5 rounded-full px-1.5 py-0.5 text-[6.5px] font-medium sm:text-[7px] ${stockStatus.badgeClass}`}
           >
             {stockStatus.label}
           </span>
 
-          <span className="absolute bottom-3 right-3 rounded-full bg-black/75 px-2.5 py-1 text-[10px] text-white backdrop-blur">
+          <span className="absolute bottom-1.5 right-1.5 rounded-full bg-black/75 px-1.5 py-0.5 text-[6.5px] text-white backdrop-blur sm:text-[7px]">
             {variants.length} talla(s)
           </span>
         </div>
 
-        <div className="p-3">
-          <p className="text-[11px] text-black/45">
+        <div className="p-[clamp(8px,0.7vw,12px)]">
+          <p className="truncate text-[clamp(7.5px,0.52vw,10px)] leading-[1.35] text-black/45">
             {product.code || "Sin código"} ·{" "}
             {product.categoryName || "Sin categoría"}
           </p>
 
-          <h3 className="mt-1 truncate text-[14px] font-medium">
+          <h3 className="mt-[clamp(2px,0.2vw,4px)] truncate text-[clamp(10px,0.72vw,13px)] font-medium leading-[1.35]">
             {product.name}
           </h3>
 
-          <div className="mt-2 flex flex-wrap gap-1">
+          <div className="mt-1.5 flex min-h-[20px] flex-wrap gap-0.5">
             {variants.slice(0, 4).map((variant) => (
               <span
                 key={variant.id}
-                className="rounded-full bg-black/[0.035] px-2 py-1 text-[10px] text-black/60"
+                className="rounded-full bg-black/[0.035] px-1.5 py-0.5 text-[7px] leading-3 text-black/60"
               >
                 {variant.size}
               </span>
             ))}
 
             {variants.length > 4 && (
-              <span className="rounded-full bg-red-50 px-2 py-1 text-[10px] text-red-600">
+              <span className="rounded-full bg-red-50 px-1.5 py-0.5 text-[7px] leading-3 text-red-600">
                 +{variants.length - 4}
               </span>
             )}
           </div>
 
-          <div className="mt-3 flex items-end justify-between gap-3">
+          <div className="mt-2 flex items-end justify-between gap-1.5">
             <div>
-              <p className="text-[17px] font-medium tracking-[-0.035em]">
+              <p className="text-[clamp(11px,0.8vw,15px)] font-medium tracking-[-0.035em]">
                 {formatCurrency(product.salePrice)}
               </p>
 
-              <p className={`mt-1 text-[11px] ${stockStatus.stockClass}`}>
+              <p className={`mt-0.5 text-[clamp(7.5px,0.52vw,10px)] ${stockStatus.stockClass}`}>
                 {stock} unidad(es)
               </p>
             </div>
 
-            <span className="inline-flex h-9 items-center gap-1.5 rounded-xl bg-red-600 px-3 text-[11px] font-medium text-white shadow-lg shadow-red-600/15">
-              <Plus size={14} />
+            <span className="inline-flex h-[clamp(28px,2vw,36px)] shrink-0 items-center gap-1 rounded-[clamp(8px,0.6vw,10px)] bg-red-600 px-[clamp(8px,0.7vw,12px)] text-[clamp(7.5px,0.55vw,10px)] font-medium text-white shadow-md shadow-red-600/10">
+              <Plus size={13} />
               Agregar
             </span>
           </div>
@@ -1885,9 +2256,9 @@ function ManualCartItem({
     Number(item.unitPrice || 0) * Number(item.quantity || 0);
 
   return (
-    <article className="rounded-[19px] border border-black/[0.06] bg-white p-3">
-      <div className="flex gap-3">
-        <div className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-black/[0.025]">
+    <article className="rounded-[10px] border border-black/[0.06] bg-white p-1.5">
+      <div className="flex gap-2">
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-black/[0.025]">
           {coverImage.url ? (
             <img
               src={coverImage.url}
@@ -1902,12 +2273,13 @@ function ManualCartItem({
         <div className="min-w-0 flex-1">
           <div className="flex items-start justify-between gap-2">
             <div className="min-w-0">
-              <h3 className="truncate text-[12px] font-medium">
+              <h3 className="truncate text-[9px] font-medium">
                 {item.productName}
               </h3>
 
-              <p className="mt-1 text-[10px] text-black/45">
+              <p className="mt-0.5 truncate text-[7px] text-black/45">
                 {item.productCode || "Sin código"} · Talla {item.size}
+                {item.isPromotion ? " · PROMO" : ""}
               </p>
             </div>
 
@@ -1934,9 +2306,8 @@ function ManualCartItem({
               </button>
 
               <input
-                type="number"
-                min="1"
-                max={item.stock}
+                type="text"
+                inputMode="numeric"
                 value={item.quantity}
                 onChange={(event) =>
                   onUpdateQuantity(item.key, event.target.value)
@@ -1956,7 +2327,7 @@ function ManualCartItem({
               </button>
             </div>
 
-            <p className="text-[13px] font-medium">
+            <p className="text-[9.5px] font-medium">
               {formatCurrency(subtotal)}
             </p>
           </div>
@@ -1970,13 +2341,23 @@ function ManualVariantSelectorModal({
   product,
   onClose,
   onSelect,
+  getAvailableStock = null,
 }) {
-  const variants = getManualAvailableVariants(product);
+  const variants = normalizeManualVariants(
+    product
+  ).filter((variant) => {
+    const available =
+      typeof getAvailableStock === "function"
+        ? getAvailableStock(variant)
+        : Number(variant.stock || 0);
+
+    return available > 0;
+  });
   const coverImage = getProductCoverImage(product);
 
   return (
-    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/45 px-4 py-6 backdrop-blur-sm">
-      <section className="w-full max-w-[460px] overflow-hidden rounded-[28px] bg-white shadow-2xl">
+    <div className="fixed inset-0 z-[70] flex items-end justify-center bg-black/45 p-0 backdrop-blur-sm sm:items-center sm:px-4 sm:py-5">
+      <section className="max-h-[88svh] w-full overflow-hidden rounded-t-[22px] bg-white shadow-2xl sm:max-w-[460px] sm:rounded-[24px]">
         <div className="flex items-start justify-between border-b border-black/[0.06] px-5 py-4">
           <div>
             <p className="text-[12px] text-red-600">Seleccionar variante</p>
@@ -1992,8 +2373,8 @@ function ManualVariantSelectorModal({
           </button>
         </div>
 
-        <div className="p-5">
-          <div className="flex items-center gap-3 rounded-[20px] bg-black/[0.025] p-3">
+        <div className="max-h-[calc(88svh-68px)] overflow-y-auto p-4 sm:p-5">
+          <div className="flex items-center gap-3 rounded-[16px] bg-black/[0.025] p-2.5 sm:p-3">
             <div className="flex h-16 w-16 items-center justify-center overflow-hidden rounded-2xl bg-white">
               {coverImage.url ? (
                 <img
@@ -2031,7 +2412,9 @@ function ManualVariantSelectorModal({
               >
                 <p className="text-[14px] font-medium">{variant.size}</p>
                 <p className="mt-1 text-[11px] text-emerald-600">
-                  {variant.stock} disponible(s)
+                  {typeof getAvailableStock === "function"
+                    ? getAvailableStock(variant)
+                    : variant.stock} disponible(s)
                 </p>
               </button>
             ))}
@@ -2258,36 +2641,128 @@ function Input({
   type = "text",
   min,
   max,
+  compact = false,
 }) {
   return (
     <label className="block">
-      <span className="text-[11px] font-medium text-black/60">
+      <span
+        className={
+          compact
+            ? "text-[clamp(7px,0.52vw,9px)] font-medium text-black/55"
+            : "text-[11px] font-medium text-black/60"
+        }
+      >
         {label}
       </span>
 
       <input
-        type={type}
+        type={type === "number" ? "text" : type}
+        inputMode={type === "number" ? "numeric" : undefined}
         min={min}
         max={max}
         value={value}
         onChange={(event) => onChange(event.target.value)}
-        className="mt-2 h-11 w-full rounded-2xl border border-black/[0.08] px-3 text-[12px] outline-none focus:border-red-600 focus:ring-4 focus:ring-red-600/10"
+        className={
+          compact
+            ? "mt-0.5 h-[clamp(28px,2vw,34px)] w-full rounded-[clamp(6px,0.5vw,9px)] border border-black/[0.08] px-[clamp(8px,0.6vw,10px)] text-[clamp(8px,0.58vw,10px)] outline-none focus:border-red-600 focus:ring-2 focus:ring-red-600/10"
+            : "mt-1.5 h-10 w-full rounded-xl border border-black/[0.08] px-3 text-[11px] outline-none focus:border-red-600 focus:ring-4 focus:ring-red-600/10 sm:rounded-2xl"
+        }
       />
     </label>
   );
 }
 
-function Select({ label, value, onChange }) {
+
+function MoneyInput({
+  label,
+  value,
+  onChange,
+  compact = false,
+}) {
   return (
     <label className="block">
-      <span className="text-[11px] font-medium text-black/60">
+      <span
+        className={
+          compact
+            ? "text-[clamp(7px,0.52vw,9px)] font-medium text-black/55"
+            : "text-[11px] font-medium text-black/60"
+        }
+      >
+        {label}
+      </span>
+
+      <input
+        type="text"
+        inputMode="numeric"
+        value={value}
+        onChange={(event) =>
+          onChange(
+            formatMoneyInput(
+              event.target.value
+            )
+          )
+        }
+        className={
+          compact
+            ? "mt-0.5 h-[clamp(28px,2vw,34px)] w-full rounded-[clamp(6px,0.5vw,9px)] border border-black/[0.08] px-[clamp(8px,0.6vw,10px)] text-[clamp(8px,0.58vw,10px)] outline-none focus:border-red-600 focus:ring-2 focus:ring-red-600/10"
+            : "mt-1.5 h-10 w-full rounded-xl border border-black/[0.08] px-3 text-[11px] outline-none focus:border-red-600 focus:ring-4 focus:ring-red-600/10 sm:rounded-2xl"
+        }
+        placeholder="$ 0"
+      />
+    </label>
+  );
+}
+
+function ReadOnlyCompactField({
+  label,
+  value,
+  success = false,
+}) {
+  return (
+    <div>
+      <span className="text-[clamp(7px,0.52vw,9px)] font-medium text-black/55">
+        {label}
+      </span>
+
+      <div
+        className={`mt-0.5 flex h-[clamp(28px,2vw,34px)] items-center rounded-[clamp(6px,0.5vw,9px)] border px-[clamp(8px,0.6vw,10px)] text-[clamp(8px,0.58vw,10px)] font-medium ${
+          success
+            ? "border-emerald-100 bg-emerald-50/70 text-emerald-700"
+            : "border-black/[0.06] bg-black/[0.025] text-black/60"
+        }`}
+      >
+        {value}
+      </div>
+    </div>
+  );
+}
+
+function Select({
+  label,
+  value,
+  onChange,
+  compact = false,
+}) {
+  return (
+    <label className="block">
+      <span
+        className={
+          compact
+            ? "text-[clamp(7px,0.52vw,9px)] font-medium text-black/55"
+            : "text-[11px] font-medium text-black/60"
+        }
+      >
         {label}
       </span>
 
       <select
         value={value}
         onChange={(event) => onChange(event.target.value)}
-        className="mt-2 h-11 w-full rounded-2xl border border-black/[0.08] px-3 text-[12px] outline-none focus:border-red-600"
+        className={
+          compact
+            ? "mt-0.5 h-[clamp(28px,2vw,34px)] w-full rounded-[clamp(6px,0.5vw,9px)] border border-black/[0.08] px-[clamp(7px,0.55vw,10px)] text-[clamp(7.5px,0.55vw,10px)] outline-none focus:border-red-600"
+            : "mt-1.5 h-10 w-full rounded-xl border border-black/[0.08] px-3 text-[11px] outline-none focus:border-red-600 sm:rounded-2xl"
+        }
       >
         <option value="efectivo">Efectivo</option>
         <option value="transferencia">Transferencia</option>
