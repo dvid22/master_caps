@@ -42,8 +42,9 @@ import {
 } from "../../services/sales.service";
 
 import {
-  getCustomerByDocument,
   normalizeCustomerDocument,
+  normalizeCustomerPhone,
+  subscribeCustomers,
 } from "../../services/customers.service";
 
 import { formatCurrency, toNumber } from "../../utils/money";
@@ -230,12 +231,15 @@ export default function SalesPage() {
   const [products, setProducts] = useState([]);
   const [categories, setCategories] = useState([]);
   const [sales, setSales] = useState([]);
+  const [customers, setCustomers] = useState([]);
+  const [customersReady, setCustomersReady] = useState(false);
 
   const [cart, setCart] = useState([]);
   const [checkout, setCheckout] = useState(emptyCheckout);
   const [customerLookup, setCustomerLookup] = useState({
     status: "idle",
-    document: "",
+    mode: "",
+    value: "",
     customer: null,
   });
 
@@ -355,106 +359,208 @@ export default function SalesPage() {
       STORE_ID
     );
 
+    const unsubscribeCustomers = subscribeCustomers(
+      (customersData) => {
+        setCustomers(
+          Array.isArray(customersData)
+            ? customersData
+            : []
+        );
+        setCustomersReady(true);
+      },
+      () => {
+        setCustomersReady(true);
+        console.error(
+          "No se pudieron escuchar los clientes en tiempo real."
+        );
+      },
+      STORE_ID
+    );
+
     return () => {
       unsubscribeProducts();
       unsubscribeCategories();
       unsubscribeSales();
+      unsubscribeCustomers();
     };
   }, []);
 
   useEffect(() => {
-    const documentNumber = normalizeCustomerDocument(
-      checkout.customerDocument
-    );
+    const documentNumber =
+      normalizeCustomerDocument(
+        checkout.customerDocument
+      );
 
-    if (!documentNumber) {
+    const phoneNumber =
+      normalizeCustomerPhone(
+        checkout.customerPhone
+      );
+
+    const hasDocument =
+      documentNumber.length > 0;
+
+    const hasSearchablePhone =
+      !hasDocument &&
+      phoneNumber.length >= 7;
+
+    if (!hasDocument && !hasSearchablePhone) {
       setCustomerLookup({
         status: "idle",
-        document: "",
+        mode: "",
+        value: "",
         customer: null,
       });
-      return undefined;
+      return;
     }
 
-    let cancelled = false;
+    if (!customersReady) {
+      setCustomerLookup({
+        status: "searching",
+        mode: hasDocument
+          ? "document"
+          : "phone",
+        value: hasDocument
+          ? documentNumber
+          : phoneNumber,
+        customer: null,
+      });
+      return;
+    }
+
+    const mode = hasDocument
+      ? "document"
+      : "phone";
+
+    const value = hasDocument
+      ? documentNumber
+      : phoneNumber;
 
     setCustomerLookup({
       status: "searching",
-      document: documentNumber,
+      mode,
+      value,
       customer: null,
     });
 
-    const timeoutId = window.setTimeout(async () => {
-      try {
-        const customer = await getCustomerByDocument(
-          documentNumber,
-          STORE_ID
-        );
+    const timeoutId = window.setTimeout(() => {
+      const customer =
+        mode === "document"
+          ? customers.find(
+              (item) =>
+                normalizeCustomerDocument(
+                  item?.documentNumber ||
+                    item?.normalizedDocument ||
+                    item?.customerDocument
+                ) === documentNumber
+            ) || null
+          : customers.find(
+              (item) =>
+                normalizeCustomerPhone(
+                  item?.phone ||
+                    item?.customerPhone
+                ) === phoneNumber
+            ) || null;
 
-        if (cancelled) return;
-
-        if (customer) {
-          setCheckout((current) => {
-            if (
-              normalizeCustomerDocument(current.customerDocument) !==
-              documentNumber
-            ) {
-              return current;
-            }
-
-            return {
-              ...current,
-              customerId: customer.id,
-              customerName: customer.fullName || "",
-              customerPhone: customer.phone || "",
-            };
-          });
-
-          setCustomerLookup({
-            status: "found",
-            document: documentNumber,
-            customer,
-          });
-          return;
-        }
-
+      if (customer) {
         setCheckout((current) => {
-          if (
-            normalizeCustomerDocument(current.customerDocument) !==
-            documentNumber
-          ) {
+          const currentDocument =
+            normalizeCustomerDocument(
+              current.customerDocument
+            );
+
+          const currentPhone =
+            normalizeCustomerPhone(
+              current.customerPhone
+            );
+
+          const stillMatches =
+            mode === "document"
+              ? currentDocument ===
+                documentNumber
+              : !currentDocument &&
+                currentPhone ===
+                  phoneNumber;
+
+          if (!stillMatches) {
             return current;
           }
 
           return {
             ...current,
-            customerId: "",
+            customerId:
+              customer.id || "",
+            customerName:
+              customer.fullName || "",
+            customerDocument:
+              normalizeCustomerDocument(
+                customer.documentNumber ||
+                  customer.normalizedDocument ||
+                  current.customerDocument
+              ),
+            customerPhone:
+              normalizeCustomerPhone(
+                customer.phone ||
+                  current.customerPhone
+              ),
           };
         });
 
         setCustomerLookup({
-          status: "not-found",
-          document: documentNumber,
-          customer: null,
+          status: "found",
+          mode,
+          value,
+          customer,
         });
-      } catch (error) {
-        if (cancelled) return;
 
-        console.error("No se pudo buscar el cliente:", error);
-
-        setCustomerLookup({
-          status: "error",
-          document: documentNumber,
-          customer: null,
-        });
+        return;
       }
-    }, 450);
+
+      setCheckout((current) => {
+        const currentDocument =
+          normalizeCustomerDocument(
+            current.customerDocument
+          );
+
+        const currentPhone =
+          normalizeCustomerPhone(
+            current.customerPhone
+          );
+
+        const stillMatches =
+          mode === "document"
+            ? currentDocument ===
+              documentNumber
+            : !currentDocument &&
+              currentPhone ===
+                phoneNumber;
+
+        if (!stillMatches) {
+          return current;
+        }
+
+        return {
+          ...current,
+          customerId: "",
+        };
+      });
+
+      setCustomerLookup({
+        status: "not-found",
+        mode,
+        value,
+        customer: null,
+      });
+    }, 350);
 
     return () => {
-      cancelled = true;
       window.clearTimeout(timeoutId);
     };
-  }, [checkout.customerDocument]);
+  }, [
+    checkout.customerDocument,
+    checkout.customerPhone,
+    customers,
+    customersReady,
+  ]);
 
   useEffect(() => {
     const focusScanner = (event) => {
@@ -631,14 +737,24 @@ export default function SalesPage() {
   }
 
   function handleCustomerDocumentChange(value) {
-    const documentNumber = normalizeCustomerDocument(value).slice(0, 15);
+    const documentNumber =
+      normalizeCustomerDocument(value).slice(0, 15);
 
     setCheckout((current) => ({
       ...current,
       customerId: "",
       customerDocument: documentNumber,
-      customerName: "",
-      customerPhone: "",
+    }));
+  }
+
+  function handleCustomerPhoneChange(value) {
+    const phoneNumber =
+      normalizeCustomerPhone(value).slice(0, 15);
+
+    setCheckout((current) => ({
+      ...current,
+      customerId: "",
+      customerPhone: phoneNumber,
     }));
   }
 
@@ -653,7 +769,8 @@ export default function SalesPage() {
 
     setCustomerLookup({
       status: "idle",
-      document: "",
+      mode: "",
+      value: "",
       customer: null,
     });
   }
@@ -1104,32 +1221,43 @@ export default function SalesPage() {
       return;
     }
 
-    const cleanCustomerDocument = normalizeCustomerDocument(
-      checkout.customerDocument
-    );
+    const cleanCustomerDocument =
+      normalizeCustomerDocument(
+        checkout.customerDocument
+      );
 
-    if (cleanCustomerDocument) {
-      if (customerLookup.status === "searching") {
-        alert("Espera un momento mientras validamos la cédula del cliente.");
-        return;
-      }
+    const cleanCustomerPhone =
+      normalizeCustomerPhone(
+        checkout.customerPhone
+      );
 
-      if (customerLookup.status === "error") {
-        alert(
-          "No se pudo validar la cédula del cliente. Revisa la conexión e inténtalo nuevamente."
-        );
-        return;
-      }
+    const hasCustomerIdentifier =
+      Boolean(
+        cleanCustomerDocument ||
+          cleanCustomerPhone
+      );
 
-      if (
-        customerLookup.status !== "found" &&
-        !String(checkout.customerName || "").trim()
-      ) {
-        alert(
-          "Este cliente no está registrado. Escribe su nombre para crearlo con esta venta."
-        );
-        return;
-      }
+    if (
+      hasCustomerIdentifier &&
+      customerLookup.status === "searching"
+    ) {
+      alert(
+        "Espera un momento mientras validamos los datos del cliente."
+      );
+      return;
+    }
+
+    if (
+      hasCustomerIdentifier &&
+      customerLookup.status !== "found" &&
+      !String(
+        checkout.customerName || ""
+      ).trim()
+    ) {
+      alert(
+        "No encontramos este cliente. Escribe su nombre para registrar la venta con estos datos."
+      );
+      return;
     }
 
     if (
@@ -1246,7 +1374,8 @@ export default function SalesPage() {
       setCheckout(emptyCheckout);
       setCustomerLookup({
         status: "idle",
-        document: "",
+        mode: "",
+        value: "",
         customer: null,
       });
       setMobileCartOpen(false);
@@ -1483,6 +1612,7 @@ export default function SalesPage() {
               customerLookup={customerLookup}
               onUpdateCheckout={updateCheckout}
               onCustomerDocumentChange={handleCustomerDocumentChange}
+              onCustomerPhoneChange={handleCustomerPhoneChange}
               onClearCustomer={clearCustomerSelection}
               onUpdateMixedPayment={updateMixedPayment}
               onAddMixedPaymentRow={addMixedPaymentRow}
@@ -1511,6 +1641,7 @@ export default function SalesPage() {
           onClose={() => setMobileCartOpen(false)}
           onUpdateCheckout={updateCheckout}
           onCustomerDocumentChange={handleCustomerDocumentChange}
+          onCustomerPhoneChange={handleCustomerPhoneChange}
           onClearCustomer={clearCustomerSelection}
           onUpdateMixedPayment={updateMixedPayment}
           onAddMixedPaymentRow={addMixedPaymentRow}
@@ -1714,6 +1845,7 @@ function CartPanel(props) {
     customerLookup,
     onUpdateCheckout,
     onCustomerDocumentChange,
+    onCustomerPhoneChange,
     onClearCustomer,
     onUpdateMixedPayment,
     onAddMixedPaymentRow,
@@ -1774,6 +1906,7 @@ function CartPanel(props) {
             customerLookup={customerLookup}
             onUpdate={onUpdateCheckout}
             onCustomerDocumentChange={onCustomerDocumentChange}
+            onCustomerPhoneChange={onCustomerPhoneChange}
             onClearCustomer={onClearCustomer}
             onUpdateMixedPayment={onUpdateMixedPayment}
             onAddMixedPaymentRow={onAddMixedPaymentRow}
@@ -1931,14 +2064,32 @@ function CheckoutFields({
   customerLookup,
   onUpdate,
   onCustomerDocumentChange,
+  onCustomerPhoneChange,
   onClearCustomer,
   onUpdateMixedPayment,
   onAddMixedPaymentRow,
   onRemoveMixedPaymentRow,
 }) {
   const hasCustomerDocument = Boolean(
-    normalizeCustomerDocument(checkout.customerDocument)
+    normalizeCustomerDocument(
+      checkout.customerDocument
+    )
   );
+
+  const hasCustomerPhone = Boolean(
+    normalizeCustomerPhone(
+      checkout.customerPhone
+    )
+  );
+
+  const hasCustomerIdentifier =
+    hasCustomerDocument ||
+    hasCustomerPhone;
+
+  const lookupLabel =
+    customerLookup?.mode === "phone"
+      ? "teléfono"
+      : "cédula";
 
   return (
     <section className="mt-4 border-t border-black/[0.06] pt-4">
@@ -1948,118 +2099,146 @@ function CheckoutFields({
       </div>
 
       <div className="mt-3 grid gap-2">
-        <label>
-          <div className="mb-1.5 flex items-center justify-between gap-3">
-            <span className="text-[10px] text-black/45">
-              Cédula del cliente
-            </span>
+        <div className="grid grid-cols-2 gap-2">
+          <label>
+            <div className="mb-1.5 flex items-center justify-between gap-2">
+              <span className="text-[10px] text-black/45">
+                Cédula
+              </span>
 
-            {hasCustomerDocument && (
-              <button
-                type="button"
-                onClick={onClearCustomer}
-                className="text-[10px] text-red-600 transition hover:text-red-700"
-              >
-                Cambiar
-              </button>
-            )}
-          </div>
-
-          <div className="relative">
-            <User
-              size={14}
-              className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-black/35"
-            />
+              {hasCustomerIdentifier && (
+                <button
+                  type="button"
+                  onClick={onClearCustomer}
+                  className="text-[9px] text-red-600 transition hover:text-red-700"
+                >
+                  Limpiar
+                </button>
+              )}
+            </div>
 
             <input
               value={checkout.customerDocument}
               onChange={(event) =>
-                onCustomerDocumentChange(event.target.value)
+                onCustomerDocumentChange(
+                  event.target.value
+                )
               }
               inputMode="numeric"
               autoComplete="off"
-              className="h-10 w-full rounded-xl border border-black/[0.08] pl-9 pr-3 text-[12px] outline-none placeholder:text-black/35 focus:border-red-600 focus:ring-4 focus:ring-red-600/10"
-              placeholder="Cédula · opcional"
+              className="h-10 w-full rounded-xl border border-black/[0.08] bg-white px-3 text-[11px] outline-none placeholder:text-black/30 focus:border-red-600 focus:ring-4 focus:ring-red-600/10"
+              placeholder="Opcional"
             />
-          </div>
-        </label>
+          </label>
 
-        {!hasCustomerDocument && (
-          <div className="rounded-xl bg-black/[0.025] px-3 py-2.5 text-[10px] leading-4 text-black/42">
-            Déjalo vacío para una venta sin cliente. Si ingresas una cédula,
-            la compra quedará asociada a su historial.
+          <label>
+            <span className="mb-1.5 block text-[10px] text-black/45">
+              Teléfono
+            </span>
+
+            <input
+              value={checkout.customerPhone}
+              onChange={(event) =>
+                onCustomerPhoneChange(
+                  event.target.value
+                )
+              }
+              inputMode="tel"
+              autoComplete="off"
+              className="h-10 w-full rounded-xl border border-black/[0.08] bg-white px-3 text-[11px] outline-none placeholder:text-black/30 focus:border-red-600 focus:ring-4 focus:ring-red-600/10"
+              placeholder="También sirve para buscar"
+            />
+          </label>
+        </div>
+
+        {!hasCustomerIdentifier && (
+          <div className="rounded-xl bg-black/[0.025] px-3 py-2.5 text-[9.5px] leading-4 text-black/42">
+            Puedes identificar al cliente por cédula o por teléfono. Si no tienes ninguno, también puedes dejar la venta sin cliente.
           </div>
         )}
 
-        {hasCustomerDocument && customerLookup?.status === "searching" && (
-          <div className="flex items-center gap-2 rounded-xl border border-red-100 bg-red-50 px-3 py-2.5 text-[10px] text-red-600">
-            <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-red-200 border-t-red-600" />
-            Buscando cliente por cédula...
-          </div>
-        )}
+        {hasCustomerIdentifier &&
+          customerLookup?.status === "searching" && (
+            <div className="flex items-center gap-2 rounded-xl border border-red-100 bg-red-50 px-3 py-2.5 text-[10px] text-red-600">
+              <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-red-200 border-t-red-600" />
+              Buscando cliente por {lookupLabel}...
+            </div>
+          )}
 
-        {hasCustomerDocument && customerLookup?.status === "found" && (
-          <div className="rounded-2xl border border-emerald-100 bg-emerald-50/80 p-3">
-            <div className="flex items-start gap-2.5">
-              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-white text-emerald-600 ring-1 ring-emerald-100">
-                <CheckCircle2 size={16} />
-              </div>
+        {hasCustomerIdentifier &&
+          customerLookup?.status === "found" && (
+            <div className="rounded-2xl border border-emerald-100 bg-emerald-50/80 p-3">
+              <div className="flex items-start gap-2.5">
+                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-white text-emerald-600 ring-1 ring-emerald-100">
+                  <CheckCircle2 size={16} />
+                </div>
 
-              <div className="min-w-0 flex-1">
-                <p className="text-[10px] font-medium text-emerald-700">
-                  Cliente encontrado
-                </p>
-                <p className="mt-1 truncate text-[12px] font-medium text-black">
-                  {checkout.customerName || "Cliente registrado"}
-                </p>
-                <p className="mt-0.5 truncate text-[10px] text-black/45">
-                  {checkout.customerPhone || "Sin teléfono registrado"}
-                </p>
+                <div className="min-w-0 flex-1">
+                  <p className="text-[10px] font-medium text-emerald-700">
+                    Cliente encontrado por {lookupLabel}
+                  </p>
+
+                  <p className="mt-1 truncate text-[12px] font-medium text-black">
+                    {checkout.customerName ||
+                      "Cliente registrado"}
+                  </p>
+
+                  <p className="mt-0.5 truncate text-[9px] text-black/45">
+                    {checkout.customerDocument
+                      ? `CC ${checkout.customerDocument}`
+                      : "Sin cédula registrada"}
+                    {checkout.customerPhone
+                      ? ` · ${checkout.customerPhone}`
+                      : ""}
+                  </p>
+                </div>
               </div>
             </div>
-          </div>
-        )}
+          )}
 
-        {hasCustomerDocument && customerLookup?.status === "not-found" && (
-          <div className="rounded-2xl border border-orange-100 bg-orange-50/70 p-3">
-            <div className="mb-2">
+        {hasCustomerIdentifier &&
+          customerLookup?.status === "not-found" && (
+            <div className="rounded-2xl border border-orange-100 bg-orange-50/70 p-3">
               <p className="text-[10px] font-medium text-orange-700">
-                Cliente nuevo
+                Cliente no encontrado
               </p>
+
               <p className="mt-0.5 text-[9px] leading-4 text-black/42">
-                No encontramos esta cédula. Completa los datos y el cliente se
-                creará automáticamente al cobrar.
+                No encontramos un cliente con esa {lookupLabel}. Puedes completar el nombre y continuar la venta.
               </p>
             </div>
+          )}
 
-            <div className="grid gap-2">
-              <input
-                value={checkout.customerName}
-                onChange={(event) =>
-                  onUpdate("customerName", event.target.value)
-                }
-                className="h-10 rounded-xl border border-black/[0.08] bg-white px-3 text-[12px] outline-none placeholder:text-black/35 focus:border-red-600 focus:ring-4 focus:ring-red-600/10"
-                placeholder="Nombre completo *"
-              />
-
-              <input
-                value={checkout.customerPhone}
-                onChange={(event) =>
-                  onUpdate("customerPhone", event.target.value)
-                }
-                inputMode="tel"
-                className="h-10 rounded-xl border border-black/[0.08] bg-white px-3 text-[12px] outline-none placeholder:text-black/35 focus:border-red-600 focus:ring-4 focus:ring-red-600/10"
-                placeholder="Teléfono opcional"
-              />
-            </div>
-          </div>
+        {(customerLookup?.status === "not-found" ||
+          customerLookup?.status === "idle" ||
+          !hasCustomerIdentifier) && (
+          <input
+            value={checkout.customerName}
+            onChange={(event) =>
+              onUpdate(
+                "customerName",
+                event.target.value
+              )
+            }
+            className="h-10 rounded-xl border border-black/[0.08] bg-white px-3 text-[11px] outline-none placeholder:text-black/35 focus:border-red-600 focus:ring-4 focus:ring-red-600/10"
+            placeholder="Nombre del cliente · opcional si no asocias cliente"
+          />
         )}
 
-        {hasCustomerDocument && customerLookup?.status === "error" && (
-          <div className="rounded-xl border border-red-100 bg-red-50 px-3 py-2.5 text-[10px] leading-4 text-red-700">
-            No pudimos validar esta cédula. Revisa la conexión antes de cobrar.
-          </div>
-        )}
+        {customerLookup?.status === "found" &&
+          !checkout.customerName && (
+            <input
+              value={checkout.customerName}
+              onChange={(event) =>
+                onUpdate(
+                  "customerName",
+                  event.target.value
+                )
+              }
+              className="h-10 rounded-xl border border-black/[0.08] bg-white px-3 text-[11px] outline-none placeholder:text-black/35 focus:border-red-600 focus:ring-4 focus:ring-red-600/10"
+              placeholder="Nombre del cliente"
+            />
+          )}
 
         <select
           value={checkout.paymentMethod}
@@ -2429,6 +2608,7 @@ function MobileCartDrawer(props) {
             customerLookup={props.customerLookup}
             onUpdateCheckout={props.onUpdateCheckout}
             onCustomerDocumentChange={props.onCustomerDocumentChange}
+            onCustomerPhoneChange={props.onCustomerPhoneChange}
             onClearCustomer={props.onClearCustomer}
             onUpdateMixedPayment={props.onUpdateMixedPayment}
             onAddMixedPaymentRow={props.onAddMixedPaymentRow}

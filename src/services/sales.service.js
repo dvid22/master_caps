@@ -1211,14 +1211,22 @@ export async function createMultiItemSale({
   const cleanCustomerPhone = normalizeCustomerPhone(customerPhone);
   const cleanCustomerEmail = normalizeText(customerEmail);
 
-  const expectedCustomerId = cleanCustomerDocument
-    ? getCustomerDocumentId(cleanCustomerDocument, storeId)
-    : "";
+  const requestedCustomerId =
+    normalizeText(customerId);
+
+  const expectedCustomerId =
+    cleanCustomerDocument
+      ? getCustomerDocumentId(
+          cleanCustomerDocument,
+          storeId
+        )
+      : "";
 
   if (
     cleanCustomerDocument &&
-    normalizeText(customerId) &&
-    normalizeText(customerId) !== expectedCustomerId
+    requestedCustomerId &&
+    requestedCustomerId !==
+      expectedCustomerId
   ) {
     throw new Error(
       "La cédula seleccionada no coincide con el cliente de la venta."
@@ -1283,9 +1291,18 @@ export async function createMultiItemSale({
     let customerRef = null;
     let customerSnapshot = null;
 
-    if (cleanCustomerDocument) {
-      customerRef = doc(db, "customers", expectedCustomerId);
-      customerSnapshot = await transaction.get(customerRef);
+    const customerLookupId =
+      expectedCustomerId ||
+      requestedCustomerId;
+
+    if (customerLookupId) {
+      customerRef = doc(
+        db,
+        "customers",
+        customerLookupId
+      );
+      customerSnapshot =
+        await transaction.get(customerRef);
     }
 
     const productSnapshots = new Map();
@@ -1300,38 +1317,74 @@ export async function createMultiItemSale({
       });
     }
 
-    let finalCustomerId = "";
-    let finalCustomerName = cleanCustomerName;
-    let finalCustomerDocument = cleanCustomerDocument;
-    let finalCustomerPhone = cleanCustomerPhone;
-    let finalCustomerEmail = cleanCustomerEmail;
+    let finalCustomerId =
+      requestedCustomerId || "";
+    let finalCustomerName =
+      cleanCustomerName;
+    let finalCustomerDocument =
+      cleanCustomerDocument;
+    let finalCustomerPhone =
+      cleanCustomerPhone;
+    let finalCustomerEmail =
+      cleanCustomerEmail;
     let shouldCreateCustomer = false;
 
-    if (cleanCustomerDocument) {
-      finalCustomerId = expectedCustomerId;
+    if (customerSnapshot?.exists()) {
+      const existingCustomer =
+        customerSnapshot.data();
 
-      if (customerSnapshot?.exists()) {
-        const existingCustomer = customerSnapshot.data();
-
-        if (existingCustomer.storeId !== storeId) {
-          throw new Error("El cliente encontrado no pertenece a esta tienda.");
-        }
-
-        finalCustomerName =
-          normalizeText(existingCustomer.fullName) || cleanCustomerName;
-        finalCustomerPhone =
-          normalizeCustomerPhone(existingCustomer.phone) || cleanCustomerPhone;
-        finalCustomerEmail =
-          normalizeText(existingCustomer.email) || cleanCustomerEmail;
-      } else {
-        if (!cleanCustomerName) {
-          throw new Error(
-            "Completa el nombre del cliente para registrar esta cédula."
-          );
-        }
-
-        shouldCreateCustomer = true;
+      if (
+        existingCustomer.storeId !==
+        storeId
+      ) {
+        throw new Error(
+          "El cliente encontrado no pertenece a esta tienda."
+        );
       }
+
+      finalCustomerId =
+        customerSnapshot.id;
+
+      finalCustomerName =
+        normalizeText(
+          existingCustomer.fullName
+        ) || cleanCustomerName;
+
+      finalCustomerDocument =
+        normalizeCustomerDocument(
+          existingCustomer.documentNumber ||
+            existingCustomer.normalizedDocument ||
+            cleanCustomerDocument
+        );
+
+      finalCustomerPhone =
+        normalizeCustomerPhone(
+          existingCustomer.phone
+        ) || cleanCustomerPhone;
+
+      finalCustomerEmail =
+        normalizeText(
+          existingCustomer.email
+        ) || cleanCustomerEmail;
+    } else if (cleanCustomerDocument) {
+      finalCustomerId =
+        expectedCustomerId;
+
+      if (!cleanCustomerName) {
+        throw new Error(
+          "Completa el nombre del cliente para registrar esta cédula."
+        );
+      }
+
+      shouldCreateCustomer = true;
+    } else {
+      /*
+       * Si no hay cédula, la venta puede conservar nombre y teléfono
+       * aunque todavía no exista un documento maestro en `customers`.
+       * Si el POS encontró un cliente por teléfono, `customerId`
+       * viene informado y el bloque anterior lo enlaza normalmente.
+       */
+      finalCustomerId = "";
     }
 
     const saleItems = [];
