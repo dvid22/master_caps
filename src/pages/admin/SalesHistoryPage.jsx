@@ -57,6 +57,10 @@ const PAYMENT_OPTIONS = [
   ["otro", "Otro"],
 ];
 
+const MIXED_PAYMENT_OPTIONS = PAYMENT_OPTIONS.filter(
+  ([value]) => value !== "addi"
+);
+
 const PAYMENT_FILTER_OPTIONS = [
   ...PAYMENT_OPTIONS,
   ["mixto", "Pago mixto"],
@@ -642,9 +646,9 @@ export default function SalesHistoryPage() {
   }
 
   return (
-    <main className="min-h-screen bg-[#f6f7f9] px-3 py-4 text-[#171717] sm:px-5 lg:px-6">
-      <section className="mx-auto max-w-[1540px]">
-        <header className="flex flex-col gap-4 rounded-[20px] border border-black/[0.055] bg-white/[0.96] px-5 py-4 shadow-[0_12px_34px_rgba(15,23,42,0.035)] backdrop-blur lg:flex-row lg:items-center lg:justify-between">
+    <main className="min-h-screen bg-white px-[clamp(10px,1.2vw,24px)] py-[clamp(10px,1vw,20px)] text-[#171717]">
+      <section className="mx-auto w-full max-w-[1920px]">
+        <header className="flex flex-col gap-[clamp(10px,1vw,16px)] rounded-[clamp(15px,1.1vw,20px)] border border-black/[0.055] bg-white px-[clamp(12px,1.15vw,20px)] py-[clamp(10px,0.95vw,16px)] shadow-[0_12px_34px_rgba(15,23,42,0.035)] min-[900px]:flex-row min-[900px]:items-center min-[900px]:justify-between">
           <div className="min-w-0">
             <button
               type="button"
@@ -656,7 +660,7 @@ export default function SalesHistoryPage() {
             </button>
 
             <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1">
-              <h1 className="text-[28px] font-semibold tracking-[-0.04em] sm:text-[31px]">
+              <h1 className="text-[clamp(22px,1.75vw,31px)] font-semibold tracking-[-0.04em]">
                 Historial de ventas
               </h1>
 
@@ -665,12 +669,12 @@ export default function SalesHistoryPage() {
               </span>
             </div>
 
-            <p className="mt-1 text-[12px] leading-5 text-black/43">
+            <p className="mt-1 text-[clamp(9px,0.68vw,12px)] leading-[1.55] text-black/43">
               Consulta, imprime y corrige ventas sin perder trazabilidad.
             </p>
           </div>
 
-          <div className="grid grid-cols-3 gap-2 sm:min-w-[360px]">
+          <div className="grid grid-cols-3 gap-[clamp(6px,0.55vw,9px)] min-[900px]:w-[clamp(300px,24vw,390px)] min-[900px]:shrink-0">
             <CompactMetric
               label="Ventas"
               value={totals.sales}
@@ -687,8 +691,8 @@ export default function SalesHistoryPage() {
           </div>
         </header>
 
-        <section className="mt-3 rounded-[18px] border border-black/[0.055] bg-white/[0.96] p-3.5 shadow-[0_10px_28px_rgba(15,23,42,0.025)] backdrop-blur">
-          <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-[minmax(280px,1.45fr)_.9fr_.8fr_1fr_.72fr_.72fr_auto]">
+        <section className="mt-[clamp(8px,0.7vw,12px)] rounded-[clamp(14px,1vw,18px)] border border-black/[0.055] bg-white p-[clamp(9px,0.8vw,14px)] shadow-[0_10px_28px_rgba(15,23,42,0.025)]">
+          <div className="grid gap-[clamp(6px,0.5vw,8px)] min-[900px]:grid-cols-[minmax(180px,1.45fr)_minmax(135px,.9fr)_minmax(110px,.8fr)_minmax(140px,1fr)_minmax(105px,.72fr)_minmax(105px,.72fr)_auto]">
             <label className="relative block">
               <Search
                 size={14}
@@ -698,7 +702,7 @@ export default function SalesHistoryPage() {
               <input
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
-                className="h-11 w-full rounded-[12px] border border-black/[0.065] bg-[#fbfbfc] pl-10 pr-3 text-[12px] outline-none transition placeholder:text-black/28 focus:border-red-300 focus:bg-white focus:ring-4 focus:ring-red-500/[0.08]"
+                className="h-[clamp(36px,2.6vw,44px)] w-full rounded-[clamp(9px,0.72vw,12px)] border border-black/[0.065] bg-[#fbfbfc] pl-[clamp(34px,2.5vw,40px)] pr-3 text-[clamp(9px,0.68vw,12px)] outline-none transition placeholder:text-black/28 focus:border-red-300 focus:bg-white focus:ring-4 focus:ring-red-500/[0.08]"
                 placeholder="Venta, cliente, vendedor o producto..."
               />
             </label>
@@ -708,7 +712,7 @@ export default function SalesHistoryPage() {
               onChange={(event) =>
                 setCategoryFilter(event.target.value)
               }
-              className="h-11 rounded-[12px] border border-black/[0.065] bg-[#fbfbfc] px-3 text-[11px] outline-none transition focus:border-red-300 focus:bg-white focus:ring-4 focus:ring-red-500/[0.08]"
+              className="h-[clamp(36px,2.6vw,44px)] rounded-[clamp(9px,0.72vw,12px)] border border-black/[0.065] bg-[#fbfbfc] px-[clamp(8px,0.65vw,12px)] text-[clamp(8.5px,0.64vw,11px)] outline-none transition focus:border-red-300 focus:bg-white focus:ring-4 focus:ring-red-500/[0.08]"
             >
               <option value="all">
                 Todas las categorías
@@ -729,7 +733,7 @@ export default function SalesHistoryPage() {
               onChange={(event) =>
                 setPaymentFilter(event.target.value)
               }
-              className="h-11 rounded-[12px] border border-black/[0.065] bg-[#fbfbfc] px-3 text-[11px] outline-none transition focus:border-red-300 focus:bg-white focus:ring-4 focus:ring-red-500/[0.08]"
+              className="h-[clamp(36px,2.6vw,44px)] rounded-[clamp(9px,0.72vw,12px)] border border-black/[0.065] bg-[#fbfbfc] px-[clamp(8px,0.65vw,12px)] text-[clamp(8.5px,0.64vw,11px)] outline-none transition focus:border-red-300 focus:bg-white focus:ring-4 focus:ring-red-500/[0.08]"
             >
               <option value="all">Todos los pagos</option>
 
@@ -745,7 +749,7 @@ export default function SalesHistoryPage() {
               onChange={(event) =>
                 setSellerFilter(event.target.value)
               }
-              className="h-11 rounded-[12px] border border-black/[0.065] bg-[#fbfbfc] px-3 text-[11px] outline-none transition focus:border-red-300 focus:bg-white focus:ring-4 focus:ring-red-500/[0.08]"
+              className="h-[clamp(36px,2.6vw,44px)] rounded-[clamp(9px,0.72vw,12px)] border border-black/[0.065] bg-[#fbfbfc] px-[clamp(8px,0.65vw,12px)] text-[clamp(8.5px,0.64vw,11px)] outline-none transition focus:border-red-300 focus:bg-white focus:ring-4 focus:ring-red-500/[0.08]"
             >
               <option value="all">Todos los vendedores</option>
 
@@ -774,7 +778,7 @@ export default function SalesHistoryPage() {
             <button
               type="button"
               onClick={clearFilters}
-              className="inline-flex h-11 items-center justify-center gap-1.5 rounded-[12px] border border-black/[0.065] bg-white px-4 text-[11px] font-medium text-black/55 transition hover:border-black/[0.1] hover:bg-[#fafafa] hover:text-black/75"
+              className="inline-flex h-[clamp(36px,2.6vw,44px)] items-center justify-center gap-1.5 rounded-[clamp(9px,0.72vw,12px)] border border-black/[0.065] bg-white px-[clamp(10px,0.8vw,16px)] text-[clamp(8.5px,0.64vw,11px)] font-medium text-black/55 transition hover:border-black/[0.1] hover:bg-[#fafafa] hover:text-black/75"
             >
               <SlidersHorizontal size={11} />
               Limpiar
@@ -782,11 +786,11 @@ export default function SalesHistoryPage() {
           </div>
         </section>
 
-        <section className="mt-4 grid gap-4 xl:grid-cols-[360px_minmax(0,1fr)]">
-          <aside className="overflow-hidden rounded-[20px] border border-black/[0.055] bg-white shadow-[0_12px_32px_rgba(15,23,42,0.03)] xl:sticky xl:top-4 xl:self-start">
+        <section className="mt-[clamp(10px,0.85vw,16px)] grid gap-[clamp(8px,0.7vw,14px)] min-[900px]:grid-cols-[clamp(270px,22vw,380px)_minmax(0,1fr)]">
+          <aside className="overflow-hidden rounded-[clamp(15px,1.1vw,20px)] border border-black/[0.055] bg-white shadow-[0_12px_32px_rgba(15,23,42,0.03)] min-[900px]:sticky min-[900px]:top-[clamp(8px,0.8vw,16px)] min-[900px]:self-start">
             <div className="flex items-center justify-between border-b border-black/[0.055] px-4 py-3.5">
               <div>
-                <p className="text-[13px] font-semibold">Ventas</p>
+                <p className="text-[clamp(10px,0.75vw,13px)] font-semibold">Ventas</p>
                 <p className="mt-0.5 text-[10px] text-black/38">
                   Selecciona una operación
                 </p>
@@ -795,7 +799,7 @@ export default function SalesHistoryPage() {
               <History size={14} className="text-red-600" />
             </div>
 
-            <div className="max-h-[calc(100vh-260px)] min-h-[520px] overflow-y-auto">
+            <div className="max-h-[calc(100vh-230px)] min-h-[clamp(420px,55vh,620px)] overflow-y-auto">
               {loading ? (
                 <div className="space-y-1 px-2 py-2">
                   {[1, 2, 3, 4, 5].map((item) => (
@@ -852,7 +856,7 @@ export default function SalesHistoryPage() {
                 }
               />
             ) : (
-              <div className="flex min-h-[560px] items-center justify-center rounded-[18px] border border-black/[0.06] bg-white p-8 text-center">
+              <div className="flex min-h-[clamp(420px,58vh,620px)] items-center justify-center rounded-[clamp(14px,1vw,18px)] border border-black/[0.06] bg-white p-[clamp(18px,2vw,32px)] text-center">
                 <div>
                   <ReceiptText
                     size={30}
@@ -904,13 +908,15 @@ function CompactMetric({
   emphasized = false,
 }) {
   return (
-    <div className="min-w-0 rounded-[13px] border border-black/[0.045] bg-[#fafafa] px-3.5 py-2.5 shadow-sm">
+    <div className="min-w-0 rounded-[clamp(10px,0.75vw,13px)] border border-black/[0.045] bg-[#fafafa] px-[clamp(9px,0.75vw,14px)] py-[clamp(7px,0.62vw,10px)] shadow-sm">
       <p className="text-[8px] font-semibold uppercase tracking-[0.08em] text-black/32">
         {label}
       </p>
       <p
         className={`mt-1 truncate font-semibold tracking-[-0.035em] ${
-          emphasized ? "text-[15px]" : "text-[17px]"
+          emphasized
+            ? "text-[clamp(12px,0.85vw,16px)]"
+            : "text-[clamp(13px,1vw,18px)]"
         }`}
       >
         {value}
@@ -936,7 +942,7 @@ function DateFilter({
         onChange={(event) =>
           onChange(event.target.value)
         }
-        className="h-11 w-full rounded-[12px] border border-black/[0.065] bg-[#fbfbfc] px-3 pt-3 text-[10px] outline-none transition focus:border-red-300 focus:bg-white focus:ring-4 focus:ring-red-500/[0.08]"
+        className="h-[clamp(36px,2.6vw,44px)] w-full rounded-[clamp(9px,0.72vw,12px)] border border-black/[0.065] bg-[#fbfbfc] px-[clamp(8px,0.65vw,12px)] pt-[clamp(9px,0.7vw,12px)] text-[clamp(8px,0.58vw,10px)] outline-none transition focus:border-red-300 focus:bg-white focus:ring-4 focus:ring-red-500/[0.08]"
       />
     </label>
   );
@@ -956,7 +962,7 @@ function SaleListItem({
     <button
       type="button"
       onClick={onClick}
-      className={`group relative w-full border-b border-black/[0.045] px-3.5 py-3 text-left transition ${
+      className={`group relative w-full border-b border-black/[0.045] px-[clamp(10px,0.8vw,14px)] py-[clamp(9px,0.72vw,12px)] text-left transition ${
         active
           ? "bg-[#fffafa] shadow-[inset_0_0_0_1px_rgba(239,68,68,0.05)]"
           : "bg-white hover:bg-[#fafafa]"
@@ -1031,11 +1037,11 @@ function SaleDetail({
   const payments = getSalePayments(sale);
 
   return (
-    <section className="overflow-hidden rounded-[20px] border border-black/[0.055] bg-white shadow-[0_14px_36px_rgba(15,23,42,0.032)]">
-      <div className="flex flex-col gap-3 border-b border-black/[0.055] px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+    <section className="overflow-hidden rounded-[clamp(15px,1.1vw,20px)] border border-black/[0.055] bg-white shadow-[0_14px_36px_rgba(15,23,42,0.032)]">
+      <div className="flex flex-col gap-[clamp(8px,0.65vw,12px)] border-b border-black/[0.055] px-[clamp(12px,1vw,20px)] py-[clamp(10px,0.85vw,16px)] min-[900px]:flex-row min-[900px]:items-center min-[900px]:justify-between">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
-            <h2 className="text-[23px] font-semibold tracking-[-0.04em]">
+            <h2 className="text-[clamp(18px,1.35vw,24px)] font-semibold tracking-[-0.04em]">
               {sale.saleNumber || "Venta"}
             </h2>
 
@@ -1081,9 +1087,9 @@ function SaleDetail({
         </div>
       </div>
 
-      <div className="grid lg:grid-cols-[minmax(0,1fr)_340px]">
-        <div className="min-w-0 border-b border-black/[0.055] lg:border-b-0 lg:border-r lg:border-black/[0.055]">
-          <div className="grid border-b border-black/[0.05] bg-[#fbfbfc] sm:grid-cols-3">
+      <div className="grid min-[900px]:grid-cols-[minmax(0,1fr)_clamp(260px,21vw,360px)]">
+        <div className="min-w-0 border-b border-black/[0.055] min-[900px]:border-b-0 min-[900px]:border-r min-[900px]:border-black/[0.055]">
+          <div className="grid border-b border-black/[0.05] bg-[#fbfbfc] min-[900px]:grid-cols-3">
             <MiniInfo
               icon={User}
               label="Vendedor"
@@ -1119,7 +1125,7 @@ function SaleDetail({
             />
           </div>
 
-          <div className="px-5 py-4">
+          <div className="px-[clamp(12px,1vw,20px)] py-[clamp(10px,0.85vw,16px)]">
             <div>
               <p className="text-[12px] font-semibold">
                 Productos
@@ -1186,7 +1192,7 @@ function SaleDetail({
             </div>
           </div>
 
-          <div className="grid gap-3 border-t border-black/[0.055] px-5 py-4 md:grid-cols-2">
+          <div className="grid gap-[clamp(8px,0.7vw,12px)] border-t border-black/[0.055] px-[clamp(12px,1vw,20px)] py-[clamp(10px,0.85vw,16px)] min-[900px]:grid-cols-2">
             <section className="rounded-[14px] border border-black/[0.04] bg-[#fbfbfc] p-4">
               <p className="text-[8px] font-semibold uppercase tracking-[0.08em] text-black/30">
                 Notas
@@ -1321,7 +1327,7 @@ function MiniInfo({
   detail,
 }) {
   return (
-    <div className="min-w-0 border-b border-black/[0.045] px-4 py-3.5 last:border-b-0 sm:border-b-0 sm:border-r sm:last:border-r-0">
+    <div className="min-w-0 border-b border-black/[0.045] px-[clamp(10px,0.8vw,16px)] py-[clamp(9px,0.75vw,14px)] last:border-b-0 min-[900px]:border-b-0 min-[900px]:border-r min-[900px]:last:border-r-0">
       <div className="flex items-start gap-2.5">
         <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[10px] border border-red-100 bg-red-50/70 text-red-600">
           <Icon size={12} />
@@ -1484,8 +1490,8 @@ function ProductLine({
   fallbackImageUrl = "",
 }) {
   return (
-    <article className="flex items-center gap-3 bg-white px-4 py-3">
-      <div className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-[10px] border border-black/[0.04] bg-[#f7f7f8]">
+    <article className="flex items-center gap-[clamp(8px,0.65vw,12px)] bg-white px-[clamp(10px,0.8vw,16px)] py-[clamp(8px,0.7vw,12px)]">
+      <div className="flex h-[clamp(38px,2.8vw,46px)] w-[clamp(38px,2.8vw,46px)] shrink-0 items-center justify-center overflow-hidden rounded-[clamp(8px,0.65vw,10px)] border border-black/[0.04] bg-[#f7f7f8]">
         <StableProductImage
           src={imageUrl}
           fallbackSrc={fallbackImageUrl}
@@ -1571,6 +1577,23 @@ function SaleEditModal({
   const [lines, setLines] = useState(() =>
     getSaleItems(sale).map((item, index) => ({
       localId: item.lineId || `existing-${index}`,
+      isManual: Boolean(
+        item.isManual ||
+          item.inventoryTracked === false
+      ),
+      inventoryTracked:
+        item.inventoryTracked !== undefined
+          ? Boolean(item.inventoryTracked)
+          : !Boolean(item.isManual),
+      manualLineId:
+        item.manualLineId ||
+        item.lineId ||
+        `manual-${index}`,
+      manualNote:
+        item.manualNote ||
+        item.note ||
+        "",
+      costPrice: Number(item.costPrice || 0),
       productId: item.productId,
       productName: item.productName,
       productCode: item.productCode,
@@ -1808,6 +1831,10 @@ function SaleEditModal({
           return line;
         }
 
+        if (line.isManual) {
+          return line;
+        }
+
         const product =
           products.find(
             (item) => item.id === line.productId
@@ -2013,6 +2040,19 @@ function SaleEditModal({
   }
 
   function updatePayment(localId, field, value) {
+    setError("");
+
+    if (
+      field === "method" &&
+      value === "addi" &&
+      payments.length > 1
+    ) {
+      setError(
+        "Addi debe quedar como único medio de pago. Elimina los otros medios antes de seleccionarlo."
+      );
+      return;
+    }
+
     setPayments((current) =>
       current.map((payment) => {
         if (payment.localId !== localId) {
@@ -2044,17 +2084,50 @@ function SaleEditModal({
   }
 
   function addPayment() {
-    setPayments((current) => [
-      ...current,
-      {
-        localId: `payment-${Date.now()}-${Math.random()
-          .toString(36)
-          .slice(2, 6)}`,
-        method: "transferencia",
-        amount: "",
-        receivedAmount: "",
-      },
-    ]);
+    setError("");
+
+    setPayments((current) => {
+      if (
+        current.some(
+          (payment) => payment.method === "addi"
+        )
+      ) {
+        setError(
+          "Addi debe permanecer como pago único."
+        );
+        return current;
+      }
+
+      const used = new Set(
+        current.map(
+          (payment) => payment.method
+        )
+      );
+
+      const nextMethod =
+        MIXED_PAYMENT_OPTIONS.find(
+          ([value]) => !used.has(value)
+        )?.[0];
+
+      if (!nextMethod) {
+        setError(
+          "Ya utilizaste todos los medios de pago disponibles."
+        );
+        return current;
+      }
+
+      return [
+        ...current,
+        {
+          localId: `payment-${Date.now()}-${Math.random()
+            .toString(36)
+            .slice(2, 6)}`,
+          method: nextMethod,
+          amount: "",
+          receivedAmount: "",
+        },
+      ];
+    });
   }
 
   function removePayment(localId) {
@@ -2108,6 +2181,21 @@ function SaleEditModal({
       return;
     }
 
+    const paymentMethods =
+      normalizedPayments.map(
+        (payment) => payment.method
+      );
+
+    if (
+      new Set(paymentMethods).size !==
+      paymentMethods.length
+    ) {
+      setError(
+        "No repitas el mismo medio de pago. Usa una sola línea por Efectivo, Nequi, Daviplata, etc."
+      );
+      return;
+    }
+
     if (
       normalizedPayments.some(
         (payment) => payment.method === "addi"
@@ -2155,16 +2243,43 @@ function SaleEditModal({
       await updateSale({
         saleId: sale.id,
 
-        items: lines.map((line) => ({
-          productId: line.productId,
-          variantId: line.variantId,
-          size: line.size,
-          quantity: line.quantity,
-          isPromotion: line.isPromotion,
-          pricingMode: line.isPromotion
-            ? "promotion"
-            : "normal",
-        })),
+        items: lines.map((line) =>
+          line.isManual
+            ? {
+                isManual: true,
+                inventoryTracked: false,
+                manualLineId:
+                  line.manualLineId ||
+                  line.localId,
+                lineId: line.localId,
+                productName:
+                  line.productName ||
+                  "Producto rápido",
+                productCode:
+                  line.productCode || "",
+                size:
+                  line.size ||
+                  "Talla única",
+                quantity:
+                  line.quantity,
+                unitPrice:
+                  line.unitPrice,
+                costPrice:
+                  line.costPrice || 0,
+                note:
+                  line.manualNote || "",
+              }
+            : {
+                productId: line.productId,
+                variantId: line.variantId,
+                size: line.size,
+                quantity: line.quantity,
+                isPromotion: line.isPromotion,
+                pricingMode: line.isPromotion
+                  ? "promotion"
+                  : "normal",
+              }
+        ),
 
         customerId: "",
         customerName: form.customerName,
@@ -2205,15 +2320,15 @@ function SaleEditModal({
   }
 
   return (
-    <div className="fixed inset-0 z-[80] bg-black/40 p-2 backdrop-blur-[3px] sm:p-4">
-      <section className="mx-auto flex h-full max-h-[94vh] max-w-[1320px] flex-col overflow-hidden rounded-[22px] border border-white/70 bg-[#f6f7f9] shadow-[0_30px_110px_rgba(15,23,42,0.22)]">
-        <div className="flex items-start justify-between border-b border-black/[0.05] bg-white/[0.98] px-5 py-4 backdrop-blur">
+    <div className="fixed inset-0 z-[80] bg-black/40 p-[clamp(6px,0.8vw,14px)] backdrop-blur-[3px]">
+      <section className="mx-auto flex h-full max-h-[96svh] w-full max-w-[1600px] flex-col overflow-hidden rounded-[clamp(15px,1.1vw,22px)] border border-white/70 bg-[#f7f7f8] shadow-[0_30px_110px_rgba(15,23,42,0.22)]">
+        <div className="flex items-start justify-between border-b border-black/[0.05] bg-white px-[clamp(12px,1vw,20px)] py-[clamp(10px,0.8vw,15px)]">
           <div>
             <p className="text-[8px] font-semibold uppercase tracking-[0.09em] text-red-600">
               Corrección transaccional
             </p>
 
-            <h2 className="mt-1 text-[21px] font-semibold tracking-[-0.04em]">
+            <h2 className="mt-1 text-[clamp(16px,1.25vw,22px)] font-semibold tracking-[-0.04em]">
               Editar {sale.saleNumber || "venta"}
             </h2>
           </div>
@@ -2232,14 +2347,14 @@ function SaleEditModal({
           onSubmit={handleSave}
           className="flex min-h-0 flex-1 flex-col"
         >
-          <div className="min-h-0 flex-1 overflow-y-auto p-3">
+          <div className="min-h-0 flex-1 overflow-y-auto p-[clamp(8px,0.7vw,12px)]">
             {error && (
               <div className="mb-3 rounded-[12px] border border-red-100 bg-red-50/70 px-3.5 py-3 text-[10px] leading-5 text-red-700">
                 {error}
               </div>
             )}
 
-            <div className="grid gap-4 xl:grid-cols-[minmax(0,1.35fr)_390px]">
+            <div className="grid gap-[clamp(8px,0.7vw,14px)] min-[900px]:grid-cols-[minmax(0,1.35fr)_clamp(300px,25vw,430px)]">
               <div className="min-w-0 space-y-3">
                 <section className="overflow-hidden rounded-[16px] border border-black/[0.05] bg-white shadow-[0_8px_24px_rgba(15,23,42,0.02)]">
                   <div className="flex items-center justify-between border-b border-black/[0.055] px-4 py-3.5">
@@ -2353,7 +2468,7 @@ function SaleEditModal({
                   </div>
 
                   <div className="border-b border-black/[0.045] bg-[#fbfbfc] p-3">
-                    <div className="grid gap-2 md:grid-cols-[.9fr_1.4fr]">
+                    <div className="grid gap-[clamp(6px,0.55vw,8px)] min-[900px]:grid-cols-[.9fr_1.4fr]">
                       <label>
                         <span className="text-[8px] font-semibold uppercase tracking-[0.08em] text-black/32">
                           Categoría
@@ -2366,7 +2481,7 @@ function SaleEditModal({
                               event.target.value
                             )
                           }
-                          className="mt-1.5 h-10 w-full rounded-[10px] border border-black/[0.065] bg-white px-3 text-[10px] outline-none transition focus:border-red-300 focus:ring-4 focus:ring-red-500/[0.06]"
+                          className="mt-1.5 h-[clamp(34px,2.5vw,40px)] w-full rounded-[clamp(8px,0.65vw,10px)] border border-black/[0.065] bg-white px-[clamp(8px,0.65vw,12px)] text-[clamp(8px,0.6vw,10px)] outline-none transition focus:border-red-300 focus:ring-4 focus:ring-red-500/[0.06]"
                         >
                           <option value="all">
                             Todas las categorías
@@ -2409,7 +2524,7 @@ function SaleEditModal({
                     </div>
                   </div>
 
-                  <div className="grid gap-2 p-3 lg:grid-cols-[minmax(220px,1.45fr)_1fr_.8fr_.5fr_auto] lg:items-end">
+                  <div className="grid gap-[clamp(6px,0.55vw,8px)] p-[clamp(9px,0.75vw,12px)] min-[900px]:grid-cols-[minmax(180px,1.45fr)_minmax(105px,1fr)_minmax(95px,.8fr)_minmax(70px,.5fr)_auto] min-[900px]:items-end">
                     <label>
                       <span className="text-[8px] font-semibold uppercase tracking-[0.08em] text-black/32">
                         Producto
@@ -2422,7 +2537,7 @@ function SaleEditModal({
                             event.target.value
                           )
                         }
-                        className="mt-1.5 h-10 w-full rounded-[10px] border border-black/[0.065] bg-white px-3 text-[10px] outline-none transition focus:border-red-300 focus:ring-4 focus:ring-red-500/[0.06]"
+                        className="mt-1.5 h-[clamp(34px,2.5vw,40px)] w-full rounded-[clamp(8px,0.65vw,10px)] border border-black/[0.065] bg-white px-[clamp(8px,0.65vw,12px)] text-[clamp(8px,0.6vw,10px)] outline-none transition focus:border-red-300 focus:ring-4 focus:ring-red-500/[0.06]"
                       >
                         <option value="">
                           {filteredProducts.length
@@ -2521,14 +2636,14 @@ function SaleEditModal({
                           )
                         }
                         inputMode="numeric"
-                        className="mt-1.5 h-10 w-full rounded-[10px] border border-black/[0.065] bg-white px-3 text-center text-[10px] outline-none transition focus:border-red-300 focus:ring-4 focus:ring-red-500/[0.06]"
+                        className="mt-1.5 h-[clamp(34px,2.5vw,40px)] w-full rounded-[clamp(8px,0.65vw,10px)] border border-black/[0.065] bg-white px-3 text-center text-[clamp(8px,0.6vw,10px)] outline-none transition focus:border-red-300 focus:ring-4 focus:ring-red-500/[0.06]"
                       />
                     </label>
 
                     <button
                       type="button"
                       onClick={addProductLine}
-                      className="inline-flex h-10 items-center justify-center gap-1.5 rounded-[10px] bg-red-600 px-4 text-[10px] font-semibold text-white shadow-[0_8px_18px_rgba(220,38,38,0.12)] transition hover:-translate-y-0.5 hover:bg-red-700"
+                      className="inline-flex h-[clamp(34px,2.5vw,40px)] items-center justify-center gap-1.5 rounded-[clamp(8px,0.65vw,10px)] bg-red-600 px-[clamp(10px,0.8vw,16px)] text-[clamp(8px,0.6vw,10px)] font-semibold text-white shadow-[0_8px_18px_rgba(220,38,38,0.12)] transition hover:-translate-y-0.5 hover:bg-red-700"
                     >
                       <Plus size={10} />
                       Agregar
@@ -2537,7 +2652,7 @@ function SaleEditModal({
                 </section>
               </div>
 
-              <aside className="space-y-3 xl:sticky xl:top-0 xl:self-start">
+              <aside className="space-y-[clamp(8px,0.65vw,12px)] min-[900px]:sticky min-[900px]:top-0 min-[900px]:self-start">
                 <section className="overflow-hidden rounded-[16px] border border-black/[0.05] bg-white shadow-[0_8px_24px_rgba(15,23,42,0.02)]">
                   <SectionHeader
                     icon={User}
@@ -2606,15 +2721,33 @@ function SaleEditModal({
                         size={11}
                         className="text-red-600"
                       />
-                      <p className="text-[11px] font-semibold">
-                        Formas de pago
-                      </p>
+                      <div>
+                        <p className="text-[11px] font-semibold">
+                          Formas de pago
+                        </p>
+                        <p className="mt-0.5 text-[7px] text-black/34">
+                          Un medio = pago normal · dos o más = pago mixto
+                        </p>
+                      </div>
                     </div>
 
                     <button
                       type="button"
                       onClick={addPayment}
-                      className="inline-flex h-8 items-center gap-1 rounded-[9px] border border-red-100 bg-red-50/70 px-2.5 text-[8px] font-semibold text-red-600 transition hover:bg-red-50"
+                      disabled={
+                        payments.some(
+                          (payment) =>
+                            payment.method === "addi"
+                        ) ||
+                        new Set(
+                          payments.map(
+                            (payment) =>
+                              payment.method
+                          )
+                        ).size >=
+                          MIXED_PAYMENT_OPTIONS.length
+                      }
+                      className="inline-flex h-8 items-center gap-1 rounded-[9px] border border-red-100 bg-red-50/70 px-2.5 text-[8px] font-semibold text-red-600 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-35"
                     >
                       <Plus size={9} />
                       Medio
@@ -2629,6 +2762,20 @@ function SaleEditModal({
                           payment={payment}
                           canRemove={
                             payments.length > 1
+                          }
+                          usedMethods={
+                            new Set(
+                              payments
+                                .filter(
+                                  (item) =>
+                                    item.localId !==
+                                    payment.localId
+                                )
+                                .map(
+                                  (item) =>
+                                    item.method
+                                )
+                            )
                           }
                           onChange={updatePayment}
                           onRemove={removePayment}
@@ -2729,7 +2876,7 @@ function SaleEditModal({
             </div>
           </div>
 
-          <div className="flex flex-col-reverse gap-2 border-t border-black/[0.055] bg-white px-4 py-3 sm:flex-row sm:justify-end">
+          <div className="flex flex-col-reverse gap-2 border-t border-black/[0.055] bg-white px-[clamp(10px,0.8vw,16px)] py-[clamp(9px,0.7vw,12px)] min-[900px]:flex-row min-[900px]:justify-end">
             <button
               type="button"
               onClick={onClose}
@@ -2827,7 +2974,7 @@ function FieldInput({
             onChange(event.target.value)
           }
           inputMode={inputMode}
-          className={`h-10 w-full rounded-[10px] border border-black/[0.065] bg-[#fbfbfc] pr-3 text-[10px] outline-none transition focus:border-red-300 focus:bg-white focus:ring-4 focus:ring-red-500/[0.06] ${
+          className={`h-[clamp(34px,2.5vw,40px)] w-full rounded-[clamp(8px,0.65vw,10px)] border border-black/[0.065] bg-[#fbfbfc] pr-3 text-[clamp(8px,0.6vw,10px)] outline-none transition focus:border-red-300 focus:bg-white focus:ring-4 focus:ring-red-500/[0.06] ${
             money ? "pl-6" : "pl-2.5"
           }`}
           placeholder={placeholder}
@@ -2865,6 +3012,12 @@ function EditableLine({
                   {line.productName || "Producto"}
                 </p>
 
+                {line.isManual && (
+                  <span className="rounded bg-black/[0.045] px-1.5 py-0.5 text-[5.8px] font-semibold text-black/48">
+                    SIN INVENTARIO
+                  </span>
+                )}
+
                 {line.isPromotion && (
                   <span className="rounded bg-amber-50 px-1.5 py-0.5 text-[5.8px] font-semibold text-amber-700">
                     PROMO
@@ -2890,7 +3043,7 @@ function EditableLine({
             </button>
           </div>
 
-          <div className="mt-2 grid gap-2 sm:grid-cols-[auto_120px_1fr] sm:items-center">
+          <div className="mt-2 grid gap-[clamp(6px,0.5vw,8px)] min-[900px]:grid-cols-[auto_clamp(96px,8vw,120px)_1fr] min-[900px]:items-center">
             <div className="inline-flex w-fit items-center rounded-[8px] border border-black/[0.07] bg-[#fafafa] p-0.5">
               <button
                 type="button"
@@ -2935,30 +3088,36 @@ function EditableLine({
               </button>
             </div>
 
-            <select
-              value={
-                line.isPromotion
-                  ? "promotion"
-                  : "normal"
-              }
-              onChange={(event) =>
-                onMode(
-                  line.localId,
-                  event.target.value
-                )
-              }
-              className="h-8 rounded-[9px] border border-black/[0.065] bg-white px-2.5 text-[8px] outline-none transition focus:border-red-300"
-            >
-              <option value="normal">
-                Normal
-              </option>
-              <option
-                value="promotion"
-                disabled={!canPromotion}
+            {line.isManual ? (
+              <div className="flex h-8 items-center rounded-[9px] border border-black/[0.055] bg-[#fafafa] px-2.5 text-[8px] text-black/42">
+                Venta rápida
+              </div>
+            ) : (
+              <select
+                value={
+                  line.isPromotion
+                    ? "promotion"
+                    : "normal"
+                }
+                onChange={(event) =>
+                  onMode(
+                    line.localId,
+                    event.target.value
+                  )
+                }
+                className="h-8 rounded-[9px] border border-black/[0.065] bg-white px-2.5 text-[8px] outline-none transition focus:border-red-300"
               >
-                Promoción
-              </option>
-            </select>
+                <option value="normal">
+                  Normal
+                </option>
+                <option
+                  value="promotion"
+                  disabled={!canPromotion}
+                >
+                  Promoción
+                </option>
+              </select>
+            )}
 
             <p className="text-right text-[9.5px] font-semibold">
               {formatCurrency(
@@ -2976,12 +3135,13 @@ function EditableLine({
 function PaymentRow({
   payment,
   canRemove,
+  usedMethods = new Set(),
   onChange,
   onRemove,
 }) {
   return (
     <div className="rounded-[11px] border border-black/[0.045] bg-[#fbfbfc] p-2.5">
-      <div className="grid gap-1.5 sm:grid-cols-[1fr_1fr_auto]">
+      <div className="grid gap-1.5 min-[900px]:grid-cols-[1fr_1fr_auto]">
         <select
           value={payment.method}
           onChange={(event) =>
@@ -2998,6 +3158,10 @@ function PaymentRow({
               <option
                 key={value}
                 value={value}
+                disabled={
+                  usedMethods.has(value) &&
+                  value !== payment.method
+                }
               >
                 {label}
               </option>

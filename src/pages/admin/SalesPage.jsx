@@ -9,6 +9,7 @@ import {
   Clock3,
   CreditCard,
   Minus,
+  PackagePlus,
   PackageSearch,
   Plus,
   Printer,
@@ -59,10 +60,55 @@ const emptyCheckout = {
   customerDocument: "",
   customerPhone: "",
   paymentMethod: "efectivo",
+  mixedPayments: [
+    { method: "efectivo", amount: "" },
+    { method: "nequi", amount: "" },
+  ],
   discount: "",
   amountReceived: "",
   notes: "",
 };
+
+const emptyQuickProduct = {
+  productName: "",
+  productCode: "",
+  size: "",
+  quantity: "1",
+  unitPrice: "",
+  costPrice: "",
+  note: "",
+};
+
+const MIXED_PAYMENT_OPTIONS = [
+  { value: "efectivo", label: "Efectivo" },
+  { value: "transferencia", label: "Transferencia" },
+  { value: "nequi", label: "Nequi" },
+  { value: "daviplata", label: "Daviplata" },
+  { value: "tarjeta", label: "Tarjeta" },
+  { value: "otro", label: "Otro" },
+];
+
+function parseMoneyInput(value) {
+  return Math.max(
+    Number(
+      String(value || "")
+        .replace(/[^0-9]/g, "")
+    ) || 0,
+    0
+  );
+}
+
+function formatMoneyInput(value) {
+  const number = parseMoneyInput(value);
+
+  if (!number) {
+    return "";
+  }
+
+  return new Intl.NumberFormat("es-CO", {
+    maximumFractionDigits: 0,
+  }).format(number);
+}
 
 function getProductVariants(product) {
   return normalizeProductVariants(
@@ -202,6 +248,7 @@ export default function SalesPage() {
   const [scannerStatus, setScannerStatus] = useState(null);
 
   const [variantProduct, setVariantProduct] = useState(null);
+  const [quickProductOpen, setQuickProductOpen] = useState(false);
   const [mobileCartOpen, setMobileCartOpen] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [completedSale, setCompletedSale] = useState(null);
@@ -224,6 +271,10 @@ export default function SalesPage() {
         setCart((currentCart) =>
           currentCart
             .map((item) => {
+              if (item.isManual) {
+                return item;
+              }
+
               const product = productsData.find(
                 (candidate) => candidate.id === item.productId
               );
@@ -476,7 +527,8 @@ export default function SalesPage() {
         total +
         Number(
           item.regularUnitPrice ??
-            item.product.salePrice ??
+            item.product?.salePrice ??
+            item.unitPrice ??
             0
         ) *
           Number(item.quantity || 0),
@@ -499,7 +551,11 @@ export default function SalesPage() {
     const totalCost = cart.reduce(
       (total, item) =>
         total +
-        Number(item.product.costPrice || 0) * Number(item.quantity || 0),
+        Number(
+          item.costPrice ??
+            item.product?.costPrice ??
+            0
+        ) * Number(item.quantity || 0),
       0
     );
 
@@ -510,6 +566,38 @@ export default function SalesPage() {
 
     const discount = Math.min(Math.max(toNumber(checkout.discount), 0), subtotal);
     const total = Math.max(subtotal - discount, 0);
+    const mixedPayments =
+      checkout.paymentMethod === "mixto"
+        ? checkout.mixedPayments
+            .map((payment) => ({
+              method: payment.method,
+              amount: parseMoneyInput(
+                payment.amount
+              ),
+            }))
+            .filter(
+              (payment) =>
+                payment.method &&
+                payment.amount > 0
+            )
+        : [];
+
+    const mixedPaid = mixedPayments.reduce(
+      (sum, payment) =>
+        sum + payment.amount,
+      0
+    );
+
+    const mixedPending = Math.max(
+      total - mixedPaid,
+      0
+    );
+
+    const mixedExcess = Math.max(
+      mixedPaid - total,
+      0
+    );
+
     const amountReceived =
       checkout.paymentMethod === "efectivo"
         ? Math.max(toNumber(checkout.amountReceived), 0)
@@ -531,6 +619,10 @@ export default function SalesPage() {
       total,
       amountReceived,
       change,
+      mixedPayments,
+      mixedPaid,
+      mixedPending,
+      mixedExcess,
     };
   }, [cart, checkout]);
 
@@ -564,6 +656,160 @@ export default function SalesPage() {
       document: "",
       customer: null,
     });
+  }
+
+  function updateMixedPayment(index, field, value) {
+    setCheckout((current) => ({
+      ...current,
+      mixedPayments: current.mixedPayments.map(
+        (payment, paymentIndex) =>
+          paymentIndex === index
+            ? {
+                ...payment,
+                [field]:
+                  field === "amount"
+                    ? formatMoneyInput(value)
+                    : value,
+              }
+            : payment
+      ),
+    }));
+  }
+
+  function addMixedPaymentRow() {
+    setCheckout((current) => {
+      const used = new Set(
+        current.mixedPayments.map(
+          (payment) => payment.method
+        )
+      );
+
+      const nextMethod =
+        MIXED_PAYMENT_OPTIONS.find(
+          (option) =>
+            !used.has(option.value)
+        )?.value || "otro";
+
+      return {
+        ...current,
+        mixedPayments: [
+          ...current.mixedPayments,
+          {
+            method: nextMethod,
+            amount: "",
+          },
+        ],
+      };
+    });
+  }
+
+  function removeMixedPaymentRow(index) {
+    setCheckout((current) => ({
+      ...current,
+      mixedPayments:
+        current.mixedPayments.length <= 2
+          ? current.mixedPayments
+          : current.mixedPayments.filter(
+              (_, paymentIndex) =>
+                paymentIndex !== index
+            ),
+    }));
+  }
+
+  function addQuickProduct(form) {
+    const productName = String(
+      form.productName || ""
+    ).trim();
+    const quantity = Math.max(
+      Number(form.quantity || 0),
+      0
+    );
+    const unitPrice = parseMoneyInput(
+      form.unitPrice
+    );
+    const costPrice = parseMoneyInput(
+      form.costPrice
+    );
+    const size =
+      String(form.size || "").trim() ||
+      "Talla única";
+
+    if (!productName) {
+      alert(
+        "Escribe el nombre del producto."
+      );
+      return false;
+    }
+
+    if (quantity <= 0) {
+      alert(
+        "La cantidad debe ser mayor a cero."
+      );
+      return false;
+    }
+
+    if (unitPrice <= 0) {
+      alert(
+        "El precio de venta debe ser mayor a cero."
+      );
+      return false;
+    }
+
+    const manualLineId = `manual-${Date.now()}-${Math.random()
+      .toString(36)
+      .slice(2, 7)}`;
+
+    const cartKey = `manual__${manualLineId}`;
+
+    setCart((current) => [
+      ...current,
+      {
+        cartKey,
+        isManual: true,
+        manualLineId,
+        productId: "",
+        variantId: "",
+        product: {
+          id: "",
+          name: productName,
+          code:
+            String(
+              form.productCode || ""
+            ).trim() || "VENTA RÁPIDA",
+          costPrice,
+          salePrice: unitPrice,
+          categoryName: "Venta rápida",
+        },
+        variant: {
+          id: "",
+          size,
+          stock: 999999,
+        },
+        productName,
+        productCode:
+          String(
+            form.productCode || ""
+          ).trim(),
+        size,
+        quantity,
+        unitPrice,
+        regularUnitPrice: unitPrice,
+        costPrice,
+        isPromotion: false,
+        promotionPrice: 0,
+        promotionNote: "",
+        manualNote:
+          String(form.note || "").trim(),
+      },
+    ]);
+
+    setScannerStatus({
+      type: "success",
+      message: `${productName} agregado como venta rápida`,
+    });
+
+    setQuickProductOpen(false);
+    return true;
   }
 
   function openProduct(product) {
@@ -680,6 +926,16 @@ export default function SalesPage() {
     setCart((currentCart) =>
       currentCart.map((item) => {
         if (item.cartKey !== cartKey) return item;
+
+        if (item.isManual) {
+          return {
+            ...item,
+            quantity: Math.max(
+              Number(nextQuantity || 1),
+              1
+            ),
+          };
+        }
 
         const stock =
           getSaleModeStock(
@@ -884,32 +1140,96 @@ export default function SalesPage() {
       return;
     }
 
+    if (checkout.paymentMethod === "mixto") {
+      if (cartSummary.mixedPayments.length < 2) {
+        alert(
+          "El pago mixto debe tener al menos dos métodos con valor."
+        );
+        return;
+      }
+
+      const methods = cartSummary.mixedPayments.map(
+        (payment) => payment.method
+      );
+
+      if (new Set(methods).size !== methods.length) {
+        alert(
+          "No repitas el mismo método en el pago mixto."
+        );
+        return;
+      }
+
+      if (
+        Math.abs(
+          cartSummary.mixedPaid -
+            cartSummary.total
+        ) > 0.5
+      ) {
+        alert(
+          `El pago mixto debe sumar exactamente ${formatCurrency(
+            cartSummary.total
+          )}.`
+        );
+        return;
+      }
+    }
+
     try {
       setSelling(true);
 
       const seller = getCurrentUserActor();
 
       const sale = await createMultiItemSale({
-        items: cart.map((item) => ({
-          productId: item.productId,
-          variantId: item.variantId,
-          size: item.variant.size,
-          quantity: item.quantity,
-          isPromotion:
-            Boolean(
-              item.isPromotion
-            ),
-          pricingMode:
-            item.isPromotion
-              ? "promotion"
-              : "normal",
-        })),
+        items: cart.map((item) =>
+          item.isManual
+            ? {
+                isManual: true,
+                manualLineId:
+                  item.manualLineId,
+                productName:
+                  item.productName ||
+                  item.product?.name ||
+                  "Producto rápido",
+                productCode:
+                  item.productCode || "",
+                size:
+                  item.size ||
+                  item.variant?.size ||
+                  "Talla única",
+                quantity:
+                  item.quantity,
+                unitPrice:
+                  item.unitPrice,
+                costPrice:
+                  item.costPrice || 0,
+                note:
+                  item.manualNote || "",
+              }
+            : {
+                productId: item.productId,
+                variantId: item.variantId,
+                size: item.variant.size,
+                quantity: item.quantity,
+                isPromotion:
+                  Boolean(
+                    item.isPromotion
+                  ),
+                pricingMode:
+                  item.isPromotion
+                    ? "promotion"
+                    : "normal",
+              }
+        ),
 
         customerId: checkout.customerId,
         customerName: checkout.customerName,
         customerDocument: checkout.customerDocument,
         customerPhone: checkout.customerPhone,
         paymentMethod: checkout.paymentMethod,
+        payments:
+          checkout.paymentMethod === "mixto"
+            ? cartSummary.mixedPayments
+            : [],
         discount: cartSummary.discount,
         amountReceived:
           checkout.paymentMethod === "efectivo"
@@ -940,15 +1260,15 @@ export default function SalesPage() {
   }
 
   return (
-    <main className="min-h-screen bg-[radial-gradient(circle_at_top_left,_rgba(239,68,68,0.055),_transparent_30%),linear-gradient(180deg,#fafafa_0%,#f5f5f6_100%)] px-3 py-4 text-black sm:px-5 lg:px-6">
-      <section className="mx-auto max-w-[1640px]">
-        <header className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
+    <main className="min-h-screen bg-white px-[clamp(10px,1.2vw,24px)] py-[clamp(10px,1vw,20px)] text-black">
+      <section className="mx-auto w-full max-w-[1920px]">
+        <header className="flex flex-col gap-[clamp(10px,1vw,16px)] min-[900px]:flex-row min-[900px]:items-end min-[900px]:justify-between">
           <div>
-            <h1 className="text-[29px] font-medium tracking-[-0.045em]">
+            <h1 className="text-[clamp(22px,1.7vw,32px)] font-medium tracking-[-0.045em]">
               Punto de venta
             </h1>
 
-            <p className="mt-1 text-[13px] text-black/50">
+            <p className="mt-1 text-[clamp(10px,0.75vw,13px)] text-black/50">
               Escanea, agrega productos y registra ventas completas
             </p>
           </div>
@@ -958,7 +1278,7 @@ export default function SalesPage() {
                type="button"
   onClick={() => navigate("/admin/ventas/historial")}
 
-              className="inline-flex h-11 items-center justify-center gap-2 rounded-2xl border border-black/[0.08] bg-white px-4 text-[13px] font-medium shadow-[0_10px_30px_rgba(0,0,0,0.035)] transition hover:bg-black/[0.025]"
+              className="inline-flex h-[clamp(38px,2.7vw,44px)] items-center justify-center gap-2 rounded-[clamp(11px,0.8vw,16px)] border border-black/[0.08] bg-white px-[clamp(12px,1vw,18px)] text-[clamp(10px,0.72vw,13px)] font-medium shadow-[0_10px_30px_rgba(0,0,0,0.035)] transition hover:bg-black/[0.025]"
             >
               <ReceiptText size={16} />
               Historial
@@ -969,8 +1289,19 @@ export default function SalesPage() {
 
             <button
               type="button"
+              onClick={() =>
+                setQuickProductOpen(true)
+              }
+              className="inline-flex h-[clamp(38px,2.7vw,44px)] items-center justify-center gap-2 rounded-[clamp(11px,0.8vw,16px)] border border-black/[0.08] bg-white px-[clamp(12px,1vw,18px)] text-[clamp(10px,0.72vw,13px)] font-medium shadow-[0_10px_30px_rgba(0,0,0,0.035)] transition hover:bg-black/[0.025]"
+            >
+              <PackagePlus size={16} />
+              Producto rápido
+            </button>
+
+            <button
+              type="button"
               onClick={() => scannerInputRef.current?.focus()}
-              className="inline-flex h-11 items-center justify-center gap-2 rounded-2xl bg-red-600 px-5 text-[13px] font-medium text-white shadow-lg shadow-red-600/20 transition hover:bg-red-700"
+              className="inline-flex h-[clamp(38px,2.7vw,44px)] items-center justify-center gap-2 rounded-[clamp(11px,0.8vw,16px)] bg-red-600 px-[clamp(14px,1.1vw,20px)] text-[clamp(10px,0.72vw,13px)] font-medium text-white shadow-lg shadow-red-600/20 transition hover:bg-red-700"
             >
               <ScanLine size={17} />
               Activar escáner
@@ -980,12 +1311,10 @@ export default function SalesPage() {
 
         <form
           onSubmit={handleScannerSubmit}
-          className="relative mt-5 overflow-hidden rounded-[28px] border border-red-100/80 bg-white p-3 shadow-[0_22px_70px_rgba(239,68,68,0.10)]"
+          className="relative mt-[clamp(12px,1vw,20px)] overflow-hidden rounded-[clamp(18px,1.5vw,28px)] border border-black/[0.07] bg-white p-[clamp(8px,0.75vw,13px)] shadow-[0_16px_45px_rgba(0,0,0,0.045)]"
         >
-          <div className="pointer-events-none absolute -right-14 -top-16 h-40 w-40 rounded-full bg-red-100/55 blur-3xl" />
-          <div className="pointer-events-none absolute -bottom-16 left-1/3 h-28 w-52 rounded-full bg-orange-50 blur-3xl" />
 
-          <div className="relative grid gap-3 xl:grid-cols-[210px_minmax(0,1fr)_auto] xl:items-center">
+          <div className="relative grid gap-[clamp(8px,0.7vw,12px)] min-[900px]:grid-cols-[clamp(160px,15vw,220px)_minmax(0,1fr)_auto] min-[900px]:items-center">
             <div className="flex items-center gap-3 rounded-[20px] bg-gradient-to-br from-red-600 to-red-500 px-4 py-3 text-white shadow-lg shadow-red-600/15">
               <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-white/15 ring-1 ring-white/20">
                 <ScanLine size={20} />
@@ -1042,9 +1371,9 @@ export default function SalesPage() {
           )}
         </form>
 
-        <section className="mt-4 grid min-h-[calc(100vh-245px)] gap-4 xl:grid-cols-[minmax(0,1fr)_390px]">
-          <div className="min-w-0 rounded-[30px] border border-white bg-white/95 p-3 shadow-[0_20px_65px_rgba(0,0,0,0.055)] ring-1 ring-black/[0.045] backdrop-blur sm:p-4">
-            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-[1.4fr_.8fr_.7fr_.7fr]">
+        <section className="mt-[clamp(10px,0.85vw,16px)] grid min-h-[calc(100vh-220px)] gap-[clamp(8px,0.75vw,14px)] min-[900px]:grid-cols-[minmax(0,1fr)_clamp(300px,24vw,430px)]">
+          <div className="min-w-0 rounded-[clamp(18px,1.4vw,28px)] border border-white bg-white/95 p-[clamp(8px,0.8vw,15px)] shadow-[0_20px_65px_rgba(0,0,0,0.055)] ring-1 ring-black/[0.045] backdrop-blur">
+            <div className="grid gap-[clamp(6px,0.6vw,10px)] min-[900px]:grid-cols-[minmax(220px,1.4fr)_minmax(150px,.8fr)_minmax(120px,.7fr)_minmax(150px,.7fr)]">
               <label className="relative block">
                 <Search
                   size={16}
@@ -1054,7 +1383,7 @@ export default function SalesPage() {
                 <input
                   value={search}
                   onChange={(event) => setSearch(event.target.value)}
-                  className="h-11 w-full rounded-2xl border border-black/[0.08] bg-white pl-11 pr-4 text-[13px] outline-none transition placeholder:text-black/35 focus:border-red-600 focus:ring-4 focus:ring-red-600/10"
+                  className="h-[clamp(36px,2.6vw,44px)] w-full rounded-[clamp(10px,0.85vw,16px)] border border-black/[0.08] bg-white pl-[clamp(36px,2.7vw,44px)] pr-[clamp(10px,0.8vw,16px)] text-[clamp(9px,0.72vw,13px)] outline-none transition placeholder:text-black/35 focus:border-red-600 focus:ring-4 focus:ring-red-600/10"
                   placeholder="Buscar producto, código, categoría o talla..."
                 />
               </label>
@@ -1062,7 +1391,7 @@ export default function SalesPage() {
               <select
                 value={categoryFilter}
                 onChange={(event) => setCategoryFilter(event.target.value)}
-                className="h-11 rounded-2xl border border-black/[0.08] bg-white px-4 text-[13px] outline-none transition focus:border-red-600 focus:ring-4 focus:ring-red-600/10"
+                className="h-[clamp(36px,2.6vw,44px)] rounded-[clamp(10px,0.85vw,16px)] border border-black/[0.08] bg-white px-[clamp(10px,0.8vw,16px)] text-[clamp(9px,0.72vw,13px)] outline-none transition focus:border-red-600 focus:ring-4 focus:ring-red-600/10"
               >
                 <option value="all">Todas las categorías</option>
                 {categories.map((category) => (
@@ -1075,7 +1404,7 @@ export default function SalesPage() {
               <select
                 value={sizeFilter}
                 onChange={(event) => setSizeFilter(event.target.value)}
-                className="h-11 rounded-2xl border border-black/[0.08] bg-white px-4 text-[13px] outline-none transition focus:border-red-600 focus:ring-4 focus:ring-red-600/10"
+                className="h-[clamp(36px,2.6vw,44px)] rounded-[clamp(10px,0.85vw,16px)] border border-black/[0.08] bg-white px-[clamp(10px,0.8vw,16px)] text-[clamp(9px,0.72vw,13px)] outline-none transition focus:border-red-600 focus:ring-4 focus:ring-red-600/10"
               >
                 <option value="all">Todas las tallas</option>
                 {availableSizes.map((size) => (
@@ -1088,7 +1417,7 @@ export default function SalesPage() {
               <select
                 value={stockFilter}
                 onChange={(event) => setStockFilter(event.target.value)}
-                className="h-11 rounded-2xl border border-black/[0.08] bg-white px-4 text-[13px] outline-none transition focus:border-red-600 focus:ring-4 focus:ring-red-600/10"
+                className="h-[clamp(36px,2.6vw,44px)] rounded-[clamp(10px,0.85vw,16px)] border border-black/[0.08] bg-white px-[clamp(10px,0.8vw,16px)] text-[clamp(9px,0.72vw,13px)] outline-none transition focus:border-red-600 focus:ring-4 focus:ring-red-600/10"
               >
                 <option value="available">Disponibles (stock mayor a 0)</option>
                 <option value="low">Stock bajo (1 a 3)</option>
@@ -1126,7 +1455,13 @@ export default function SalesPage() {
                   </p>
                 </div>
               ) : (
-                <div className="grid grid-cols-[repeat(auto-fill,minmax(158px,1fr))] gap-2.5 sm:grid-cols-[repeat(auto-fill,minmax(170px,1fr))]">
+                <div
+                  className="grid gap-[clamp(7px,0.65vw,11px)]"
+                  style={{
+                    gridTemplateColumns:
+                      "repeat(auto-fit, minmax(min(100%, clamp(145px, 11vw, 205px)), 1fr))",
+                  }}
+                >
                   {filteredProducts.map((product) => (
                     <ProductSaleCard
                       key={product.id}
@@ -1139,7 +1474,7 @@ export default function SalesPage() {
             </section>
           </div>
 
-          <aside className="hidden xl:block">
+          <aside className="hidden min-[900px]:block">
             <CartPanel
               cart={cart}
               checkout={checkout}
@@ -1149,6 +1484,9 @@ export default function SalesPage() {
               onUpdateCheckout={updateCheckout}
               onCustomerDocumentChange={handleCustomerDocumentChange}
               onClearCustomer={clearCustomerSelection}
+              onUpdateMixedPayment={updateMixedPayment}
+              onAddMixedPaymentRow={addMixedPaymentRow}
+              onRemoveMixedPaymentRow={removeMixedPaymentRow}
               onUpdateQuantity={updateCartQuantity}
               onRemoveItem={removeCartItem}
               onClear={clearCart}
@@ -1174,10 +1512,22 @@ export default function SalesPage() {
           onUpdateCheckout={updateCheckout}
           onCustomerDocumentChange={handleCustomerDocumentChange}
           onClearCustomer={clearCustomerSelection}
+          onUpdateMixedPayment={updateMixedPayment}
+          onAddMixedPaymentRow={addMixedPaymentRow}
+          onRemoveMixedPaymentRow={removeMixedPaymentRow}
           onUpdateQuantity={updateCartQuantity}
           onRemoveItem={removeCartItem}
           onClear={clearCart}
           onSubmit={handleCheckout}
+        />
+      )}
+
+      {quickProductOpen && (
+        <QuickProductModal
+          onClose={() =>
+            setQuickProductOpen(false)
+          }
+          onAdd={addQuickProduct}
         />
       )}
 
@@ -1254,7 +1604,7 @@ function ProductSaleCard({ product, onAdd }) {
     Number(product.salePrice || 0);
 
   return (
-    <article className="group min-w-0 overflow-hidden rounded-[18px] bg-white shadow-[0_10px_28px_rgba(0,0,0,0.03)] ring-1 ring-black/[0.055] transition hover:-translate-y-0.5 hover:shadow-[0_16px_38px_rgba(0,0,0,0.065)]">
+    <article className="group min-w-0 overflow-hidden rounded-[clamp(13px,0.95vw,18px)] bg-white shadow-[0_10px_28px_rgba(0,0,0,0.03)] ring-1 ring-black/[0.055] transition hover:-translate-y-0.5 hover:shadow-[0_16px_38px_rgba(0,0,0,0.065)]">
       <button
         type="button"
         onClick={onAdd}
@@ -1296,12 +1646,12 @@ function ProductSaleCard({ product, onAdd }) {
           )}
         </div>
 
-        <div className="p-2.5">
+        <div className="p-[clamp(8px,0.7vw,11px)]">
           <p className="truncate text-[9px] text-black/42">
             {product.code || "Sin código"} · {product.categoryName || "Sin categoría"}
           </p>
 
-          <h3 className="mt-1 truncate text-[12px] font-medium leading-tight">
+          <h3 className="mt-1 truncate text-[clamp(10px,0.75vw,13px)] font-medium leading-tight">
             {product.name}
           </h3>
 
@@ -1324,7 +1674,7 @@ function ProductSaleCard({ product, onAdd }) {
 
           <div className="mt-2 flex items-end justify-between gap-2">
             <div className="min-w-0">
-              <p className="truncate text-[14px] font-medium tracking-[-0.035em]">
+              <p className="truncate text-[clamp(11px,0.85vw,15px)] font-medium tracking-[-0.035em]">
                 {formatCurrency(
                   regularPrice
                 )}
@@ -1345,7 +1695,7 @@ function ProductSaleCard({ product, onAdd }) {
               </p>
             </div>
 
-            <span className="inline-flex h-8 shrink-0 items-center gap-1 rounded-[10px] bg-red-600 px-2.5 text-[9px] font-medium text-white shadow-sm shadow-red-600/15">
+            <span className="inline-flex h-[clamp(28px,2vw,34px)] shrink-0 items-center gap-1 rounded-[clamp(8px,0.65vw,10px)] bg-red-600 px-[clamp(8px,0.7vw,11px)] text-[clamp(7.5px,0.58vw,9px)] font-medium text-white shadow-sm shadow-red-600/15">
               <Plus size={12} />
               Agregar
             </span>
@@ -1365,6 +1715,9 @@ function CartPanel(props) {
     onUpdateCheckout,
     onCustomerDocumentChange,
     onClearCustomer,
+    onUpdateMixedPayment,
+    onAddMixedPaymentRow,
+    onRemoveMixedPaymentRow,
     onUpdateQuantity,
     onRemoveItem,
     onClear,
@@ -1372,7 +1725,7 @@ function CartPanel(props) {
   } = props;
 
   return (
-    <section className="sticky top-4 flex max-h-[calc(100vh-32px)] flex-col overflow-hidden rounded-[28px] bg-white shadow-[0_18px_55px_rgba(0,0,0,0.07)] ring-1 ring-black/[0.07]">
+    <section className="sticky top-[clamp(8px,0.8vw,16px)] flex max-h-[calc(100vh-20px)] flex-col overflow-hidden rounded-[clamp(18px,1.4vw,28px)] bg-white shadow-[0_18px_55px_rgba(0,0,0,0.07)] ring-1 ring-black/[0.07]">
       <div className="flex items-center justify-between border-b border-black/[0.06] px-5 py-4">
         <div className="flex items-center gap-3">
           <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-red-50 text-red-600">
@@ -1380,7 +1733,7 @@ function CartPanel(props) {
           </div>
 
           <div>
-            <h2 className="text-[16px] font-medium">Venta actual</h2>
+            <h2 className="text-[clamp(12px,0.9vw,16px)] font-medium">Venta actual</h2>
             <p className="mt-0.5 text-[11px] text-black/45">
               {summary.totalItems} unidad(es) · {summary.uniqueItems} línea(s)
             </p>
@@ -1399,7 +1752,7 @@ function CartPanel(props) {
       </div>
 
       <form onSubmit={onSubmit} className="flex min-h-0 flex-1 flex-col">
-        <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
+        <div className="min-h-0 flex-1 overflow-y-auto px-[clamp(10px,0.85vw,16px)] py-[clamp(10px,0.85vw,16px)]">
           {cart.length === 0 ? (
             <EmptyCart />
           ) : (
@@ -1422,6 +1775,9 @@ function CartPanel(props) {
             onUpdate={onUpdateCheckout}
             onCustomerDocumentChange={onCustomerDocumentChange}
             onClearCustomer={onClearCustomer}
+            onUpdateMixedPayment={onUpdateMixedPayment}
+            onAddMixedPaymentRow={onAddMixedPaymentRow}
+            onRemoveMixedPaymentRow={onRemoveMixedPaymentRow}
           />
         </div>
 
@@ -1449,7 +1805,9 @@ function EmptyCart() {
 }
 
 function CartItem({ item, onUpdateQuantity, onRemove }) {
-  const coverImage = getProductCoverImage(item.product);
+  const coverImage = item.isManual
+    ? { url: "" }
+    : getProductCoverImage(item.product);
   const promotionActive =
     Boolean(item.isPromotion);
   const effectivePrice =
@@ -1477,11 +1835,21 @@ function CartItem({ item, onUpdateQuantity, onRemove }) {
           <div className="flex items-start justify-between gap-2">
             <div className="min-w-0">
               <h3 className="truncate text-[12px] font-medium">
-                {item.product.name}
+                {item.product?.name ||
+                  item.productName ||
+                  "Producto rápido"}
               </h3>
               <p className="mt-1 text-[10px] text-black/45">
-                {item.product.code} · Talla {item.variant.size}
+                {item.isManual
+                  ? `Venta rápida · ${item.variant?.size || item.size || "Talla única"}`
+                  : `${item.product.code} · Talla ${item.variant.size}`}
               </p>
+
+              {item.isManual && (
+                <span className="mt-1.5 inline-flex rounded-full bg-black/[0.045] px-2 py-0.5 text-[7.5px] font-medium text-black/55">
+                  SIN INVENTARIO
+                </span>
+              )}
 
               {promotionActive && (
                 <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
@@ -1534,7 +1902,13 @@ function CartItem({ item, onUpdateQuantity, onRemove }) {
               <button
                 type="button"
                 onClick={() => onUpdateQuantity(item.cartKey, item.quantity + 1)}
-                disabled={item.quantity >= Number(item.variant.stock || 0)}
+                disabled={
+                  !item.isManual &&
+                  item.quantity >=
+                    Number(
+                      item.variant?.stock || 0
+                    )
+                }
                 className="flex h-7 w-7 items-center justify-center rounded-lg border border-black/[0.08] disabled:opacity-35"
               >
                 <Plus size={12} />
@@ -1558,6 +1932,9 @@ function CheckoutFields({
   onUpdate,
   onCustomerDocumentChange,
   onClearCustomer,
+  onUpdateMixedPayment,
+  onAddMixedPaymentRow,
+  onRemoveMixedPaymentRow,
 }) {
   const hasCustomerDocument = Boolean(
     normalizeCustomerDocument(checkout.customerDocument)
@@ -1695,8 +2072,142 @@ function CheckoutFields({
           <option value="daviplata">Daviplata</option>
           <option value="tarjeta">Tarjeta</option>
           <option value="addi">Addi</option>
+          <option value="mixto">Mixto</option>
           <option value="otro">Otro</option>
         </select>
+
+        {checkout.paymentMethod === "mixto" && (
+          <div className="rounded-2xl border border-black/[0.07] bg-[#fafafa] p-3">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-[10px] font-medium text-black/75">
+                  Distribución del pago
+                </p>
+                <p className="mt-0.5 text-[8.5px] leading-4 text-black/42">
+                  Divide el total entre dos o más métodos.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={onAddMixedPaymentRow}
+                disabled={
+                  checkout.mixedPayments.length >=
+                  MIXED_PAYMENT_OPTIONS.length
+                }
+                className="inline-flex h-7 shrink-0 items-center gap-1 rounded-lg border border-black/[0.08] bg-white px-2 text-[8px] font-medium text-black/60 transition hover:bg-black/[0.025] disabled:opacity-35"
+              >
+                <Plus size={11} />
+                Método
+              </button>
+            </div>
+
+            <div className="mt-2 space-y-1.5">
+              {checkout.mixedPayments.map(
+                (payment, index) => (
+                  <div
+                    key={`${index}-${payment.method}`}
+                    className="grid grid-cols-[minmax(0,1fr)_minmax(90px,.9fr)_28px] gap-1.5"
+                  >
+                    <select
+                      value={payment.method}
+                      onChange={(event) =>
+                        onUpdateMixedPayment(
+                          index,
+                          "method",
+                          event.target.value
+                        )
+                      }
+                      className="h-8 min-w-0 rounded-lg border border-black/[0.08] bg-white px-2 text-[8.5px] outline-none focus:border-red-600"
+                    >
+                      {MIXED_PAYMENT_OPTIONS.map(
+                        (option) => (
+                          <option
+                            key={option.value}
+                            value={option.value}
+                          >
+                            {option.label}
+                          </option>
+                        )
+                      )}
+                    </select>
+
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      value={payment.amount}
+                      onChange={(event) =>
+                        onUpdateMixedPayment(
+                          index,
+                          "amount",
+                          event.target.value
+                        )
+                      }
+                      className="h-8 min-w-0 rounded-lg border border-black/[0.08] bg-white px-2 text-right text-[8.5px] outline-none focus:border-red-600"
+                      placeholder="$ 0"
+                    />
+
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onRemoveMixedPaymentRow(index)
+                      }
+                      disabled={
+                        checkout.mixedPayments.length <= 2
+                      }
+                      className="flex h-8 w-7 items-center justify-center rounded-lg text-red-600 transition hover:bg-red-50 disabled:opacity-25"
+                      aria-label="Quitar método"
+                    >
+                      <Trash2 size={12} />
+                    </button>
+                  </div>
+                )
+              )}
+            </div>
+
+            <div className="mt-2 grid grid-cols-3 gap-1.5 text-center">
+              <div className="rounded-lg bg-white px-2 py-1.5 ring-1 ring-black/[0.05]">
+                <p className="text-[7px] text-black/38">Total</p>
+                <p className="mt-0.5 text-[8.5px] font-medium">
+                  {formatCurrency(summary.total)}
+                </p>
+              </div>
+
+              <div className="rounded-lg bg-white px-2 py-1.5 ring-1 ring-black/[0.05]">
+                <p className="text-[7px] text-black/38">Distribuido</p>
+                <p className="mt-0.5 text-[8.5px] font-medium">
+                  {formatCurrency(summary.mixedPaid)}
+                </p>
+              </div>
+
+              <div
+                className={`rounded-lg px-2 py-1.5 ring-1 ${
+                  summary.mixedPending <= 0 &&
+                  summary.mixedExcess <= 0
+                    ? "bg-emerald-50 text-emerald-700 ring-emerald-100"
+                    : "bg-red-50 text-red-700 ring-red-100"
+                }`}
+              >
+                <p className="text-[7px] opacity-70">
+                  {summary.mixedExcess > 0
+                    ? "Exceso"
+                    : "Pendiente"}
+                </p>
+                <p className="mt-0.5 text-[8.5px] font-medium">
+                  {formatCurrency(
+                    summary.mixedExcess > 0
+                      ? summary.mixedExcess
+                      : summary.mixedPending
+                  )}
+                </p>
+              </div>
+            </div>
+
+            <p className="mt-2 text-[7.5px] leading-3.5 text-black/40">
+              Addi se mantiene como método independiente porque su desembolso se confirma después.
+            </p>
+          </div>
+        )}
 
         {checkout.paymentMethod === "addi" && (
           <div className="rounded-2xl border border-amber-200 bg-amber-50/80 px-3 py-2.5">
@@ -1732,30 +2243,43 @@ function CheckoutFields({
             />
           </label>
 
-          <label>
-            <span className="text-[10px] text-black/45">
-              {checkout.paymentMethod === "efectivo"
-                ? "Dinero recibido"
-                : checkout.paymentMethod === "addi"
-                  ? "Monto financiado"
-                  : "Total pagado"}
-            </span>
-            <input
-              type="text"
-              inputMode="numeric"
-              value={
-                checkout.paymentMethod === "efectivo"
-                  ? checkout.amountReceived
-                  : summary.total
-              }
-              onChange={(event) =>
-                onUpdate("amountReceived", event.target.value)
-              }
-              disabled={checkout.paymentMethod !== "efectivo"}
-              className="mt-1 h-10 w-full min-w-0 rounded-xl border border-black/[0.08] px-3 text-[12px] outline-none focus:border-red-600 focus:ring-4 focus:ring-red-600/10 disabled:bg-black/[0.025] disabled:text-black/45"
-              placeholder="0"
-            />
-          </label>
+          {checkout.paymentMethod !== "mixto" ? (
+            <label>
+              <span className="text-[10px] text-black/45">
+                {checkout.paymentMethod === "efectivo"
+                  ? "Dinero recibido"
+                  : checkout.paymentMethod === "addi"
+                    ? "Monto financiado"
+                    : "Total pagado"}
+              </span>
+              <input
+                type="text"
+                inputMode="numeric"
+                value={
+                  checkout.paymentMethod === "efectivo"
+                    ? checkout.amountReceived
+                    : summary.total
+                }
+                onChange={(event) =>
+                  onUpdate("amountReceived", event.target.value)
+                }
+                disabled={checkout.paymentMethod !== "efectivo"}
+                className="mt-1 h-10 w-full min-w-0 rounded-xl border border-black/[0.08] px-3 text-[12px] outline-none focus:border-red-600 focus:ring-4 focus:ring-red-600/10 disabled:bg-black/[0.025] disabled:text-black/45"
+                placeholder="0"
+              />
+            </label>
+          ) : (
+            <div className="flex items-end">
+              <div className="flex h-10 w-full items-center justify-between rounded-xl border border-black/[0.07] bg-[#fafafa] px-3">
+                <span className="text-[9px] text-black/45">
+                  Distribuido
+                </span>
+                <strong className="text-[10px] font-medium">
+                  {formatCurrency(summary.mixedPaid)}
+                </strong>
+              </div>
+            </div>
+          )}
         </div>
 
         {checkout.paymentMethod === "efectivo" && (
@@ -1780,7 +2304,7 @@ function CheckoutFields({
 
 function CartTotals({ summary, selling, disabled, paymentMethod }) {
   return (
-    <div className="border-t border-black/[0.06] bg-white px-5 py-4">
+    <div className="border-t border-black/[0.06] bg-white px-[clamp(12px,1vw,20px)] py-[clamp(10px,0.85vw,16px)]">
       <div className="space-y-2 text-[12px]">
         {Number(summary.promotionSavings || 0) > 0 && (
           <>
@@ -1813,7 +2337,7 @@ function CartTotals({ summary, selling, disabled, paymentMethod }) {
         <div className="flex items-end justify-between gap-4 border-t border-black/[0.07] pt-3">
           <div>
             <p className="text-[11px] text-black/45">Total a pagar</p>
-            <p className="mt-0.5 text-[25px] font-medium tracking-[-0.05em]">
+            <p className="mt-0.5 text-[clamp(19px,1.55vw,26px)] font-medium tracking-[-0.05em]">
               {formatCurrency(summary.total)}
             </p>
           </div>
@@ -1827,14 +2351,16 @@ function CartTotals({ summary, selling, disabled, paymentMethod }) {
       <button
         type="submit"
         disabled={disabled || selling}
-        className="mt-4 inline-flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-red-600 px-5 text-[14px] font-medium text-white shadow-lg shadow-red-600/20 transition hover:bg-red-700 disabled:cursor-not-allowed disabled:bg-black/15 disabled:shadow-none"
+        className="mt-[clamp(10px,0.85vw,16px)] inline-flex h-[clamp(40px,3vw,48px)] w-full items-center justify-center gap-2 rounded-[clamp(12px,0.9vw,16px)] bg-red-600 px-[clamp(14px,1vw,20px)] text-[clamp(10px,0.78vw,14px)] font-medium text-white shadow-lg shadow-red-600/20 transition hover:bg-red-700 disabled:cursor-not-allowed disabled:bg-black/15 disabled:shadow-none"
       >
         <CreditCard size={17} />
         {selling
           ? "Procesando venta..."
           : paymentMethod === "addi"
             ? "Registrar venta Addi"
-            : "Cobrar venta"}
+            : paymentMethod === "mixto"
+              ? "Cobrar pago mixto"
+              : "Cobrar venta"}
       </button>
     </div>
   );
@@ -1842,7 +2368,7 @@ function CartTotals({ summary, selling, disabled, paymentMethod }) {
 
 function MobileCartBar({ summary, onOpen }) {
   return (
-    <div className="fixed inset-x-3 bottom-3 z-40 xl:hidden">
+    <div className="fixed inset-x-3 bottom-3 z-40 min-[900px]:hidden">
       <button
         type="button"
         onClick={onOpen}
@@ -1877,7 +2403,7 @@ function MobileCartBar({ summary, onOpen }) {
 
 function MobileCartDrawer(props) {
   return (
-    <div className="fixed inset-0 z-50 bg-black/45 backdrop-blur-sm xl:hidden">
+    <div className="fixed inset-0 z-50 bg-black/45 backdrop-blur-sm min-[900px]:hidden">
       <div className="absolute inset-x-0 bottom-0 max-h-[92vh] overflow-hidden rounded-t-[30px] bg-white shadow-2xl">
         <div className="flex items-center justify-between border-b border-black/[0.06] px-5 py-4">
           <div>
@@ -1904,6 +2430,9 @@ function MobileCartDrawer(props) {
             onUpdateCheckout={props.onUpdateCheckout}
             onCustomerDocumentChange={props.onCustomerDocumentChange}
             onClearCustomer={props.onClearCustomer}
+            onUpdateMixedPayment={props.onUpdateMixedPayment}
+            onAddMixedPaymentRow={props.onAddMixedPaymentRow}
+            onRemoveMixedPaymentRow={props.onRemoveMixedPaymentRow}
             onUpdateQuantity={props.onUpdateQuantity}
             onRemoveItem={props.onRemoveItem}
             onClear={props.onClear}
@@ -1911,6 +2440,215 @@ function MobileCartDrawer(props) {
           />
         </div>
       </div>
+    </div>
+  );
+}
+
+
+function QuickProductModal({
+  onClose,
+  onAdd,
+}) {
+  const [form, setForm] =
+    useState(emptyQuickProduct);
+
+  function update(field, value) {
+    setForm((current) => ({
+      ...current,
+      [field]:
+        field === "unitPrice" ||
+        field === "costPrice"
+          ? formatMoneyInput(value)
+          : value,
+    }));
+  }
+
+  function submit(event) {
+    event.preventDefault();
+
+    const added = onAdd(form);
+
+    if (added) {
+      setForm(emptyQuickProduct);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-[65] flex items-end justify-center bg-black/35 p-0 backdrop-blur-sm sm:items-center sm:p-4">
+      <section className="max-h-[92svh] w-full overflow-hidden rounded-t-[24px] bg-white shadow-2xl sm:max-w-[520px] sm:rounded-[24px]">
+        <div className="flex items-center justify-between border-b border-black/[0.06] px-4 py-3.5 sm:px-5">
+          <div>
+            <p className="text-[9px] font-medium uppercase tracking-[0.1em] text-red-600">
+              Venta rápida
+            </p>
+            <h2 className="mt-1 text-[17px] font-medium tracking-[-0.03em]">
+              Producto sin inventario
+            </h2>
+            <p className="mt-1 text-[9px] text-black/42">
+              Quedará registrado en la venta, pero no modifica inventario ni catálogo.
+            </p>
+          </div>
+
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-black/[0.07] bg-white text-black/50 transition hover:bg-black/[0.025]"
+          >
+            <X size={17} />
+          </button>
+        </div>
+
+        <form
+          onSubmit={submit}
+          className="max-h-[calc(92svh-78px)] overflow-y-auto p-4 sm:p-5"
+        >
+          <div className="grid gap-3">
+            <label>
+              <span className="text-[10px] font-medium text-black/55">
+                Nombre del producto *
+              </span>
+              <input
+                value={form.productName}
+                onChange={(event) =>
+                  update(
+                    "productName",
+                    event.target.value
+                  )
+                }
+                className="mt-1 h-10 w-full rounded-xl border border-black/[0.08] px-3 text-[11px] outline-none focus:border-red-600 focus:ring-4 focus:ring-red-600/10"
+                placeholder="Ej. Buzo oversize nuevo"
+                autoFocus
+              />
+            </label>
+
+            <div className="grid grid-cols-2 gap-2">
+              <label>
+                <span className="text-[10px] font-medium text-black/55">
+                  Código opcional
+                </span>
+                <input
+                  value={form.productCode}
+                  onChange={(event) =>
+                    update(
+                      "productCode",
+                      event.target.value
+                    )
+                  }
+                  className="mt-1 h-10 w-full rounded-xl border border-black/[0.08] px-3 text-[11px] outline-none focus:border-red-600"
+                  placeholder="Sin código"
+                />
+              </label>
+
+              <label>
+                <span className="text-[10px] font-medium text-black/55">
+                  Talla
+                </span>
+                <input
+                  value={form.size}
+                  onChange={(event) =>
+                    update(
+                      "size",
+                      event.target.value
+                    )
+                  }
+                  className="mt-1 h-10 w-full rounded-xl border border-black/[0.08] px-3 text-[11px] outline-none focus:border-red-600"
+                  placeholder="M, 32, única..."
+                />
+              </label>
+            </div>
+
+            <div className="grid grid-cols-3 gap-2">
+              <label>
+                <span className="text-[10px] font-medium text-black/55">
+                  Cantidad *
+                </span>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  value={form.quantity}
+                  onChange={(event) =>
+                    update(
+                      "quantity",
+                      event.target.value.replace(
+                        /\D/g,
+                        ""
+                      )
+                    )
+                  }
+                  className="mt-1 h-10 w-full rounded-xl border border-black/[0.08] px-3 text-[11px] outline-none focus:border-red-600"
+                />
+              </label>
+
+              <label>
+                <span className="text-[10px] font-medium text-black/55">
+                  Precio venta *
+                </span>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  value={form.unitPrice}
+                  onChange={(event) =>
+                    update(
+                      "unitPrice",
+                      event.target.value
+                    )
+                  }
+                  className="mt-1 h-10 w-full rounded-xl border border-black/[0.08] px-3 text-[11px] outline-none focus:border-red-600"
+                  placeholder="$ 0"
+                />
+              </label>
+
+              <label>
+                <span className="text-[10px] font-medium text-black/55">
+                  Costo
+                </span>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  value={form.costPrice}
+                  onChange={(event) =>
+                    update(
+                      "costPrice",
+                      event.target.value
+                    )
+                  }
+                  className="mt-1 h-10 w-full rounded-xl border border-black/[0.08] px-3 text-[11px] outline-none focus:border-red-600"
+                  placeholder="$ 0"
+                />
+              </label>
+            </div>
+
+            <label>
+              <span className="text-[10px] font-medium text-black/55">
+                Nota opcional
+              </span>
+              <input
+                value={form.note}
+                onChange={(event) =>
+                  update(
+                    "note",
+                    event.target.value
+                  )
+                }
+                className="mt-1 h-10 w-full rounded-xl border border-black/[0.08] px-3 text-[11px] outline-none focus:border-red-600"
+                placeholder="Ej. llegó hoy y aún no está cargado"
+              />
+            </label>
+          </div>
+
+          <div className="mt-4 rounded-xl bg-[#fafafa] px-3 py-2.5 text-[9px] leading-4 text-black/45 ring-1 ring-black/[0.05]">
+            Esta venta sí aparecerá en historial, recibo, cliente y vendedor. No crea automáticamente el producto en inventario.
+          </div>
+
+          <button
+            type="submit"
+            className="mt-4 inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-red-600 text-[11px] font-medium text-white shadow-lg shadow-red-600/15 transition hover:bg-red-700"
+          >
+            <Plus size={15} />
+            Agregar a la venta
+          </button>
+        </form>
+      </section>
     </div>
   );
 }
@@ -2149,7 +2887,7 @@ function SalesHistoryModal({ sales, onClose, onSelectSale }) {
                       {sale.saleNumber || "Venta anterior"}
                     </p>
                     <p className="mt-1 truncate text-[11px] text-black/45">
-                      {sale.totalItems || 0} artículo(s) · {sale.paymentMethod || "efectivo"} · {sale.sellerName || "Sin vendedor"}
+                      {sale.totalItems || 0} artículo(s) · {sale.paymentMethod === "mixto" ? "pago mixto" : sale.paymentMethod || "efectivo"} · {sale.sellerName || "Sin vendedor"}
                     </p>
 
                     {sale.paymentMethod === "addi" && (
@@ -2240,6 +2978,25 @@ function CompletedSaleModal({ sale, onClose, onNewSale, onPrint }) {
               {sale.paymentMethod}
             </strong>
           </div>
+
+          {sale.paymentMethod === "mixto" &&
+            Array.isArray(sale.payments) && (
+              <div className="mt-2 space-y-1 rounded-xl bg-white px-3 py-2 ring-1 ring-black/[0.05]">
+                {sale.payments.map((payment) => (
+                  <div
+                    key={`${payment.method}-${payment.amount}`}
+                    className="flex items-center justify-between text-[10px]"
+                  >
+                    <span className="capitalize text-black/45">
+                      {payment.method}
+                    </span>
+                    <span className="font-medium">
+                      {formatCurrency(payment.amount)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
 
           <div className="mt-3 flex items-end justify-between border-t border-black/[0.07] pt-3">
             <span className="text-[12px] text-black/45">Total</span>

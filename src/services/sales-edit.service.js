@@ -515,11 +515,59 @@ function normalizeRequestedItems(items) {
 
   const groupedItems = new Map();
 
-  items.forEach((item) => {
+  items.forEach((item, index) => {
+    const isManual = Boolean(
+      item?.isManual ||
+        item?.manualItem ||
+        item?.inventoryTracked === false
+    );
+
+    const quantity = normalizeQuantity(item?.quantity);
+
+    if (quantity <= 0) {
+      throw new Error(
+        "La cantidad de cada producto debe ser mayor a cero."
+      );
+    }
+
+    if (isManual) {
+      const productName = normalizeText(
+        item?.productName || item?.name
+      );
+
+      if (!productName) {
+        throw new Error(
+          "Uno de los productos rápidos no tiene nombre."
+        );
+      }
+
+      const manualLineId =
+        normalizeText(item?.manualLineId) ||
+        normalizeText(item?.lineId) ||
+        `manual-${index + 1}`;
+
+      groupedItems.set(`manual__${manualLineId}`, {
+        isManual: true,
+        inventoryTracked: false,
+        manualLineId,
+        productId: "",
+        productName,
+        productCode: normalizeText(item?.productCode),
+        variantId: "",
+        size: normalizeSize(item?.size || "Talla única"),
+        quantity,
+        unitPrice: normalizeMoney(item?.unitPrice),
+        costPrice: normalizeMoney(item?.costPrice),
+        note: normalizeText(item?.note || item?.manualNote),
+        isPromotion: false,
+      });
+
+      return;
+    }
+
     const productId = normalizeText(item?.productId);
     const variantId = normalizeText(item?.variantId);
     const size = normalizeText(item?.size || item?.productSize);
-    const quantity = normalizeQuantity(item?.quantity);
     const isPromotion =
       Boolean(item?.isPromotion) ||
       normalizeText(item?.pricingMode) === "promotion";
@@ -527,12 +575,6 @@ function normalizeRequestedItems(items) {
     if (!productId) {
       throw new Error(
         "Uno de los productos de la venta no es válido."
-      );
-    }
-
-    if (quantity <= 0) {
-      throw new Error(
-        "La cantidad de cada producto debe ser mayor a cero."
       );
     }
 
@@ -554,6 +596,8 @@ function normalizeRequestedItems(items) {
     }
 
     groupedItems.set(groupKey, {
+      isManual: false,
+      inventoryTracked: true,
       productId,
       variantId,
       size,
@@ -569,6 +613,21 @@ function normalizeStoredItems(sale = {}) {
   if (Array.isArray(sale.items) && sale.items.length > 0) {
     return sale.items.map((item, index) => ({
       lineId: normalizeText(item?.lineId) || `line-${index + 1}`,
+      isManual: Boolean(
+        item?.isManual ||
+          item?.inventoryTracked === false
+      ),
+      inventoryTracked:
+        item?.inventoryTracked !== undefined
+          ? Boolean(item.inventoryTracked)
+          : !Boolean(item?.isManual),
+      manualLineId:
+        normalizeText(item?.manualLineId) ||
+        normalizeText(item?.lineId) ||
+        `line-${index + 1}`,
+      manualNote: normalizeText(
+        item?.manualNote || item?.note
+      ),
       productId: normalizeText(item?.productId),
       productName: normalizeText(item?.productName),
       productCode: normalizeText(item?.productCode),
@@ -613,6 +672,20 @@ function normalizeStoredItems(sale = {}) {
   return [
     {
       lineId: "line-1",
+      isManual: Boolean(
+        sale.isManual ||
+          sale.inventoryTracked === false
+      ),
+      inventoryTracked:
+        sale.inventoryTracked !== undefined
+          ? Boolean(sale.inventoryTracked)
+          : !Boolean(sale.isManual),
+      manualLineId:
+        normalizeText(sale.manualLineId) ||
+        "line-1",
+      manualNote: normalizeText(
+        sale.manualNote || sale.note
+      ),
       productId: normalizeText(sale.productId),
       productName: normalizeText(sale.productName),
       productCode: normalizeText(sale.productCode),
@@ -809,8 +882,12 @@ export async function updateSale({
     }
 
     const affectedProductIds = new Set([
-      ...oldItems.map((item) => item.productId),
-      ...requestedItems.map((item) => item.productId),
+      ...oldItems
+        .filter((item) => !item.isManual)
+        .map((item) => item.productId),
+      ...requestedItems
+        .filter((item) => !item.isManual)
+        .map((item) => item.productId),
     ]);
 
     const productEntries = new Map();
@@ -862,6 +939,10 @@ export async function updateSale({
      * PASO 1: devolver al inventario todo lo que descontó la venta original.
      */
     for (const oldItem of oldItems) {
+      if (oldItem.isManual) {
+        continue;
+      }
+
       const entry = productEntries.get(oldItem.productId);
 
       if (!entry) {
@@ -909,6 +990,14 @@ export async function updateSale({
     const oldLineByKey = new Map();
 
     oldItems.forEach((item) => {
+      if (item.isManual) {
+        oldLineByKey.set(
+          `manual__${item.manualLineId || item.lineId}`,
+          item
+        );
+        return;
+      }
+
       const entry = productEntries.get(item.productId);
       const variant = entry
         ? findRequestedVariant(entry.variants, item)
@@ -932,7 +1021,7 @@ export async function updateSale({
     const newPromoByVariant = new Map();
 
     oldItems.forEach((item) => {
-      if (!item.isPromotion) return;
+      if (item.isManual || !item.isPromotion) return;
 
       const entry = productEntries.get(item.productId);
       const variant = entry
@@ -950,7 +1039,7 @@ export async function updateSale({
     });
 
     requestedItems.forEach((item) => {
-      if (!item.isPromotion) return;
+      if (item.isManual || !item.isPromotion) return;
 
       const entry = productEntries.get(item.productId);
       const variant = entry
@@ -990,6 +1079,89 @@ export async function updateSale({
     let totalItems = 0;
 
     for (const requestedItem of requestedItems) {
+      if (requestedItem.isManual) {
+        const historicalLine = oldLineByKey.get(
+          `manual__${requestedItem.manualLineId}`
+        );
+
+        const unitPrice = historicalLine
+          ? normalizeMoney(historicalLine.unitPrice)
+          : normalizeMoney(requestedItem.unitPrice);
+
+        const costPrice = historicalLine
+          ? normalizeMoney(historicalLine.costPrice)
+          : normalizeMoney(requestedItem.costPrice);
+
+        if (unitPrice <= 0) {
+          throw new Error(
+            `El producto rápido "${requestedItem.productName}" debe tener un precio de venta válido.`
+          );
+        }
+
+        const quantity = normalizeQuantity(
+          requestedItem.quantity
+        );
+        const lineSubtotal = unitPrice * quantity;
+        const lineTotalCost = costPrice * quantity;
+
+        subtotal += lineSubtotal;
+        totalCost += lineTotalCost;
+        totalItems += quantity;
+
+        newSaleItems.push({
+          lineId:
+            historicalLine?.lineId ||
+            requestedItem.manualLineId ||
+            `line-${newSaleItems.length + 1}`,
+
+          isManual: true,
+          inventoryTracked: false,
+          manualLineId:
+            requestedItem.manualLineId ||
+            historicalLine?.manualLineId ||
+            historicalLine?.lineId ||
+            `manual-${newSaleItems.length + 1}`,
+
+          productId: "",
+          productName:
+            historicalLine?.productName ||
+            requestedItem.productName,
+          productCode:
+            historicalLine?.productCode ||
+            requestedItem.productCode ||
+            "",
+
+          variantId: "",
+          size:
+            historicalLine?.size ||
+            requestedItem.size ||
+            "Talla única",
+
+          categoryId: "",
+          categoryName: "Venta rápida",
+          imageUrl: "",
+
+          quantity,
+          unitPrice,
+          regularUnitPrice: unitPrice,
+          isPromotion: false,
+          promotionPrice: 0,
+          promotionNote: "",
+
+          costPrice,
+          subtotal: lineSubtotal,
+          totalCost: lineTotalCost,
+          profit: lineSubtotal - lineTotalCost,
+
+          manualNote:
+            requestedItem.note ||
+            historicalLine?.manualNote ||
+            "",
+        });
+
+        continue;
+      }
+
       const entry = productEntries.get(
         requestedItem.productId
       );
@@ -1265,6 +1437,13 @@ export async function updateSale({
     const finalPayments = paymentBreakdown.payments;
     const finalAmountReceived = paymentBreakdown.amountReceived;
     const change = paymentBreakdown.change;
+    const cashAmount = finalPayments.reduce(
+      (sum, payment) =>
+        payment.method === "efectivo"
+          ? sum + normalizeMoney(payment.amount)
+          : sum,
+      0
+    );
 
     if (linkedCashSession?.status === "closed") {
       const totalChanged =
@@ -1536,6 +1715,7 @@ export async function updateSale({
         cleanPaymentMethod,
       payments:
         finalPayments,
+      cashAmount,
       amountReceived:
         finalAmountReceived,
       change,
@@ -1606,6 +1786,7 @@ export async function updateSale({
         cleanPaymentMethod,
       payments:
         finalPayments,
+      cashAmount,
       amountReceived:
         finalAmountReceived,
       change,

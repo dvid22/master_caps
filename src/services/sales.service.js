@@ -34,6 +34,16 @@ const VALID_PAYMENT_METHODS = [
   "daviplata",
   "tarjeta",
   "addi",
+  "mixto",
+  "otro",
+];
+
+const VALID_MIXED_PAYMENT_METHODS = [
+  "efectivo",
+  "transferencia",
+  "nequi",
+  "daviplata",
+  "tarjeta",
   "otro",
 ];
 
@@ -57,6 +67,144 @@ function normalizeMoney(value) {
   }
 
   return Math.max(number, 0);
+}
+
+function normalizeManualItem(item = {}, index = 0) {
+  const productName = normalizeText(
+    item.productName || item.name
+  );
+
+  if (!productName) {
+    throw new Error(
+      `Escribe el nombre del producto rápido de la línea ${index + 1}.`
+    );
+  }
+
+  const quantity = normalizeQuantity(item.quantity);
+
+  if (quantity <= 0) {
+    throw new Error(
+      `La cantidad del producto rápido "${productName}" debe ser mayor a cero.`
+    );
+  }
+
+  const unitPrice = normalizeMoney(item.unitPrice);
+
+  if (unitPrice <= 0) {
+    throw new Error(
+      `El precio de venta de "${productName}" debe ser mayor a cero.`
+    );
+  }
+
+  const costPrice = normalizeMoney(item.costPrice);
+
+  return {
+    isManual: true,
+    manualLineId:
+      normalizeText(item.manualLineId) ||
+      `manual-${Date.now()}-${index + 1}`,
+    productId: "",
+    productName,
+    productCode: normalizeText(item.productCode || item.code),
+    variantId: "",
+    size: normalizeSize(item.size || "Talla única"),
+    quantity,
+    unitPrice,
+    costPrice,
+    categoryId: "",
+    categoryName:
+      normalizeText(item.categoryName) || "Venta rápida",
+    imageUrl: "",
+    note: normalizeText(item.note),
+    isPromotion: false,
+  };
+}
+
+function normalizePayments({
+  paymentMethod,
+  payments,
+  total,
+}) {
+  const cleanTotal = normalizeMoney(total);
+
+  if (paymentMethod !== "mixto") {
+    return [
+      {
+        method: paymentMethod,
+        amount: cleanTotal,
+      },
+    ];
+  }
+
+  if (!Array.isArray(payments) || payments.length < 2) {
+    throw new Error(
+      "El pago mixto debe tener al menos dos métodos de pago."
+    );
+  }
+
+  const normalized = payments
+    .map((payment) => ({
+      method: normalizeText(payment?.method),
+      amount: normalizeMoney(payment?.amount),
+    }))
+    .filter((payment) => payment.amount > 0);
+
+  if (normalized.length < 2) {
+    throw new Error(
+      "Distribuye el pago mixto entre al menos dos métodos."
+    );
+  }
+
+  normalized.forEach((payment) => {
+    if (!VALID_MIXED_PAYMENT_METHODS.includes(payment.method)) {
+      if (payment.method === ADDI_PAYMENT_METHOD) {
+        throw new Error(
+          "Addi no puede combinarse dentro de un pago mixto porque su desembolso se confirma por separado."
+        );
+      }
+
+      throw new Error(
+        `El método "${payment.method || "sin método"}" no es válido para pago mixto.`
+      );
+    }
+  });
+
+  const usedMethods = new Set();
+
+  normalized.forEach((payment) => {
+    if (usedMethods.has(payment.method)) {
+      throw new Error(
+        "No repitas el mismo método dentro del pago mixto. Suma el valor en una sola línea."
+      );
+    }
+
+    usedMethods.add(payment.method);
+  });
+
+  const distributed = normalized.reduce(
+    (sum, payment) => sum + payment.amount,
+    0
+  );
+
+  if (Math.abs(distributed - cleanTotal) > 0.5) {
+    throw new Error(
+      `El pago mixto debe sumar exactamente el total de la venta (${cleanTotal.toLocaleString(
+        "es-CO"
+      )}). Actualmente suma ${distributed.toLocaleString("es-CO")}.`
+    );
+  }
+
+  return normalized;
+}
+
+function getPaymentAmount(payments = [], method) {
+  return payments.reduce(
+    (total, payment) =>
+      normalizeText(payment?.method) === method
+        ? total + normalizeMoney(payment?.amount)
+        : total,
+    0
+  );
 }
 
 function normalizeQuantity(value) {
@@ -356,7 +504,20 @@ function normalizeRequestedItems(items) {
 
   const groupedItems = new Map();
 
-  items.forEach((item) => {
+  items.forEach((item, index) => {
+    const isManual = Boolean(
+      item?.isManual ||
+        item?.manualItem ||
+        normalizeText(item?.source) === "manual"
+    );
+
+    if (isManual) {
+      const manualItem = normalizeManualItem(item, index);
+      const manualKey = `manual__${manualItem.manualLineId}`;
+      groupedItems.set(manualKey, manualItem);
+      return;
+    }
+
     const productId = normalizeText(item?.productId);
     const variantId = normalizeText(item?.variantId);
     const size = normalizeText(item?.size || item?.productSize);
@@ -387,6 +548,7 @@ function normalizeRequestedItems(items) {
     }
 
     groupedItems.set(groupKey, {
+      isManual: false,
       productId,
       variantId,
       size,
@@ -400,6 +562,10 @@ function normalizeRequestedItems(items) {
 
 function groupItemsByProduct(items) {
   return items.reduce((groups, item) => {
+    if (item.isManual) {
+      return groups;
+    }
+
     const productItems = groups.get(item.productId) || [];
     productItems.push(item);
     groups.set(item.productId, productItems);
@@ -413,6 +579,12 @@ function groupItemsByProduct(items) {
 
 function normalizeLegacySaleItem(sale) {
   return {
+    isManual: Boolean(sale.isManual),
+    inventoryTracked:
+      sale.inventoryTracked !== undefined
+        ? Boolean(sale.inventoryTracked)
+        : !Boolean(sale.isManual),
+
     productId: normalizeText(sale.productId),
     productName: normalizeText(sale.productName),
     productCode: normalizeText(sale.productCode),
@@ -466,6 +638,12 @@ function normalizeSaleItem(item, index = 0) {
 
   return {
     lineId: normalizeText(item?.lineId) || `line-${index + 1}`,
+
+    isManual: Boolean(item?.isManual),
+    inventoryTracked:
+      item?.inventoryTracked !== undefined
+        ? Boolean(item.inventoryTracked)
+        : !Boolean(item?.isManual),
 
     productId: normalizeText(item?.productId),
     productName: normalizeText(item?.productName),
@@ -590,6 +768,29 @@ function normalizeSaleDocument(sale) {
 
     paymentMethod:
       normalizeText(sale.paymentMethod) || DEFAULT_PAYMENT_METHOD,
+
+    payments: Array.isArray(sale.payments)
+      ? sale.payments
+          .map((payment) => ({
+            method: normalizeText(payment?.method),
+            amount: normalizeMoney(payment?.amount),
+          }))
+          .filter((payment) => payment.method && payment.amount > 0)
+      : [
+          {
+            method:
+              normalizeText(sale.paymentMethod) ||
+              DEFAULT_PAYMENT_METHOD,
+            amount: total,
+          },
+        ],
+
+    cashAmount:
+      sale.cashAmount !== undefined
+        ? normalizeMoney(sale.cashAmount)
+        : normalizeText(sale.paymentMethod) === "efectivo"
+          ? total
+          : 0,
 
     paymentStatus:
       normalizeText(sale.paymentStatus) ||
@@ -985,6 +1186,7 @@ export async function createMultiItemSale({
   customerEmail = "",
 
   paymentMethod = DEFAULT_PAYMENT_METHOD,
+  payments = [],
   discount = 0,
   amountReceived = null,
 
@@ -1138,6 +1340,59 @@ export async function createMultiItemSale({
     let totalCost = 0;
     let totalItems = 0;
 
+    const manualItems = requestedItems.filter(
+      (item) => item.isManual
+    );
+
+    manualItems.forEach((item) => {
+      const lineSubtotal =
+        item.unitPrice * item.quantity;
+      const lineTotalCost =
+        item.costPrice * item.quantity;
+      const lineProfit =
+        lineSubtotal - lineTotalCost;
+
+      subtotal += lineSubtotal;
+      totalCost += lineTotalCost;
+      totalItems += item.quantity;
+
+      saleItems.push({
+        lineId: `line-${saleItems.length + 1}`,
+
+        isManual: true,
+        inventoryTracked: false,
+
+        productId: "",
+        productName: item.productName,
+        productCode: item.productCode,
+
+        variantId: "",
+        size: item.size,
+
+        categoryId: "",
+        categoryName:
+          item.categoryName || "Venta rápida",
+
+        imageUrl: "",
+
+        quantity: item.quantity,
+
+        unitPrice: item.unitPrice,
+        regularUnitPrice: item.unitPrice,
+        isPromotion: false,
+        promotionPrice: 0,
+        promotionNote: "",
+
+        costPrice: item.costPrice,
+
+        subtotal: lineSubtotal,
+        totalCost: lineTotalCost,
+        profit: lineProfit,
+
+        manualNote: item.note || "",
+      });
+    });
+
     for (const [productId, productSaleItems] of groupedItems.entries()) {
       const productEntry = productSnapshots.get(productId);
       const productSnapshot = productEntry?.snapshot;
@@ -1250,6 +1505,9 @@ export async function createMultiItemSale({
         saleItems.push({
           lineId: `line-${saleItems.length + 1}`,
 
+          isManual: false,
+          inventoryTracked: true,
+
           productId,
           productName: normalizeText(product.name),
           productCode: normalizeText(product.code),
@@ -1303,12 +1561,20 @@ export async function createMultiItemSale({
 
     const total = Math.max(subtotal - cleanDiscount, 0);
 
+    const normalizedPayments = normalizePayments({
+      paymentMethod: cleanPaymentMethod,
+      payments,
+      total,
+    });
+
     const finalAmountReceived =
-      amountReceived === null ||
-      amountReceived === undefined ||
-      amountReceived === ""
-        ? total
-        : normalizeMoney(amountReceived);
+      cleanPaymentMethod === "efectivo"
+        ? amountReceived === null ||
+          amountReceived === undefined ||
+          amountReceived === ""
+          ? total
+          : normalizeMoney(amountReceived)
+        : total;
 
     if (
       cleanPaymentMethod === "efectivo" &&
@@ -1328,6 +1594,10 @@ export async function createMultiItemSale({
     const paymentStatus = isAddiPayment ? "pending_settlement" : "paid";
     const addiStatus = isAddiPayment ? ADDI_STATUS_PENDING : "";
     const addiExpectedAmount = isAddiPayment ? total : 0;
+    const cashAmount = getPaymentAmount(
+      normalizedPayments,
+      "efectivo"
+    );
     const profit = total - totalCost;
 
     if (shouldCreateCustomer && customerRef) {
@@ -1395,6 +1665,8 @@ export async function createMultiItemSale({
       customerEmail: finalCustomerEmail,
 
       paymentMethod: cleanPaymentMethod,
+      payments: normalizedPayments,
+      cashAmount,
       amountReceived: finalAmountReceived,
       change,
 
@@ -1440,10 +1712,12 @@ export async function createMultiItemSale({
       profit,
 
       paymentMethod: cleanPaymentMethod,
+      payments: normalizedPayments,
+      cashAmount,
       amountReceived: finalAmountReceived,
       change,
 
-      paymentStatus,
+      paymentStatus:
       addiStatus,
       addiExpectedAmount,
       addiSettledAmount: 0,
@@ -1485,6 +1759,7 @@ export async function createDirectSale({
   customerEmail = "",
 
   paymentMethod = DEFAULT_PAYMENT_METHOD,
+  payments = [],
   amountReceived = null,
   discount = 0,
 
@@ -1513,6 +1788,7 @@ export async function createDirectSale({
     customerEmail,
 
     paymentMethod,
+    payments,
     amountReceived,
     discount,
 
