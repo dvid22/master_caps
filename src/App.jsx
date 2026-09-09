@@ -14,7 +14,7 @@ import CashPage from "./pages/admin/CashPage";
 import ReservationsPage from "./pages/admin/ReservationsPage";
 import ClientsPage from "./pages/admin/ClientsPage";
 import SpecialOrdersPage from "./pages/admin/SpecialOrdersPage";
-import AddiPaymentsPage from "./pages/admin/AddiPaymentsPage";
+import FinancingPaymentsPage from "./pages/admin/FinancingPaymentsPage";
 import UsersPage from "./pages/admin/UsersPage";
 import ExpensesPage from "./pages/admin/ExpensesPage";
 
@@ -118,12 +118,17 @@ export default function App() {
         />
 
         <Route
-          path="addi"
+          path="financiaciones"
           element={
             <RoleGuard allowedRoles={["admin"]}>
-              <AddiPaymentsPage />
+              <FinancingPaymentsPage />
             </RoleGuard>
           }
+        />
+
+        <Route
+          path="addi"
+          element={<Navigate to="/admin/financiaciones" replace />}
         />
 
         <Route

@@ -35,24 +35,27 @@ export default function CashGuard({ children }) {
     }
 
     let active = true;
+    setLoading(true);
 
+    /*
+     * La caja ya no pertenece al usuario. Se recupera y se escucha la única
+     * sesión compartida de la tienda para la fecha actual.
+     */
     recoverExpiredCashSessions({
       storeId: STORE_ID,
-      actor,
     }).catch((error) => {
       console.error("No se pudieron cerrar cajas vencidas:", error);
     });
 
     const unsubscribe = subscribeTodayCashSession({
       storeId: STORE_ID,
-      actor,
       callback: (value) => {
         if (!active) return;
         setSession(value);
         setLoading(false);
       },
       onError: (error) => {
-        console.error("No se pudo validar la caja actual:", error);
+        console.error("No se pudo validar la caja compartida actual:", error);
         if (!active) return;
         setLoading(false);
       },
@@ -62,7 +65,7 @@ export default function CashGuard({ children }) {
       active = false;
       unsubscribe?.();
     };
-  }, [actor, businessDateKey]);
+  }, [actor?.uid, businessDateKey]);
 
   if (loading) {
     return (
@@ -70,7 +73,7 @@ export default function CashGuard({ children }) {
         <div className="rounded-[24px] bg-white px-7 py-6 text-center shadow-[0_18px_55px_rgba(0,0,0,0.05)] ring-1 ring-black/[0.06]">
           <span className="mx-auto block h-6 w-6 animate-spin rounded-full border-2 border-red-100 border-t-red-600" />
           <p className="mt-3 text-[12px] text-black/50">
-            Validando la caja de hoy...
+            Validando la caja compartida de hoy...
           </p>
         </div>
       </main>

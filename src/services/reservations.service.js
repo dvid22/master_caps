@@ -20,8 +20,48 @@ import {
   normalizeCustomerDocument,
   normalizeCustomerPhone,
 } from "./customers.service";
+import {
+  CASH_BALANCE_METHODS,
+  getBogotaBusinessDate,
+  getCashSessionId,
+} from "./cash.service";
 
 const DEFAULT_RESERVATION_DAYS = 7;
+const DEFERRED_PAYMENT_METHODS = ["addi", "sistecredito"];
+const VALID_FINAL_PAYMENT_METHODS = [
+  ...CASH_BALANCE_METHODS,
+  ...DEFERRED_PAYMENT_METHODS,
+];
+
+function isDeferredPaymentMethod(value) {
+  return DEFERRED_PAYMENT_METHODS.includes(String(value || "").trim());
+}
+
+function validateImmediatePaymentMethod(value) {
+  const method = String(value || "").trim() || "efectivo";
+
+  if (isDeferredPaymentMethod(method)) {
+    throw new Error(
+      "Addi y Sistecrédito solo se pueden usar al finalizar el apartado, no como abono."
+    );
+  }
+
+  if (!CASH_BALANCE_METHODS.includes(method)) {
+    throw new Error("El método de pago del abono no es válido.");
+  }
+
+  return method;
+}
+
+function validateFinalPaymentMethod(value) {
+  const method = String(value || "").trim() || "efectivo";
+
+  if (!VALID_FINAL_PAYMENT_METHODS.includes(method)) {
+    throw new Error("El método de pago final no es válido.");
+  }
+
+  return method;
+}
 
 function safeString(value) {
   return String(value || "").trim();
@@ -301,6 +341,74 @@ function createGroupNumber(groupRef) {
   return `AP-${groupRef.id.slice(0, 8).toUpperCase()}`;
 }
 
+function getSaleCounterRef(storeId) {
+  return doc(db, "counters", `sales_${storeId}`);
+}
+
+function formatSaleNumber(number) {
+  return `V-${String(number).padStart(6, "0")}`;
+}
+
+async function getNextSaleNumber(transaction, storeId) {
+  const counterRef = getSaleCounterRef(storeId);
+  const counterSnapshot = await transaction.get(counterRef);
+  const lastNumber = Number(counterSnapshot.data()?.lastNumber || 0);
+  const number = lastNumber + 1;
+
+  return {
+    counterRef,
+    number,
+    saleNumber: formatSaleNumber(number),
+  };
+}
+
+async function getOpenCashSessionForToday(transaction, storeId) {
+  const businessDate = getBogotaBusinessDate();
+  const sessionId = getCashSessionId({ storeId, businessDate });
+  const sessionRef = doc(db, "cashSessions", sessionId);
+  const snapshot = await transaction.get(sessionRef);
+
+  if (!snapshot.exists()) {
+    throw new Error(
+      "Debes abrir la caja de hoy antes de registrar pagos o finalizar este apartado."
+    );
+  }
+
+  const session = snapshot.data();
+
+  if (session.status !== "open" || session.businessDate !== businessDate) {
+    throw new Error("La caja de hoy no está abierta.");
+  }
+
+  return {
+    sessionId,
+    sessionRef,
+    session,
+    businessDate,
+  };
+}
+
+function groupPaymentEntries(entries = []) {
+  const grouped = new Map();
+
+  entries.forEach((entry) => {
+    const amount = Math.max(safeNumber(entry?.amount), 0);
+    const method = safeString(entry?.paymentMethod || entry?.method) || "otro";
+
+    if (amount <= 0) return;
+
+    const current = grouped.get(method) || {
+      method,
+      amount: 0,
+    };
+
+    current.amount += amount;
+    grouped.set(method, current);
+  });
+
+  return Array.from(grouped.values());
+}
+
 function mapSnapshot(snapshot) {
   return snapshot.docs
     .map((item) => ({
@@ -320,6 +428,9 @@ function buildPaymentEntry({
   notes = "",
   actor = null,
   type = "payment",
+  cashSessionId = "",
+  businessDate = "",
+  cashMovementId = "",
 }) {
   return {
     id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -328,6 +439,9 @@ function buildPaymentEntry({
     notes: safeString(notes),
     type,
     createdAt: Timestamp.now(),
+    cashSessionId: safeString(cashSessionId),
+    businessDate: safeString(businessDate),
+    cashMovementId: safeString(cashMovementId),
     actorUid: actor?.uid || "",
     actorName: actor?.name || "",
     actorEmail: actor?.email || "",
@@ -720,15 +834,33 @@ export async function createReservationCart({
     const amountPaid = requestedInitialPayment;
     const balanceDue = Math.max(total - amountPaid, 0);
 
+    let initialCash = null;
+    let initialCashMovementRef = null;
+    let cleanInitialPaymentMethod = safeString(initialPaymentMethod) || "efectivo";
+
+    if (amountPaid > 0) {
+      cleanInitialPaymentMethod = validateImmediatePaymentMethod(
+        initialPaymentMethod
+      );
+      initialCash = await getOpenCashSessionForToday(
+        transaction,
+        cleanStoreId
+      );
+      initialCashMovementRef = doc(collection(db, "cashMovements"));
+    }
+
     const paymentHistory =
       amountPaid > 0
         ? [
             buildPaymentEntry({
               amount: amountPaid,
-              paymentMethod: initialPaymentMethod,
+              paymentMethod: cleanInitialPaymentMethod,
               notes: notes || "Pago inicial del apartado",
               actor,
               type: "initial",
+              cashSessionId: initialCash?.sessionId || "",
+              businessDate: initialCash?.businessDate || "",
+              cashMovementId: initialCashMovementRef?.id || "",
             }),
           ]
         : [];
@@ -776,6 +908,34 @@ export async function createReservationCart({
       });
     }
 
+    if (amountPaid > 0 && initialCash && initialCashMovementRef) {
+      transaction.set(initialCashMovementRef, {
+        storeId: cleanStoreId,
+        sessionId: initialCash.sessionId,
+        businessDate: initialCash.businessDate,
+        type: "entry",
+        fromMethod: "",
+        toMethod: cleanInitialPaymentMethod,
+        amount: amountPaid,
+        note: safeString(notes) || "Pago inicial de apartado",
+        sourceType: "reservation_payment",
+        sourceId: groupRef.id,
+        reservationGroupId: groupRef.id,
+        reservationPaymentId: paymentHistory[0]?.id || "",
+        createdByUid: actor?.uid || "",
+        createdByName: actor?.name || "",
+        createdByEmail: actor?.email || "",
+        createdAt: serverTimestamp(),
+      });
+
+      transaction.update(initialCash.sessionRef, {
+        lastActivityByUid: actor?.uid || "",
+        lastActivityByName: actor?.name || "",
+        lastActivityByEmail: actor?.email || "",
+        updatedAt: serverTimestamp(),
+      });
+    }
+
     transaction.set(groupRef, {
       storeId: cleanStoreId,
       groupNumber,
@@ -797,7 +957,7 @@ export async function createReservationCart({
       balanceDue,
       initialPayment: amountPaid,
       initialPaymentMethod:
-        amountPaid > 0 ? safeString(initialPaymentMethod) || "efectivo" : "",
+        amountPaid > 0 ? cleanInitialPaymentMethod : "",
       paymentHistory,
       notes: safeString(notes),
       reservationIds: lines.map((line) => line.reservationRef.id),
@@ -925,6 +1085,7 @@ export async function addReservationGroupPayment({
   actor = null,
 }) {
   const cleanAmount = Math.max(safeNumber(amount), 0);
+  const cleanPaymentMethod = validateImmediatePaymentMethod(paymentMethod);
 
   if (!groupId) throw new Error("No se encontró el apartado.");
   if (cleanAmount <= 0) {
@@ -943,30 +1104,51 @@ export async function addReservationGroupPayment({
       throw new Error("Solo puedes registrar abonos en apartados activos.");
     }
 
+    const cleanStoreId = safeString(group.storeId) || STORE_ID;
+    const cash = await getOpenCashSessionForToday(transaction, cleanStoreId);
+    const movementRef = doc(collection(db, "cashMovements"));
+
     const total = Math.max(
-      safeNumber(
-        group.total,
-        safeNumber(group.subtotal)
-      ),
+      safeNumber(group.total, safeNumber(group.subtotal)),
       0
     );
     const amountPaid = Math.max(safeNumber(group.amountPaid), 0);
     const balanceDue = Math.max(total - amountPaid, 0);
 
     if (cleanAmount > balanceDue) {
-      throw new Error(
-        "El abono no puede superar el saldo pendiente."
-      );
+      throw new Error("El abono no puede superar el saldo pendiente.");
     }
 
     const nextPaid = amountPaid + cleanAmount;
     const nextBalance = Math.max(total - nextPaid, 0);
     const payment = buildPaymentEntry({
       amount: cleanAmount,
-      paymentMethod,
+      paymentMethod: cleanPaymentMethod,
       notes,
       actor,
       type: "installment",
+      cashSessionId: cash.sessionId,
+      businessDate: cash.businessDate,
+      cashMovementId: movementRef.id,
+    });
+
+    transaction.set(movementRef, {
+      storeId: cleanStoreId,
+      sessionId: cash.sessionId,
+      businessDate: cash.businessDate,
+      type: "entry",
+      fromMethod: "",
+      toMethod: cleanPaymentMethod,
+      amount: cleanAmount,
+      note: safeString(notes) || "Abono de apartado",
+      sourceType: "reservation_payment",
+      sourceId: groupId,
+      reservationGroupId: groupId,
+      reservationPaymentId: payment.id,
+      createdByUid: actor?.uid || "",
+      createdByName: actor?.name || "",
+      createdByEmail: actor?.email || "",
+      createdAt: serverTimestamp(),
     });
 
     transaction.update(groupRef, {
@@ -976,14 +1158,21 @@ export async function addReservationGroupPayment({
       updatedAt: serverTimestamp(),
     });
 
+    transaction.update(cash.sessionRef, {
+      lastActivityByUid: actor?.uid || "",
+      lastActivityByName: actor?.name || "",
+      lastActivityByEmail: actor?.email || "",
+      updatedAt: serverTimestamp(),
+    });
+
     return {
       amountPaid: nextPaid,
       balanceDue: nextBalance,
       payment,
+      cashSessionId: cash.sessionId,
     };
   });
 }
-
 
 export async function updateReservationGroup({
   groupId,
@@ -1725,6 +1914,8 @@ export async function completeReservationGroupSale({
 }) {
   if (!groupId) throw new Error("No se encontró el apartado.");
 
+  const cleanFinalPaymentMethod = validateFinalPaymentMethod(paymentMethod);
+
   return runTransaction(db, async (transaction) => {
     const groupRef = doc(db, "reservationGroups", groupId);
     const groupSnap = await transaction.get(groupRef);
@@ -1743,14 +1934,12 @@ export async function completeReservationGroupSale({
       throw new Error("Este apartado ya venció.");
     }
 
+    const cleanStoreId = safeString(group.storeId) || STORE_ID;
     const cleanCustomerDocument = normalizeCustomerDocument(
       group.customerDocument
     );
     const resolvedCustomerId = cleanCustomerDocument
-      ? getCustomerDocumentId(
-          cleanCustomerDocument,
-          group.storeId || STORE_ID
-        )
+      ? getCustomerDocumentId(cleanCustomerDocument, cleanStoreId)
       : safeString(group.customerId);
     const customerRef = resolvedCustomerId
       ? doc(db, "customers", resolvedCustomerId)
@@ -1774,6 +1963,9 @@ export async function completeReservationGroupSale({
       snapshots.push(await transaction.get(ref));
     }
 
+    const cash = await getOpenCashSessionForToday(transaction, cleanStoreId);
+    const saleCounter = await getNextSaleNumber(transaction, cleanStoreId);
+
     const items = snapshots.map((snapshot, index) => {
       if (!snapshot.exists()) {
         throw new Error(`No se encontró la línea ${index + 1}.`);
@@ -1791,9 +1983,13 @@ export async function completeReservationGroupSale({
       );
       const unitPrice = Math.max(safeNumber(reservation.unitPrice), 0);
       const costPrice = Math.max(safeNumber(reservation.costPrice), 0);
+      const lineSubtotal = unitPrice * quantity;
+      const lineTotalCost = costPrice * quantity;
 
       return {
+        lineId: `line-${index + 1}`,
         reservationId: snapshot.id,
+        inventoryTracked: true,
         productId: reservation.productId || "",
         productName: reservation.productName || "",
         productCode: reservation.productCode || "",
@@ -1804,51 +2000,30 @@ export async function completeReservationGroupSale({
           "Talla única",
         categoryId: reservation.categoryId || "",
         categoryName: reservation.categoryName || "",
+        imageUrl: reservation.productImageUrl || "",
         quantity,
         unitPrice,
-
         regularUnitPrice: Math.max(
-          safeNumber(
-            reservation.regularUnitPrice,
-            unitPrice
-          ),
+          safeNumber(reservation.regularUnitPrice, unitPrice),
           0
         ),
-        isPromotion: Boolean(
-          reservation.isPromotion
-        ),
-        promotionPrice: Math.max(
-          safeNumber(
-            reservation.promotionPrice
-          ),
-          0
-        ),
-        promotionNote: safeString(
-          reservation.promotionNote
-        ),
-
+        isPromotion: Boolean(reservation.isPromotion),
+        promotionPrice: Math.max(safeNumber(reservation.promotionPrice), 0),
+        promotionNote: safeString(reservation.promotionNote),
         costPrice,
-        subtotal: unitPrice * quantity,
-        totalCost: costPrice * quantity,
+        subtotal: lineSubtotal,
+        totalCost: lineTotalCost,
+        profit: lineSubtotal - lineTotalCost,
       };
     });
 
-    const subtotal = items.reduce(
-      (sum, item) => sum + item.subtotal,
-      0
-    );
+    const subtotal = items.reduce((sum, item) => sum + item.subtotal, 0);
     const discount = Math.min(
       Math.max(safeNumber(group.discount), 0),
       subtotal
     );
-    const total = Math.max(
-      subtotal - discount,
-      0
-    );
-    const totalCost = items.reduce(
-      (sum, item) => sum + item.totalCost,
-      0
-    );
+    const total = Math.max(subtotal - discount, 0);
+    const totalCost = items.reduce((sum, item) => sum + item.totalCost, 0);
     const amountPaid = Math.max(safeNumber(group.amountPaid), 0);
 
     if (amountPaid > total) {
@@ -1860,6 +2035,85 @@ export async function completeReservationGroupSale({
     const finalPayment = Math.max(total - amountPaid, 0);
     const totalPaid = amountPaid + finalPayment;
 
+    const previousPaymentHistory = Array.isArray(group.paymentHistory)
+      ? group.paymentHistory.filter((entry) => safeNumber(entry?.amount) > 0)
+      : [];
+
+    const finalPaymentEntry =
+      finalPayment > 0
+        ? buildPaymentEntry({
+            amount: finalPayment,
+            paymentMethod: cleanFinalPaymentMethod,
+            notes: notes || "Pago final de la venta",
+            actor: seller,
+            type: "final",
+            cashSessionId: isDeferredPaymentMethod(cleanFinalPaymentMethod)
+              ? ""
+              : cash.sessionId,
+            businessDate: isDeferredPaymentMethod(cleanFinalPaymentMethod)
+              ? ""
+              : cash.businessDate,
+          })
+        : null;
+
+    const fullPaymentHistory = finalPaymentEntry
+      ? [...previousPaymentHistory, finalPaymentEntry]
+      : [...previousPaymentHistory];
+
+    const payments = groupPaymentEntries(fullPaymentHistory);
+    const deferredPayments = payments.filter((payment) =>
+      isDeferredPaymentMethod(payment.method)
+    );
+
+    if (deferredPayments.length > 1) {
+      throw new Error(
+        "Un apartado no puede finalizarse mezclando Addi y Sistecrédito en la misma venta."
+      );
+    }
+
+    const deferredProvider = deferredPayments[0]?.method || "";
+    const deferredAmount = deferredPayments[0]?.amount || 0;
+    const paymentMethodForSale =
+      payments.length === 1 ? payments[0].method : "mixto";
+
+    const cashRecognizedEntries = [];
+
+    previousPaymentHistory.forEach((entry) => {
+      const method = safeString(entry?.paymentMethod) || "otro";
+      const amount = Math.max(safeNumber(entry?.amount), 0);
+
+      if (
+        amount > 0 &&
+        !isDeferredPaymentMethod(method) &&
+        !safeString(entry?.cashSessionId)
+      ) {
+        cashRecognizedEntries.push({ method, amount });
+      }
+    });
+
+    if (
+      finalPaymentEntry &&
+      !isDeferredPaymentMethod(finalPaymentEntry.paymentMethod)
+    ) {
+      cashRecognizedEntries.push({
+        method: finalPaymentEntry.paymentMethod,
+        amount: finalPaymentEntry.amount,
+      });
+    }
+
+    const cashRecognizedPayments = groupPaymentEntries(
+      cashRecognizedEntries.map((entry) => ({
+        paymentMethod: entry.method,
+        amount: entry.amount,
+      }))
+    );
+
+    const cashAmount = payments.reduce(
+      (sum, payment) =>
+        payment.method === "efectivo" ? sum + payment.amount : sum,
+      0
+    );
+
     const saleRef = doc(collection(db, "sales"));
 
     if (customerRef && !customerSnapshot?.exists()) {
@@ -1867,7 +2121,7 @@ export async function completeReservationGroupSale({
 
       if (customerName) {
         transaction.set(customerRef, {
-          storeId: group.storeId || STORE_ID,
+          storeId: cleanStoreId,
           documentNumber: cleanCustomerDocument,
           normalizedDocument: cleanCustomerDocument,
           firstName: "",
@@ -1890,8 +2144,20 @@ export async function completeReservationGroupSale({
       }
     }
 
-    transaction.set(saleRef, {
-      storeId: group.storeId || STORE_ID,
+    transaction.set(
+      saleCounter.counterRef,
+      {
+        storeId: cleanStoreId,
+        lastNumber: saleCounter.number,
+        updatedAt: serverTimestamp(),
+      },
+      { merge: true }
+    );
+
+    const salePayload = {
+      storeId: cleanStoreId,
+      saleNumber: saleCounter.saleNumber,
+      receiptNumber: saleCounter.saleNumber,
       items,
       totalItems: items.reduce((sum, item) => sum + item.quantity, 0),
       uniqueItems: items.length,
@@ -1906,45 +2172,99 @@ export async function completeReservationGroupSale({
       balanceDue: 0,
       customerId: resolvedCustomerId || group.customerId || "",
       customerName: group.customerName || "",
-      customerDocument: group.customerDocument || "",
-      customerPhone: group.customerPhone || "",
-      paymentMethod,
+      customerDocument: cleanCustomerDocument,
+      customerPhone: normalizeCustomerPhone(group.customerPhone),
+      customerEmail: "",
+      paymentMethod: paymentMethodForSale,
+      payments,
+      cashRecognizedPayments,
+      reservationPaymentsRecordedInCash: previousPaymentHistory.every(
+        (entry) =>
+          safeNumber(entry?.amount) <= 0 || Boolean(safeString(entry?.cashSessionId))
+      ),
+      cashAmount,
+      amountReceived: total,
+      change: 0,
+      paymentStatus: deferredProvider ? "pending_settlement" : "paid",
+      settlementProvider: deferredProvider,
+      settlementStatus: deferredProvider ? "pending" : "",
+      settlementExpectedAmount: deferredAmount,
+      settlementSettledAmount: 0,
+      settlementSettledAt: null,
+      settlementReference: "",
+      settlementNotes: "",
+      settlementDestination: deferredProvider ? "transferencia" : "",
+      settlementCashSessionId: "",
+      settlementSettledByUid: "",
+      settlementSettledByName: "",
+      settlementSettledByEmail: "",
+      recognizedAt: deferredProvider ? null : serverTimestamp(),
+      recognizedBusinessDate: deferredProvider ? "" : cash.businessDate,
       notes: safeString(notes),
       source: "reservation",
       reservationGroupId: groupId,
       reservationGroupNumber: group.groupNumber || "",
+      cashSessionId: cash.sessionId,
       sellerUid: seller?.uid || "",
       sellerName: seller?.name || "",
       sellerEmail: seller?.email || "",
+      receiptPrinted: false,
+      receiptPrintCount: 0,
+      lastReceiptPrintedAt: null,
       createdAt: serverTimestamp(),
-    });
+      updatedAt: serverTimestamp(),
+    };
 
-    const finalPaymentEntry =
-      finalPayment > 0
-        ? buildPaymentEntry({
-            amount: finalPayment,
-            paymentMethod,
-            notes: notes || "Pago final de la venta",
-            actor: seller,
-            type: "final",
-          })
-        : null;
+    if (deferredProvider === "addi") {
+      Object.assign(salePayload, {
+        addiStatus: "pending",
+        addiExpectedAmount: deferredAmount,
+        addiSettledAmount: 0,
+        addiSettledAt: null,
+        addiReference: "",
+        addiNotes: "",
+      });
+    } else {
+      Object.assign(salePayload, {
+        addiStatus: "",
+        addiExpectedAmount: 0,
+        addiSettledAmount: 0,
+        addiSettledAt: null,
+        addiReference: "",
+        addiNotes: "",
+      });
+    }
+
+    if (deferredProvider === "sistecredito") {
+      Object.assign(salePayload, {
+        sistecreditoStatus: "pending",
+        sistecreditoExpectedAmount: deferredAmount,
+        sistecreditoSettledAmount: 0,
+        sistecreditoSettledAt: null,
+        sistecreditoReference: "",
+        sistecreditoNotes: "",
+      });
+    }
+
+    transaction.set(saleRef, salePayload);
 
     transaction.update(groupRef, {
       status: "completed",
       customerId: resolvedCustomerId || group.customerId || "",
       completedAt: serverTimestamp(),
       saleId: saleRef.id,
+      saleNumber: saleCounter.saleNumber,
       amountPaid: totalPaid,
       balanceDue: 0,
       finalPayment,
-      finalPaymentMethod: paymentMethod,
+      finalPaymentMethod: cleanFinalPaymentMethod,
       ...(finalPaymentEntry
         ? { paymentHistory: arrayUnion(finalPaymentEntry) }
         : {}),
       completedByUid: seller?.uid || "",
       completedByName: seller?.name || "",
       completedByEmail: seller?.email || "",
+      updatedAt: serverTimestamp(),
     });
 
     refs.forEach((ref) => {
@@ -1952,11 +2272,19 @@ export async function completeReservationGroupSale({
         status: "completed",
         completedAt: serverTimestamp(),
         saleId: saleRef.id,
-        paymentMethod,
+        saleNumber: saleCounter.saleNumber,
+        paymentMethod: cleanFinalPaymentMethod,
         notes: safeString(notes),
         notificationRead: true,
         notificationReadAt: serverTimestamp(),
       });
+    });
+
+    transaction.update(cash.sessionRef, {
+      lastActivityByUid: seller?.uid || "",
+      lastActivityByName: seller?.name || "",
+      lastActivityByEmail: seller?.email || "",
+      updatedAt: serverTimestamp(),
     });
 
     return saleRef.id;
@@ -2041,6 +2369,7 @@ async function closeReservationGroup({
   nextStatus,
   statusDateField,
   actor = null,
+  hardDelete = false,
 }) {
   if (!groupId) throw new Error("No se encontró el apartado.");
 
@@ -2217,6 +2546,16 @@ async function closeReservationGroup({
       });
     }
 
+    if (hardDelete) {
+      reservationSnapshots.forEach((snapshot) => {
+        if (!snapshot.exists()) return;
+        transaction.delete(snapshot.ref);
+      });
+
+      transaction.delete(groupRef);
+      return reservationSnapshots.length;
+    }
+
     reservationSnapshots.forEach((snapshot) => {
       if (!snapshot.exists() || snapshot.data().status !== "active") return;
 
@@ -2246,6 +2585,7 @@ export async function cancelReservationGroup(groupId, actor = null) {
     nextStatus: "cancelled",
     statusDateField: "cancelledAt",
     actor,
+    hardDelete: true,
   });
 }
 

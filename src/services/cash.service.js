@@ -15,6 +15,13 @@ import { STORE_ID } from "./categories.service";
 import { getSales } from "./sales.service";
 
 export const CASH_TIME_ZONE = "America/Bogota";
+
+/*
+ * CASH_METHODS se conserva como catálogo completo de métodos de pago para no
+ * romper las pantallas que ya lo consumen. Addi y Sistecrédito NO son lugares
+ * físicos donde queda el dinero: cuando se desembolsan, el saldo entra a
+ * "transferencia" (cuenta bancaria) y el proveedor se conserva como origen.
+ */
 export const CASH_METHODS = [
   "efectivo",
   "transferencia",
@@ -22,16 +29,29 @@ export const CASH_METHODS = [
   "daviplata",
   "tarjeta",
   "addi",
+  "sistecredito",
   "otro",
 ];
 
+export const CASH_BALANCE_METHODS = [
+  "efectivo",
+  "transferencia",
+  "nequi",
+  "daviplata",
+  "tarjeta",
+  "otro",
+];
+
+export const DEFERRED_CASH_PROVIDERS = ["addi", "sistecredito"];
+
 export const CASH_METHOD_LABELS = {
   efectivo: "Efectivo",
-  transferencia: "Transferencia",
+  transferencia: "Transferencia / banco",
   nequi: "Nequi",
   daviplata: "Daviplata",
   tarjeta: "Tarjeta",
   addi: "Addi",
+  sistecredito: "Sistecrédito",
   otro: "Otro",
 };
 
@@ -83,21 +103,36 @@ export function getBogotaBusinessDate(date = new Date()) {
   return `${year}-${month}-${day}`;
 }
 
+/**
+ * Desde esta versión existe UNA caja por tienda y día.
+ * `operatorUid` se acepta por compatibilidad con llamadas antiguas, pero ya no
+ * participa en el identificador.
+ */
 export function getCashSessionId({
   storeId = STORE_ID,
-  operatorUid,
   businessDate = getBogotaBusinessDate(),
-}) {
-  const cleanUid = safeId(operatorUid);
+  operatorUid: _legacyOperatorUid,
+} = {}) {
+  const cleanStoreId = safeId(storeId);
 
-  if (!cleanUid) {
-    throw new Error("No se pudo identificar al operador de caja.");
+  if (!cleanStoreId || !businessDate) {
+    throw new Error("No se pudo identificar la caja de la tienda.");
   }
 
-  return `${safeId(storeId)}__${cleanUid}__${businessDate}`;
+  return `${cleanStoreId}__${businessDate}`;
 }
 
 function normalizeSession(session = {}) {
+  const openedByUid = cleanText(
+    session.openedByUid || session.operatorUid
+  );
+  const openedByName = cleanText(
+    session.openedByName || session.operatorName
+  );
+  const openedByEmail = cleanText(
+    session.openedByEmail || session.operatorEmail
+  );
+
   return {
     ...session,
     openingAmount: money(session.openingAmount),
@@ -112,6 +147,15 @@ function normalizeSession(session = {}) {
         : Number(session.difference || 0),
     status: cleanText(session.status) || "open",
     closeType: cleanText(session.closeType),
+
+    openedByUid,
+    openedByName,
+    openedByEmail,
+
+    // Alias legacy para no romper CashPage mientras se actualiza su UI.
+    operatorUid: cleanText(session.operatorUid) || openedByUid,
+    operatorName: cleanText(session.operatorName) || openedByName,
+    operatorEmail: cleanText(session.operatorEmail) || openedByEmail,
   };
 }
 
@@ -126,22 +170,124 @@ function normalizeMovement(movement = {}) {
   };
 }
 
+function getDeferredProvider(sale = {}) {
+  const explicit = cleanText(sale.settlementProvider);
+
+  if (DEFERRED_CASH_PROVIDERS.includes(explicit)) {
+    return explicit;
+  }
+
+  const method = cleanText(sale.paymentMethod);
+
+  if (DEFERRED_CASH_PROVIDERS.includes(method)) {
+    return method;
+  }
+
+  const paymentProvider = Array.isArray(sale.payments)
+    ? sale.payments.find((payment) =>
+        DEFERRED_CASH_PROVIDERS.includes(cleanText(payment?.method))
+      )?.method
+    : "";
+
+  return DEFERRED_CASH_PROVIDERS.includes(cleanText(paymentProvider))
+    ? cleanText(paymentProvider)
+    : "";
+}
+
+function getSettlementStatus(sale = {}, provider = getDeferredProvider(sale)) {
+  const generic = cleanText(sale.settlementStatus);
+  if (generic) return generic;
+
+  if (provider === "addi") {
+    return cleanText(sale.addiStatus);
+  }
+
+  if (provider === "sistecredito") {
+    return cleanText(sale.sistecreditoStatus);
+  }
+
+  return "";
+}
+
+function getSettlementAt(sale = {}, provider = getDeferredProvider(sale)) {
+  if (sale.settlementSettledAt) return sale.settlementSettledAt;
+  if (sale.recognizedAt) return sale.recognizedAt;
+  if (provider === "addi") return sale.addiSettledAt || null;
+  if (provider === "sistecredito") return sale.sistecreditoSettledAt || null;
+  return null;
+}
+
+function getSettlementAmount(sale = {}, provider = getDeferredProvider(sale)) {
+  if (sale.settlementSettledAmount !== undefined) {
+    return money(sale.settlementSettledAmount);
+  }
+
+  if (provider === "addi") {
+    return money(sale.addiSettledAmount);
+  }
+
+  if (provider === "sistecredito") {
+    return money(sale.sistecreditoSettledAmount);
+  }
+
+  return 0;
+}
+
+function getSettlementExpectedAmount(
+  sale = {},
+  provider = getDeferredProvider(sale)
+) {
+  if (sale.settlementExpectedAmount !== undefined) {
+    return money(sale.settlementExpectedAmount);
+  }
+
+  if (provider === "addi" && sale.addiExpectedAmount !== undefined) {
+    return money(sale.addiExpectedAmount);
+  }
+
+  if (
+    provider === "sistecredito" &&
+    sale.sistecreditoExpectedAmount !== undefined
+  ) {
+    return money(sale.sistecreditoExpectedAmount);
+  }
+
+  const paymentAmount = Array.isArray(sale.payments)
+    ? sale.payments
+        .filter((payment) => cleanText(payment?.method) === provider)
+        .reduce((sum, payment) => sum + money(payment?.amount), 0)
+    : 0;
+
+  return paymentAmount || money(sale.total);
+}
+
 export function normalizeSalePayments(sale = {}) {
   const total = money(sale.total);
-  const source = Array.isArray(sale.payments) ? sale.payments : [];
+  const hasExplicitCashRecognition = Array.isArray(
+    sale.cashRecognizedPayments
+  );
+  const source = hasExplicitCashRecognition
+    ? sale.cashRecognizedPayments
+    : Array.isArray(sale.payments)
+      ? sale.payments
+      : [];
 
   if (source.length > 0) {
     const normalized = source
-      .map((payment) => ({
-        method: CASH_METHODS.includes(cleanText(payment?.method))
-          ? cleanText(payment.method)
-          : "otro",
-        amount: money(payment?.amount),
-        receivedAmount:
-          payment?.receivedAmount === null || payment?.receivedAmount === undefined
-            ? money(payment?.amount)
-            : money(payment.receivedAmount),
-      }))
+      .map((payment) => {
+        const rawMethod = cleanText(payment?.method);
+        const method = CASH_METHODS.includes(rawMethod) ? rawMethod : "otro";
+
+        return {
+          method,
+          amount: money(payment?.amount),
+          receivedAmount:
+            payment?.receivedAmount === null ||
+            payment?.receivedAmount === undefined
+              ? money(payment?.amount)
+              : money(payment.receivedAmount),
+        };
+      })
       .filter((payment) => payment.amount > 0);
 
     if (normalized.length > 0) {
@@ -149,9 +295,12 @@ export function normalizeSalePayments(sale = {}) {
     }
   }
 
-  const method = CASH_METHODS.includes(cleanText(sale.paymentMethod))
-    ? cleanText(sale.paymentMethod)
-    : "otro";
+  if (hasExplicitCashRecognition) {
+    return [];
+  }
+
+  const rawMethod = cleanText(sale.paymentMethod);
+  const method = CASH_METHODS.includes(rawMethod) ? rawMethod : "otro";
 
   return [
     {
@@ -165,37 +314,69 @@ export function normalizeSalePayments(sale = {}) {
   ];
 }
 
-function saleBelongsToSession(sale, session) {
+function saleCreatedInSession(sale, session) {
   if (!sale || !session) return false;
-
-  if (sale.cashSessionId) {
-    return sale.cashSessionId === session.id;
-  }
-
-  const saleSellerUid = cleanText(sale.sellerUid);
-  const sessionOperatorUid = cleanText(session.operatorUid);
-
-  if (
-    saleSellerUid &&
-    sessionOperatorUid &&
-    saleSellerUid !== sessionOperatorUid
-  ) {
-    return false;
-  }
 
   const saleMs = timestampMs(sale.createdAt);
   const openedMs = timestampMs(session.openedAt);
   const closedMs = timestampMs(session.closedAt);
 
-  if (!saleMs || !openedMs || saleMs < openedMs) {
-    return false;
-  }
+  if (!saleMs) return false;
 
-  if (closedMs && saleMs > closedMs) {
-    return false;
-  }
+  if (openedMs && saleMs < openedMs) return false;
+  if (closedMs && saleMs > closedMs) return false;
 
   return getBogotaBusinessDate(new Date(saleMs)) === session.businessDate;
+}
+
+function saleBelongsToSession(sale, session) {
+  if (!sale || !session) return false;
+
+  const provider = getDeferredProvider(sale);
+
+  if (provider) {
+    if (getSettlementStatus(sale, provider) !== "settled") {
+      return false;
+    }
+
+    const settlementSessionId = cleanText(sale.settlementCashSessionId);
+
+    if (settlementSessionId) {
+      return settlementSessionId === session.id;
+    }
+
+    // Las ventas financiadas antiguas no tenían settlementCashSessionId.
+    // Solo hacemos fallback por fecha sobre una sesión compartida moderna,
+    // evitando duplicar el mismo desembolso entre antiguas cajas por operador.
+    const expectedSharedId = getCashSessionId({
+      storeId: session.storeId || STORE_ID,
+      businessDate: session.businessDate,
+    });
+
+    if (session.id !== expectedSharedId) {
+      return false;
+    }
+
+    const settledMs = timestampMs(getSettlementAt(sale, provider));
+    if (!settledMs) return false;
+
+    const openedMs = timestampMs(session.openedAt);
+    const closedMs = timestampMs(session.closedAt);
+
+    if (openedMs && settledMs < openedMs) return false;
+    if (closedMs && settledMs > closedMs) return false;
+
+    return (
+      getBogotaBusinessDate(new Date(settledMs)) === session.businessDate
+    );
+  }
+
+  if (sale.cashSessionId) {
+    return sale.cashSessionId === session.id;
+  }
+
+  // Compatibilidad con ventas históricas sin cashSessionId.
+  return saleCreatedInSession(sale, session);
 }
 
 function emptyBalances() {
@@ -205,35 +386,77 @@ function emptyBalances() {
   }, {});
 }
 
+function emptyDeferredTotals() {
+  return DEFERRED_CASH_PROVIDERS.reduce((result, provider) => {
+    result[provider] = 0;
+    return result;
+  }, {});
+}
+
 export function buildCashSessionSummary(session, sales = [], movements = []) {
   const safeSession = normalizeSession(session || {});
   const balances = emptyBalances();
   const salesByMethod = emptyBalances();
+  const pendingByProvider = emptyDeferredTotals();
+  const settledByProvider = emptyDeferredTotals();
+  const settledReceivedByProvider = emptyDeferredTotals();
 
   balances.efectivo = money(safeSession.openingAmount);
 
   let totalSales = 0;
   let saleCount = 0;
-  let pendingAddi = 0;
 
   (Array.isArray(sales) ? sales : []).forEach((sale) => {
+    const provider = getDeferredProvider(sale);
+    const createdInThisSession = saleCreatedInSession(sale, safeSession);
+
+    if (provider && createdInThisSession) {
+      if (getSettlementStatus(sale, provider) !== "settled") {
+        pendingByProvider[provider] += getSettlementExpectedAmount(
+          sale,
+          provider
+        );
+      }
+
+      /*
+       * Una venta de apartado puede tener abonos inmediatos y un saldo final
+       * financiado. cashRecognizedPayments contiene únicamente importes que
+       * todavía deben entrar a esta caja; los abonos ya registrados como
+       * movimientos no se repiten aquí.
+       */
+      normalizeSalePayments(sale).forEach((payment) => {
+        if (!CASH_BALANCE_METHODS.includes(payment.method)) return;
+
+        salesByMethod[payment.method] += payment.amount;
+        balances[payment.method] += payment.amount;
+      });
+    }
+
     if (!saleBelongsToSession(sale, safeSession)) return;
 
     saleCount += 1;
     totalSales += money(sale.total);
 
+    if (provider) {
+      const expectedAmount = getSettlementExpectedAmount(sale, provider);
+      const receivedAmount =
+        getSettlementAmount(sale, provider) || expectedAmount;
+
+      salesByMethod[provider] += expectedAmount;
+      settledByProvider[provider] += expectedAmount;
+      settledReceivedByProvider[provider] += receivedAmount;
+
+      // El desembolso de Addi/Sistecrédito queda en la cuenta bancaria.
+      balances.transferencia += receivedAmount;
+      return;
+    }
+
     normalizeSalePayments(sale).forEach((payment) => {
       salesByMethod[payment.method] += payment.amount;
 
-      if (
-        payment.method === "addi" &&
-        cleanText(sale.addiStatus) !== "settled"
-      ) {
-        pendingAddi += payment.amount;
-        return;
+      if (CASH_BALANCE_METHODS.includes(payment.method)) {
+        balances[payment.method] += payment.amount;
       }
-
-      balances[payment.method] += payment.amount;
     });
   });
 
@@ -250,11 +473,11 @@ export function buildCashSessionSummary(session, sales = [], movements = []) {
     if (amount <= 0) return;
 
     if (movement.type === "transfer") {
-      if (CASH_METHODS.includes(movement.fromMethod)) {
+      if (CASH_BALANCE_METHODS.includes(movement.fromMethod)) {
         balances[movement.fromMethod] -= amount;
       }
 
-      if (CASH_METHODS.includes(movement.toMethod)) {
+      if (CASH_BALANCE_METHODS.includes(movement.toMethod)) {
         balances[movement.toMethod] += amount;
       }
 
@@ -263,7 +486,7 @@ export function buildCashSessionSummary(session, sales = [], movements = []) {
     }
 
     if (movement.type === "entry") {
-      const destination = CASH_METHODS.includes(movement.toMethod)
+      const destination = CASH_BALANCE_METHODS.includes(movement.toMethod)
         ? movement.toMethod
         : "efectivo";
 
@@ -273,7 +496,7 @@ export function buildCashSessionSummary(session, sales = [], movements = []) {
     }
 
     if (movement.type === "exit") {
-      const origin = CASH_METHODS.includes(movement.fromMethod)
+      const origin = CASH_BALANCE_METHODS.includes(movement.fromMethod)
         ? movement.fromMethod
         : "efectivo";
 
@@ -288,9 +511,14 @@ export function buildCashSessionSummary(session, sales = [], movements = []) {
     }
   });
 
-  const totalAvailable = Object.values(balances).reduce(
-    (total, value) => total + Number(value || 0),
+  const totalAvailable = CASH_BALANCE_METHODS.reduce(
+    (total, method) => total + Number(balances[method] || 0),
     0
+  );
+
+  const pendingAddi = Number(pendingByProvider.addi || 0);
+  const pendingSistecredito = Number(
+    pendingByProvider.sistecredito || 0
   );
 
   return {
@@ -298,7 +526,15 @@ export function buildCashSessionSummary(session, sales = [], movements = []) {
     salesByMethod,
     totalSales,
     saleCount,
+
+    pendingByProvider,
+    settledByProvider,
+    settledReceivedByProvider,
+
+    // Alias existentes para que las pantallas actuales sigan funcionando.
     pendingAddi,
+    pendingSistecredito,
+
     totalAvailable,
     expectedCash: Number(balances.efectivo || 0),
     movementTotals,
@@ -323,26 +559,19 @@ export async function getCashSessionById(sessionId) {
 
 export async function getTodayCashSession({
   storeId = STORE_ID,
-  actor,
-}) {
-  const sessionId = getCashSessionId({
-    storeId,
-    operatorUid: actor?.uid,
-  });
-
+  actor: _legacyActor,
+} = {}) {
+  const sessionId = getCashSessionId({ storeId });
   return getCashSessionById(sessionId);
 }
 
 export function subscribeTodayCashSession({
   storeId = STORE_ID,
-  actor,
+  actor: _legacyActor,
   callback,
   onError,
 }) {
-  const sessionId = getCashSessionId({
-    storeId,
-    operatorUid: actor?.uid,
-  });
+  const sessionId = getCashSessionId({ storeId });
 
   return onSnapshot(
     doc(db, CASH_SESSIONS_COLLECTION, sessionId),
@@ -400,8 +629,7 @@ export function subscribeCashSessions(
             normalizeSession({ id: item.id, ...item.data() })
           )
           .sort(
-            (a, b) =>
-              timestampMs(b.openedAt) - timestampMs(a.openedAt)
+            (a, b) => timestampMs(b.openedAt) - timestampMs(a.openedAt)
           );
         entry.hasSnapshot = true;
 
@@ -422,12 +650,10 @@ export function subscribeCashSessions(
     active = false;
     entry.subscribers.delete(subscriber);
 
-    /*
-     * Conservamos values/hasSnapshot como caché en memoria, pero cerramos
-     * el listener cuando ya no existe ninguna pantalla consumiéndolo.
-     * Así evitamos listeners duplicados al navegar por la aplicación.
-     */
-    if (entry.subscribers.size === 0 && typeof entry.unsubscribe === "function") {
+    if (
+      entry.subscribers.size === 0 &&
+      typeof entry.unsubscribe === "function"
+    ) {
       entry.unsubscribe();
       entry.unsubscribe = null;
     }
@@ -456,8 +682,7 @@ export function subscribeCashMovements(sessionId, callback, onError) {
             normalizeMovement({ id: item.id, ...item.data() })
           )
           .sort(
-            (a, b) =>
-              timestampMs(b.createdAt) - timestampMs(a.createdAt)
+            (a, b) => timestampMs(b.createdAt) - timestampMs(a.createdAt)
           )
       );
     },
@@ -491,18 +716,14 @@ export async function openCashSession({
   storeId = STORE_ID,
   actor,
 }) {
-  const operatorUid = cleanText(actor?.uid);
+  const openedByUid = cleanText(actor?.uid);
 
-  if (!operatorUid) {
-    throw new Error("No se pudo identificar al vendedor que abre la caja.");
+  if (!openedByUid) {
+    throw new Error("No se pudo identificar al usuario que abre la caja.");
   }
 
   const businessDate = getBogotaBusinessDate();
-  const sessionId = getCashSessionId({
-    storeId,
-    operatorUid,
-    businessDate,
-  });
+  const sessionId = getCashSessionId({ storeId, businessDate });
   const sessionRef = doc(db, CASH_SESSIONS_COLLECTION, sessionId);
 
   return runTransaction(db, async (transaction) => {
@@ -519,16 +740,26 @@ export async function openCashSession({
       }
 
       throw new Error(
-        "La caja de hoy ya fue cerrada. No se puede abrir una segunda caja para el mismo operador en el mismo día."
+        "La caja de hoy ya fue cerrada. No se puede abrir una segunda caja para la misma tienda en el mismo día."
       );
     }
+
+    const openedByName = cleanText(actor?.name);
+    const openedByEmail = cleanText(actor?.email);
 
     const payload = {
       storeId,
       businessDate,
-      operatorUid,
-      operatorName: cleanText(actor?.name),
-      operatorEmail: cleanText(actor?.email),
+
+      openedByUid,
+      openedByName,
+      openedByEmail,
+
+      // Alias legacy mientras se actualiza CashPage.
+      operatorUid: openedByUid,
+      operatorName: openedByName,
+      operatorEmail: openedByEmail,
+
       openingAmount: money(openingAmount),
       status: "open",
       closeType: "",
@@ -581,7 +812,7 @@ export async function createCashMovement({
     throw new Error("No se encontró la caja abierta.");
   }
 
-  if (!['transfer', 'entry', 'exit'].includes(cleanType)) {
+  if (!["transfer", "entry", "exit"].includes(cleanType)) {
     throw new Error("El tipo de movimiento de caja no es válido.");
   }
 
@@ -590,7 +821,10 @@ export async function createCashMovement({
   }
 
   if (cleanType === "transfer") {
-    if (!CASH_METHODS.includes(cleanFrom) || !CASH_METHODS.includes(cleanTo)) {
+    if (
+      !CASH_BALANCE_METHODS.includes(cleanFrom) ||
+      !CASH_BALANCE_METHODS.includes(cleanTo)
+    ) {
       throw new Error("Selecciona un origen y un destino válidos.");
     }
 
@@ -599,11 +833,11 @@ export async function createCashMovement({
     }
   }
 
-  if (cleanType === "entry" && !CASH_METHODS.includes(cleanTo)) {
+  if (cleanType === "entry" && !CASH_BALANCE_METHODS.includes(cleanTo)) {
     throw new Error("Selecciona dónde entra el dinero.");
   }
 
-  if (cleanType === "exit" && !CASH_METHODS.includes(cleanFrom)) {
+  if (cleanType === "exit" && !CASH_BALANCE_METHODS.includes(cleanFrom)) {
     throw new Error("Selecciona de dónde sale el dinero.");
   }
 
@@ -620,11 +854,20 @@ export async function createCashMovement({
   }
 
   const summary = await calculateFreshSummary(session);
-  const origin = cleanType === "exit" ? cleanFrom : cleanType === "transfer" ? cleanFrom : "";
+  const origin =
+    cleanType === "exit"
+      ? cleanFrom
+      : cleanType === "transfer"
+        ? cleanFrom
+        : "";
 
   if (origin && cleanAmount > Number(summary.balances[origin] || 0)) {
     throw new Error(
-      `No hay saldo suficiente en ${CASH_METHOD_LABELS[origin] || origin}. Disponible: ${Number(summary.balances[origin] || 0).toLocaleString("es-CO")}.`
+      `No hay saldo suficiente en ${
+        CASH_METHOD_LABELS[origin] || origin
+      }. Disponible: ${Number(summary.balances[origin] || 0).toLocaleString(
+        "es-CO"
+      )}.`
     );
   }
 
@@ -642,20 +885,25 @@ export async function createCashMovement({
       storeId: session.storeId,
       sessionId: cleanSessionId,
       businessDate: session.businessDate,
-      operatorUid: session.operatorUid,
-      operatorName: session.operatorName || "",
+
+      // Quién abrió la caja se conserva en la sesión; aquí auditamos quién
+      // ejecutó ESTE movimiento.
+      createdByUid: cleanText(actor?.uid),
+      createdByName: cleanText(actor?.name),
+      createdByEmail: cleanText(actor?.email),
+
       type: cleanType,
       fromMethod: cleanType === "entry" ? "" : cleanFrom,
       toMethod: cleanType === "exit" ? "" : cleanTo,
       amount: cleanAmount,
       note: cleanText(note),
-      createdByUid: cleanText(actor?.uid),
-      createdByName: cleanText(actor?.name),
-      createdByEmail: cleanText(actor?.email),
       createdAt: serverTimestamp(),
     });
 
     transaction.update(sessionRef, {
+      lastActivityByUid: cleanText(actor?.uid),
+      lastActivityByName: cleanText(actor?.name),
+      lastActivityByEmail: cleanText(actor?.email),
       updatedAt: serverTimestamp(),
     });
   });
@@ -710,7 +958,9 @@ export async function closeCashSession({
 
     transaction.update(sessionRef, {
       status: "closed",
-      closeType: isAutomatic ? cleanText(closeType) || "automatic" : "manual",
+      closeType: isAutomatic
+        ? cleanText(closeType) || "automatic"
+        : "manual",
       expectedCash: summary.expectedCash,
       countedCash: finalCountedCash,
       difference,
@@ -718,7 +968,14 @@ export async function closeCashSession({
       closingSaleCount: summary.saleCount,
       closingBalances: summary.balances,
       closingSalesByMethod: summary.salesByMethod,
+      closingPendingByProvider: summary.pendingByProvider,
+      closingSettledByProvider: summary.settledByProvider,
+      closingSettledReceivedByProvider: summary.settledReceivedByProvider,
+
+      // Campos legacy usados por pantallas existentes.
       closingPendingAddi: summary.pendingAddi,
+      closingPendingSistecredito: summary.pendingSistecredito,
+
       closedAt: serverTimestamp(),
       closedByUid: isAutomatic ? "system" : cleanText(actor?.uid),
       closedByName: isAutomatic ? "Sistema" : cleanText(actor?.name),
@@ -739,11 +996,8 @@ export async function closeCashSession({
 
 export async function recoverExpiredCashSessions({
   storeId = STORE_ID,
-  actor,
-}) {
-  const operatorUid = cleanText(actor?.uid);
-  if (!operatorUid) return [];
-
+  actor: _legacyActor,
+} = {}) {
   const q = query(
     collection(db, CASH_SESSIONS_COLLECTION),
     where("storeId", "==", storeId)
@@ -757,7 +1011,6 @@ export async function recoverExpiredCashSessions({
     .filter(
       (session) =>
         session.status === "open" &&
-        session.operatorUid === operatorUid &&
         session.businessDate &&
         session.businessDate < today
     );

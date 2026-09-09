@@ -68,8 +68,8 @@ const navItems = [
     roles: ["admin"],
   },
   {
-    label: "Pagos Addi",
-    path: "/admin/addi",
+    label: "Financiaciones",
+    path: "/admin/financiaciones",
     icon: WalletCards,
     roles: ["admin"],
   },

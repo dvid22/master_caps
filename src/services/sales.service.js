@@ -34,6 +34,7 @@ const VALID_PAYMENT_METHODS = [
   "daviplata",
   "tarjeta",
   "addi",
+  "sistecredito",
   "mixto",
   "otro",
 ];
@@ -48,8 +49,19 @@ const VALID_MIXED_PAYMENT_METHODS = [
 ];
 
 export const ADDI_PAYMENT_METHOD = "addi";
-export const ADDI_STATUS_PENDING = "pending";
-export const ADDI_STATUS_SETTLED = "settled";
+export const SISTECREDITO_PAYMENT_METHOD = "sistecredito";
+
+export const SETTLEMENT_STATUS_PENDING = "pending";
+export const SETTLEMENT_STATUS_SETTLED = "settled";
+
+// Alias legacy para no romper el módulo actual de Addi mientras se migra la UI.
+export const ADDI_STATUS_PENDING = SETTLEMENT_STATUS_PENDING;
+export const ADDI_STATUS_SETTLED = SETTLEMENT_STATUS_SETTLED;
+
+export const DEFERRED_PAYMENT_METHODS = [
+  ADDI_PAYMENT_METHOD,
+  SISTECREDITO_PAYMENT_METHOD,
+];
 
 /* -------------------------------------------------------------------------- */
 /*                              UTILIDADES GENERALES                           */
@@ -157,9 +169,9 @@ function normalizePayments({
 
   normalized.forEach((payment) => {
     if (!VALID_MIXED_PAYMENT_METHODS.includes(payment.method)) {
-      if (payment.method === ADDI_PAYMENT_METHOD) {
+      if (DEFERRED_PAYMENT_METHODS.includes(payment.method)) {
         throw new Error(
-          "Addi no puede combinarse dentro de un pago mixto porque su desembolso se confirma por separado."
+          `${getPaymentMethodLabel(payment.method)} no puede combinarse dentro de un pago mixto porque su desembolso se confirma por separado.`
         );
       }
 
@@ -263,15 +275,14 @@ function getBogotaBusinessDate(date = new Date()) {
   return `${year}-${month}-${day}`;
 }
 
-function getRequiredCashSessionId(storeId, sellerUid, businessDate) {
+function getRequiredCashSessionId(storeId, businessDate) {
   const cleanStoreId = safeCashId(storeId);
-  const cleanSellerUid = safeCashId(sellerUid);
 
-  if (!cleanStoreId || !cleanSellerUid || !businessDate) {
+  if (!cleanStoreId || !businessDate) {
     return "";
   }
 
-  return `${cleanStoreId}__${cleanSellerUid}__${businessDate}`;
+  return `${cleanStoreId}__${businessDate}`;
 }
 
 function normalizeSettlementDate(value) {
@@ -289,11 +300,136 @@ function normalizeSettlementDate(value) {
       : Timestamp.fromDate(value);
   }
 
-  const parsedDate = new Date(value);
+  const cleanValue = normalizeText(value);
+
+  // Evita que YYYY-MM-DD se interprete como UTC y caiga en el día anterior
+  // en Colombia. El mediodía -05:00 mantiene estable la fecha de negocio.
+  const parsedDate = /^\d{4}-\d{2}-\d{2}$/.test(cleanValue)
+    ? new Date(`${cleanValue}T12:00:00-05:00`)
+    : new Date(cleanValue);
 
   return Number.isNaN(parsedDate.getTime())
     ? null
     : Timestamp.fromDate(parsedDate);
+}
+
+function getPaymentMethodLabel(method) {
+  return (
+    {
+      addi: "Addi",
+      sistecredito: "Sistecrédito",
+    }[normalizeText(method)] || normalizeText(method) || "Financiación"
+  );
+}
+
+export function isDeferredPaymentMethod(method) {
+  return DEFERRED_PAYMENT_METHODS.includes(normalizeText(method));
+}
+
+function getDeferredPaymentFromSale(sale = {}) {
+  const explicitProvider = normalizeText(sale.settlementProvider);
+
+  if (isDeferredPaymentMethod(explicitProvider)) {
+    return {
+      provider: explicitProvider,
+      amount: normalizeMoney(
+        sale.settlementExpectedAmount ?? sale.total
+      ),
+    };
+  }
+
+  const directMethod = normalizeText(sale.paymentMethod);
+
+  if (isDeferredPaymentMethod(directMethod)) {
+    return {
+      provider: directMethod,
+      amount: normalizeMoney(sale.total),
+    };
+  }
+
+  const payment = Array.isArray(sale.payments)
+    ? sale.payments.find(
+        (item) =>
+          isDeferredPaymentMethod(item?.method) &&
+          normalizeMoney(item?.amount) > 0
+      )
+    : null;
+
+  return payment
+    ? {
+        provider: normalizeText(payment.method),
+        amount: normalizeMoney(payment.amount),
+      }
+    : { provider: "", amount: 0 };
+}
+
+function getLegacySettlementFields(sale = {}, provider = "") {
+  if (provider === ADDI_PAYMENT_METHOD) {
+    return {
+      status: normalizeText(sale.addiStatus),
+      expectedAmount: normalizeMoney(sale.addiExpectedAmount),
+      settledAmount: normalizeMoney(sale.addiSettledAmount),
+      settledAt: sale.addiSettledAt || null,
+      reference: normalizeText(sale.addiReference),
+      notes: normalizeText(sale.addiNotes),
+      settledByUid: normalizeText(sale.addiSettledByUid),
+      settledByName: normalizeText(sale.addiSettledByName),
+      settledByEmail: normalizeText(sale.addiSettledByEmail),
+    };
+  }
+
+  if (provider === SISTECREDITO_PAYMENT_METHOD) {
+    return {
+      status: normalizeText(sale.sistecreditoStatus),
+      expectedAmount: normalizeMoney(sale.sistecreditoExpectedAmount),
+      settledAmount: normalizeMoney(sale.sistecreditoSettledAmount),
+      settledAt: sale.sistecreditoSettledAt || null,
+      reference: normalizeText(sale.sistecreditoReference),
+      notes: normalizeText(sale.sistecreditoNotes),
+      settledByUid: normalizeText(sale.sistecreditoSettledByUid),
+      settledByName: normalizeText(sale.sistecreditoSettledByName),
+      settledByEmail: normalizeText(sale.sistecreditoSettledByEmail),
+    };
+  }
+
+  return {
+    status: "",
+    expectedAmount: 0,
+    settledAmount: 0,
+    settledAt: null,
+    reference: "",
+    notes: "",
+    settledByUid: "",
+    settledByName: "",
+    settledByEmail: "",
+  };
+}
+
+export function getSaleRecognitionDate(sale = {}) {
+  const deferred = getDeferredPaymentFromSale(sale);
+
+  if (!deferred.provider) {
+    return sale.recognizedAt || sale.createdAt || null;
+  }
+
+  const legacy = getLegacySettlementFields(sale, deferred.provider);
+  const status =
+    normalizeText(sale.settlementStatus) || legacy.status;
+
+  if (status !== SETTLEMENT_STATUS_SETTLED) {
+    return null;
+  }
+
+  return (
+    sale.recognizedAt ||
+    sale.settlementSettledAt ||
+    legacy.settledAt ||
+    null
+  );
+}
+
+export function isDeferredSale(sale = {}) {
+  return Boolean(getDeferredPaymentFromSale(sale).provider);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -792,33 +928,128 @@ function normalizeSaleDocument(sale) {
           ? total
           : 0,
 
-    paymentStatus:
-      normalizeText(sale.paymentStatus) ||
-      (normalizeText(sale.paymentMethod) === ADDI_PAYMENT_METHOD
-        ? "pending_settlement"
-        : "paid"),
+    ...(() => {
+      const deferred = getDeferredPaymentFromSale(sale);
+      const provider = deferred.provider;
+      const legacy = getLegacySettlementFields(sale, provider);
+      const settlementStatus =
+        normalizeText(sale.settlementStatus) ||
+        legacy.status ||
+        (provider ? SETTLEMENT_STATUS_PENDING : "");
+      const settlementExpectedAmount =
+        sale.settlementExpectedAmount !== undefined
+          ? normalizeMoney(sale.settlementExpectedAmount)
+          : legacy.expectedAmount || deferred.amount;
+      const settlementSettledAmount =
+        sale.settlementSettledAmount !== undefined
+          ? normalizeMoney(sale.settlementSettledAmount)
+          : legacy.settledAmount;
+      const settlementSettledAt =
+        sale.settlementSettledAt || legacy.settledAt || null;
+      const settlementReference =
+        normalizeText(sale.settlementReference) || legacy.reference;
+      const settlementNotes =
+        normalizeText(sale.settlementNotes) || legacy.notes;
+      const settlementSettledByUid =
+        normalizeText(sale.settlementSettledByUid) ||
+        legacy.settledByUid;
+      const settlementSettledByName =
+        normalizeText(sale.settlementSettledByName) ||
+        legacy.settledByName;
+      const settlementSettledByEmail =
+        normalizeText(sale.settlementSettledByEmail) ||
+        legacy.settledByEmail;
 
-    addiStatus:
-      normalizeText(sale.addiStatus) ||
-      (normalizeText(sale.paymentMethod) === ADDI_PAYMENT_METHOD
-        ? ADDI_STATUS_PENDING
-        : ""),
+      return {
+        paymentStatus:
+          normalizeText(sale.paymentStatus) ||
+          (provider
+            ? settlementStatus === SETTLEMENT_STATUS_SETTLED
+              ? "paid"
+              : "pending_settlement"
+            : "paid"),
 
-    addiExpectedAmount:
-      sale.addiExpectedAmount !== undefined
-        ? normalizeMoney(sale.addiExpectedAmount)
-        : normalizeText(sale.paymentMethod) === ADDI_PAYMENT_METHOD
-          ? total
-          : 0,
+        settlementProvider: provider,
+        settlementStatus,
+        settlementExpectedAmount,
+        settlementSettledAmount,
+        settlementSettledAt,
+        settlementReference,
+        settlementNotes,
+        settlementSettledByUid,
+        settlementSettledByName,
+        settlementSettledByEmail,
+        settlementCashSessionId: normalizeText(
+          sale.settlementCashSessionId
+        ),
+        settlementDestination:
+          normalizeText(sale.settlementDestination) ||
+          (provider ? "transferencia" : ""),
 
-    addiSettledAmount:
-      sale.addiSettledAmount !== undefined
-        ? normalizeMoney(sale.addiSettledAmount)
-        : 0,
+        recognizedAt:
+          sale.recognizedAt ||
+          (provider && settlementStatus === SETTLEMENT_STATUS_SETTLED
+            ? settlementSettledAt
+            : provider
+              ? null
+              : sale.createdAt || null),
+        recognizedBusinessDate: normalizeText(
+          sale.recognizedBusinessDate
+        ),
 
-    addiSettledAt: sale.addiSettledAt || null,
-    addiReference: normalizeText(sale.addiReference),
-    addiNotes: normalizeText(sale.addiNotes),
+        // Compatibilidad Addi existente.
+        addiStatus:
+          provider === ADDI_PAYMENT_METHOD
+            ? settlementStatus
+            : normalizeText(sale.addiStatus),
+        addiExpectedAmount:
+          provider === ADDI_PAYMENT_METHOD
+            ? settlementExpectedAmount
+            : normalizeMoney(sale.addiExpectedAmount),
+        addiSettledAmount:
+          provider === ADDI_PAYMENT_METHOD
+            ? settlementSettledAmount
+            : normalizeMoney(sale.addiSettledAmount),
+        addiSettledAt:
+          provider === ADDI_PAYMENT_METHOD
+            ? settlementSettledAt
+            : sale.addiSettledAt || null,
+        addiReference:
+          provider === ADDI_PAYMENT_METHOD
+            ? settlementReference
+            : normalizeText(sale.addiReference),
+        addiNotes:
+          provider === ADDI_PAYMENT_METHOD
+            ? settlementNotes
+            : normalizeText(sale.addiNotes),
+
+        // Campos específicos de Sistecrédito para lectura humana/compatibilidad.
+        sistecreditoStatus:
+          provider === SISTECREDITO_PAYMENT_METHOD
+            ? settlementStatus
+            : normalizeText(sale.sistecreditoStatus),
+        sistecreditoExpectedAmount:
+          provider === SISTECREDITO_PAYMENT_METHOD
+            ? settlementExpectedAmount
+            : normalizeMoney(sale.sistecreditoExpectedAmount),
+        sistecreditoSettledAmount:
+          provider === SISTECREDITO_PAYMENT_METHOD
+            ? settlementSettledAmount
+            : normalizeMoney(sale.sistecreditoSettledAmount),
+        sistecreditoSettledAt:
+          provider === SISTECREDITO_PAYMENT_METHOD
+            ? settlementSettledAt
+            : sale.sistecreditoSettledAt || null,
+        sistecreditoReference:
+          provider === SISTECREDITO_PAYMENT_METHOD
+            ? settlementReference
+            : normalizeText(sale.sistecreditoReference),
+        sistecreditoNotes:
+          provider === SISTECREDITO_PAYMENT_METHOD
+            ? settlementNotes
+            : normalizeText(sale.sistecreditoNotes),
+      };
+    })(),
 
     cashSessionId: normalizeText(sale.cashSessionId),
 
@@ -1030,58 +1261,87 @@ export async function getSaleById(saleId) {
   });
 }
 
-export function subscribeAddiSales(
+export function subscribeDeferredSales(
   callback,
   onError,
   storeId = STORE_ID
 ) {
   return subscribeSales(
     (sales) => {
-      callback(
-        sales.filter((sale) => {
-          if (sale.paymentMethod === ADDI_PAYMENT_METHOD) {
-            return true;
-          }
-
-          return Array.isArray(sale.payments)
-            ? sale.payments.some(
-                (payment) =>
-                  normalizeText(payment?.method) === ADDI_PAYMENT_METHOD &&
-                  normalizeMoney(payment?.amount) > 0
-              )
-            : false;
-        })
-      );
+      callback(sales.filter((sale) => isDeferredSale(sale)));
     },
     onError,
     storeId
   );
 }
 
-export async function getAddiSales(storeId = STORE_ID) {
+export async function getDeferredSales(storeId = STORE_ID) {
   const sales = await getSales(storeId);
+  return sales.filter((sale) => isDeferredSale(sale));
+}
 
-  return sales.filter((sale) => {
-    if (sale.paymentMethod === ADDI_PAYMENT_METHOD) {
-      return true;
-    }
-
-    return Array.isArray(sale.payments)
-      ? sale.payments.some(
-          (payment) =>
-            normalizeText(payment?.method) === ADDI_PAYMENT_METHOD &&
-            normalizeMoney(payment?.amount) > 0
+export function subscribeAddiSales(
+  callback,
+  onError,
+  storeId = STORE_ID
+) {
+  return subscribeDeferredSales(
+    (sales) =>
+      callback(
+        sales.filter(
+          (sale) =>
+            getDeferredPaymentFromSale(sale).provider ===
+            ADDI_PAYMENT_METHOD
         )
-      : false;
-  });
+      ),
+    onError,
+    storeId
+  );
+}
+
+export async function getAddiSales(storeId = STORE_ID) {
+  const sales = await getDeferredSales(storeId);
+  return sales.filter(
+    (sale) =>
+      getDeferredPaymentFromSale(sale).provider === ADDI_PAYMENT_METHOD
+  );
+}
+
+export function subscribeSistecreditoSales(
+  callback,
+  onError,
+  storeId = STORE_ID
+) {
+  return subscribeDeferredSales(
+    (sales) =>
+      callback(
+        sales.filter(
+          (sale) =>
+            getDeferredPaymentFromSale(sale).provider ===
+            SISTECREDITO_PAYMENT_METHOD
+        )
+      ),
+    onError,
+    storeId
+  );
+}
+
+export async function getSistecreditoSales(storeId = STORE_ID) {
+  const sales = await getDeferredSales(storeId);
+  return sales.filter(
+    (sale) =>
+      getDeferredPaymentFromSale(sale).provider ===
+      SISTECREDITO_PAYMENT_METHOD
+  );
 }
 
 /* -------------------------------------------------------------------------- */
-/*                                ADDI                                         */
+/*                    FINANCIACIONES / DESEMBOLSOS DIFERIDOS                  */
 /* -------------------------------------------------------------------------- */
 
-export async function settleAddiSale({
+export async function settleDeferredSale({
   saleId,
+  provider = "",
   settledAmount = null,
   settledAt = null,
   reference = "",
@@ -1091,7 +1351,7 @@ export async function settleAddiSale({
   const cleanSaleId = normalizeText(saleId);
 
   if (!cleanSaleId) {
-    throw new Error("No se encontró la venta de Addi.");
+    throw new Error("No se encontró la venta financiada.");
   }
 
   const saleRef = doc(db, "sales", cleanSaleId);
@@ -1108,28 +1368,34 @@ export async function settleAddiSale({
       ...saleSnapshot.data(),
     });
 
-    const addiPayment = Array.isArray(currentSale.payments)
-      ? currentSale.payments.find(
-          (payment) =>
-            normalizeText(payment?.method) === ADDI_PAYMENT_METHOD &&
-            normalizeMoney(payment?.amount) > 0
-        )
-      : null;
+    const deferred = getDeferredPaymentFromSale(currentSale);
+    const cleanProvider = normalizeText(provider) || deferred.provider;
 
-    const isAddiSale =
-      currentSale.paymentMethod === ADDI_PAYMENT_METHOD || Boolean(addiPayment);
-
-    if (!isAddiSale) {
-      throw new Error("Esta venta no corresponde a un pago por Addi.");
+    if (!isDeferredPaymentMethod(cleanProvider)) {
+      throw new Error(
+        "Esta venta no corresponde a Addi ni a Sistecrédito."
+      );
     }
 
-    if (currentSale.addiStatus === ADDI_STATUS_SETTLED) {
-      throw new Error("Este desembolso de Addi ya fue confirmado.");
+    if (deferred.provider && deferred.provider !== cleanProvider) {
+      throw new Error(
+        `Esta venta corresponde a ${getPaymentMethodLabel(
+          deferred.provider
+        )}, no a ${getPaymentMethodLabel(cleanProvider)}.`
+      );
+    }
+
+    if (currentSale.settlementStatus === SETTLEMENT_STATUS_SETTLED) {
+      throw new Error(
+        `Este desembolso de ${getPaymentMethodLabel(
+          cleanProvider
+        )} ya fue confirmado.`
+      );
     }
 
     const expectedAmount = normalizeMoney(
-      currentSale.addiExpectedAmount ||
-        addiPayment?.amount ||
+      currentSale.settlementExpectedAmount ||
+        deferred.amount ||
         currentSale.total
     );
 
@@ -1141,35 +1407,139 @@ export async function settleAddiSale({
         : normalizeMoney(settledAmount);
 
     if (finalSettledAmount <= 0) {
-      throw new Error("El valor recibido de Addi debe ser mayor a cero.");
+      throw new Error(
+        `El valor recibido de ${getPaymentMethodLabel(
+          cleanProvider
+        )} debe ser mayor a cero.`
+      );
     }
 
-    const explicitSettlementDate = normalizeSettlementDate(settledAt);
+    const settlementTimestamp =
+      normalizeSettlementDate(settledAt) || Timestamp.now();
+    const settlementDate = settlementTimestamp.toDate();
+    const settlementBusinessDate = getBogotaBusinessDate(
+      settlementDate
+    );
+    const settlementCashSessionId = getRequiredCashSessionId(
+      currentSale.storeId || STORE_ID,
+      settlementBusinessDate
+    );
+    const settlementCashSessionRef = doc(
+      db,
+      "cashSessions",
+      settlementCashSessionId
+    );
+    const settlementCashSessionSnapshot = await transaction.get(
+      settlementCashSessionRef
+    );
 
-    transaction.update(saleRef, {
+    if (!settlementCashSessionSnapshot.exists()) {
+      throw new Error(
+        `Debes abrir la caja del ${settlementBusinessDate} antes de confirmar este desembolso.`
+      );
+    }
+
+    const settlementCashSession = settlementCashSessionSnapshot.data();
+
+    if (settlementCashSession.status !== "open") {
+      throw new Error(
+        "La caja correspondiente a la fecha de recepción ya está cerrada. No se puede registrar el desembolso en esa caja."
+      );
+    }
+
+    if (settlementCashSession.businessDate !== settlementBusinessDate) {
+      throw new Error(
+        "La caja abierta no corresponde a la fecha de recepción seleccionada."
+      );
+    }
+
+    const settlementReference = normalizeText(reference);
+    const settlementNotes = normalizeText(notes);
+
+    const updatePayload = {
       paymentStatus: "paid",
 
-      addiStatus: ADDI_STATUS_SETTLED,
-      addiExpectedAmount: expectedAmount,
-      addiSettledAmount: finalSettledAmount,
-      addiSettledAt: explicitSettlementDate || serverTimestamp(),
-      addiReference: normalizeText(reference),
-      addiNotes: normalizeText(notes),
+      settlementProvider: cleanProvider,
+      settlementStatus: SETTLEMENT_STATUS_SETTLED,
+      settlementExpectedAmount: expectedAmount,
+      settlementSettledAmount: finalSettledAmount,
+      settlementSettledAt: settlementTimestamp,
+      settlementReference,
+      settlementNotes,
+      settlementDestination: "transferencia",
+      settlementCashSessionId,
+      settlementSettledByUid: actor?.uid || "",
+      settlementSettledByName: actor?.name || "",
+      settlementSettledByEmail: actor?.email || "",
 
-      addiSettledByUid: actor?.uid || "",
-      addiSettledByName: actor?.name || "",
-      addiSettledByEmail: actor?.email || "",
+      recognizedAt: settlementTimestamp,
+      recognizedBusinessDate: settlementBusinessDate,
 
+      updatedAt: serverTimestamp(),
+    };
+
+    if (cleanProvider === ADDI_PAYMENT_METHOD) {
+      Object.assign(updatePayload, {
+        addiStatus: ADDI_STATUS_SETTLED,
+        addiExpectedAmount: expectedAmount,
+        addiSettledAmount: finalSettledAmount,
+        addiSettledAt: settlementTimestamp,
+        addiReference: settlementReference,
+        addiNotes: settlementNotes,
+        addiSettledByUid: actor?.uid || "",
+        addiSettledByName: actor?.name || "",
+        addiSettledByEmail: actor?.email || "",
+      });
+    }
+
+    if (cleanProvider === SISTECREDITO_PAYMENT_METHOD) {
+      Object.assign(updatePayload, {
+        sistecreditoStatus: SETTLEMENT_STATUS_SETTLED,
+        sistecreditoExpectedAmount: expectedAmount,
+        sistecreditoSettledAmount: finalSettledAmount,
+        sistecreditoSettledAt: settlementTimestamp,
+        sistecreditoReference: settlementReference,
+        sistecreditoNotes: settlementNotes,
+        sistecreditoSettledByUid: actor?.uid || "",
+        sistecreditoSettledByName: actor?.name || "",
+        sistecreditoSettledByEmail: actor?.email || "",
+      });
+    }
+
+    transaction.update(saleRef, updatePayload);
+
+    transaction.update(settlementCashSessionRef, {
+      lastActivityByUid: actor?.uid || "",
+      lastActivityByName: actor?.name || "",
+      lastActivityByEmail: actor?.email || "",
       updatedAt: serverTimestamp(),
     });
 
     return {
       saleId: cleanSaleId,
       saleNumber: currentSale.saleNumber,
+      provider: cleanProvider,
       expectedAmount,
       settledAmount: finalSettledAmount,
-      status: ADDI_STATUS_SETTLED,
+      settledAt: settlementTimestamp,
+      businessDate: settlementBusinessDate,
+      cashSessionId: settlementCashSessionId,
+      status: SETTLEMENT_STATUS_SETTLED,
     };
+  });
+}
+
+export async function settleAddiSale(payload) {
+  return settleDeferredSale({
+    ...payload,
+    provider: ADDI_PAYMENT_METHOD,
+  });
+}
+
+export async function settleSistecreditoSale(payload) {
+  return settleDeferredSale({
+    ...payload,
+    provider: SISTECREDITO_PAYMENT_METHOD,
   });
 }
 
@@ -1235,14 +1605,14 @@ export async function createMultiItemSale({
 
   const cleanSource = normalizeText(source) || DEFAULT_SOURCE;
   const requiresOpenCash = cleanSource === "pos";
-  const businessDate = requiresOpenCash ? getBogotaBusinessDate() : "";
+  const businessDate = getBogotaBusinessDate();
   const cashSessionId = requiresOpenCash
-    ? getRequiredCashSessionId(storeId, seller?.uid, businessDate)
+    ? getRequiredCashSessionId(storeId, businessDate)
     : "";
 
   if (requiresOpenCash && !cashSessionId) {
     throw new Error(
-      "No se pudo identificar la caja del vendedor. Vuelve a iniciar sesión e inténtalo nuevamente."
+      "No se pudo identificar la caja de la tienda. Recarga la página e inténtalo nuevamente."
     );
   }
 
@@ -1280,12 +1650,6 @@ export async function createMultiItemSale({
         );
       }
 
-      if (
-        normalizeText(cashSession.operatorUid) !==
-        normalizeText(seller?.uid)
-      ) {
-        throw new Error("La caja abierta pertenece a otro operador.");
-      }
     }
 
     let customerRef = null;
@@ -1643,10 +2007,39 @@ export async function createMultiItemSale({
         ? Math.max(finalAmountReceived - total, 0)
         : 0;
 
-    const isAddiPayment = cleanPaymentMethod === ADDI_PAYMENT_METHOD;
-    const paymentStatus = isAddiPayment ? "pending_settlement" : "paid";
-    const addiStatus = isAddiPayment ? ADDI_STATUS_PENDING : "";
-    const addiExpectedAmount = isAddiPayment ? total : 0;
+    const isDeferredPayment = isDeferredPaymentMethod(
+      cleanPaymentMethod
+    );
+    const settlementProvider = isDeferredPayment
+      ? cleanPaymentMethod
+      : "";
+    const settlementStatus = isDeferredPayment
+      ? SETTLEMENT_STATUS_PENDING
+      : "";
+    const settlementExpectedAmount = isDeferredPayment
+      ? total
+      : 0;
+    const paymentStatus = isDeferredPayment
+      ? "pending_settlement"
+      : "paid";
+
+    const addiStatus =
+      settlementProvider === ADDI_PAYMENT_METHOD
+        ? ADDI_STATUS_PENDING
+        : "";
+    const addiExpectedAmount =
+      settlementProvider === ADDI_PAYMENT_METHOD
+        ? settlementExpectedAmount
+        : 0;
+
+    const sistecreditoStatus =
+      settlementProvider === SISTECREDITO_PAYMENT_METHOD
+        ? SETTLEMENT_STATUS_PENDING
+        : "";
+    const sistecreditoExpectedAmount =
+      settlementProvider === SISTECREDITO_PAYMENT_METHOD
+        ? settlementExpectedAmount
+        : 0;
     const cashAmount = getPaymentAmount(
       normalizedPayments,
       "efectivo"
@@ -1724,12 +2117,43 @@ export async function createMultiItemSale({
       change,
 
       paymentStatus,
+
+      settlementProvider,
+      settlementStatus,
+      settlementExpectedAmount,
+      settlementSettledAmount: 0,
+      settlementSettledAt: null,
+      settlementReference: "",
+      settlementNotes: "",
+      settlementSettledByUid: "",
+      settlementSettledByName: "",
+      settlementSettledByEmail: "",
+      settlementDestination: isDeferredPayment ? "transferencia" : "",
+      settlementCashSessionId: "",
+
+      recognizedAt: isDeferredPayment ? null : serverTimestamp(),
+      recognizedBusinessDate: isDeferredPayment ? "" : businessDate,
+
+      // Compatibilidad con ventas Addi existentes.
       addiStatus,
       addiExpectedAmount,
       addiSettledAmount: 0,
       addiSettledAt: null,
       addiReference: "",
       addiNotes: "",
+      addiSettledByUid: "",
+      addiSettledByName: "",
+      addiSettledByEmail: "",
+
+      sistecreditoStatus,
+      sistecreditoExpectedAmount,
+      sistecreditoSettledAmount: 0,
+      sistecreditoSettledAt: null,
+      sistecreditoReference: "",
+      sistecreditoNotes: "",
+      sistecreditoSettledByUid: "",
+      sistecreditoSettledByName: "",
+      sistecreditoSettledByEmail: "",
 
       notes: normalizeText(notes),
       source: cleanSource,
@@ -1770,11 +2194,25 @@ export async function createMultiItemSale({
       amountReceived: finalAmountReceived,
       change,
 
-      paymentStatus:
+      paymentStatus,
+      settlementProvider,
+      settlementStatus,
+      settlementExpectedAmount,
+      settlementSettledAmount: 0,
+      settlementSettledAt: null,
+      settlementCashSessionId: "",
+      recognizedAt: isDeferredPayment ? null : new Date(),
+      recognizedBusinessDate: isDeferredPayment ? "" : businessDate,
+
       addiStatus,
       addiExpectedAmount,
       addiSettledAmount: 0,
       addiSettledAt: null,
+
+      sistecreditoStatus,
+      sistecreditoExpectedAmount,
+      sistecreditoSettledAmount: 0,
+      sistecreditoSettledAt: null,
 
       customerId: finalCustomerId,
       customerName: finalCustomerName,

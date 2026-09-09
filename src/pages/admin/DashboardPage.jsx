@@ -23,9 +23,13 @@ import {
 
 import { STORE_ID } from "../../services/categories.service";
 import { subscribeProducts } from "../../services/products.service";
-import { subscribeSales } from "../../services/sales.service";
+import {
+  getSaleRecognitionDate,
+  subscribeSales,
+} from "../../services/sales.service";
 import {
   CASH_METHODS,
+  CASH_BALANCE_METHODS,
   CASH_METHOD_LABELS,
   buildCashSessionSummary,
   getBogotaBusinessDate,
@@ -66,6 +70,55 @@ function toDate(value) {
 function numberOrZero(value) {
   const number = Number(value || 0);
   return Number.isFinite(number) ? number : 0;
+}
+
+function getSaleAnalyticsDate(sale) {
+  return toDate(getSaleRecognitionDate(sale));
+}
+
+function isSaleRecognized(sale) {
+  return Boolean(getSaleAnalyticsDate(sale));
+}
+
+function getDeferredProvider(sale = {}) {
+  const explicitProvider = String(sale.settlementProvider || "")
+    .trim()
+    .toLowerCase();
+
+  if (["addi", "sistecredito"].includes(explicitProvider)) {
+    return explicitProvider;
+  }
+
+  const paymentMethod = String(sale.paymentMethod || "")
+    .trim()
+    .toLowerCase();
+
+  if (["addi", "sistecredito"].includes(paymentMethod)) {
+    return paymentMethod;
+  }
+
+  return "";
+}
+
+function getDeferredExpectedAmount(sale = {}) {
+  const provider = getDeferredProvider(sale);
+
+  if (sale.settlementExpectedAmount !== undefined) {
+    return numberOrZero(sale.settlementExpectedAmount);
+  }
+
+  if (provider === "addi" && sale.addiExpectedAmount !== undefined) {
+    return numberOrZero(sale.addiExpectedAmount);
+  }
+
+  if (
+    provider === "sistecredito" &&
+    sale.sistecreditoExpectedAmount !== undefined
+  ) {
+    return numberOrZero(sale.sistecreditoExpectedAmount);
+  }
+
+  return numberOrZero(sale.total);
 }
 
 function getMonthKey(date) {
@@ -158,7 +211,7 @@ function formatCompactCurrency(value) {
 
 function filterSalesByMonth(sales, monthKey) {
   return sales.filter((sale) => {
-    const date = toDate(sale.createdAt);
+    const date = getSaleAnalyticsDate(sale);
     if (!date) return false;
 
     return getMonthKey(date) === monthKey;
@@ -167,7 +220,7 @@ function filterSalesByMonth(sales, monthKey) {
 
 function filterSalesByDay(sales, monthKey, day) {
   return sales.filter((sale) => {
-    const date = toDate(sale.createdAt);
+    const date = getSaleAnalyticsDate(sale);
     if (!date) return false;
 
     return (
@@ -353,7 +406,8 @@ function getAllocatedSaleLines(sale) {
       sellerEmail: sale.sellerEmail,
       paymentMethod: sale.paymentMethod,
       payments: sale.payments,
-      createdAt: sale.createdAt,
+      createdAt: getSaleRecognitionDate(sale) || sale.createdAt,
+      originalCreatedAt: sale.createdAt,
       customerName: sale.customerName,
       customerDocument: sale.customerDocument,
     };
@@ -455,7 +509,7 @@ function buildDailySales(sales) {
   const map = new Map();
 
   sales.forEach((sale) => {
-    const date = toDate(sale.createdAt);
+    const date = getSaleAnalyticsDate(sale);
     if (!date) return;
 
     const key = `${date.getFullYear()}-${String(
@@ -490,7 +544,7 @@ function buildDayComparison(salesA, salesB) {
   const mapB = new Map();
 
   salesA.forEach((sale) => {
-    const date = toDate(sale.createdAt);
+    const date = getSaleAnalyticsDate(sale);
     if (!date) return;
 
     const day = date.getDate();
@@ -502,7 +556,7 @@ function buildDayComparison(salesA, salesB) {
   });
 
   salesB.forEach((sale) => {
-    const date = toDate(sale.createdAt);
+    const date = getSaleAnalyticsDate(sale);
     if (!date) return;
 
     const day = date.getDate();
@@ -537,32 +591,52 @@ function buildDayComparison(salesA, salesB) {
   };
 }
 
-function buildPaymentBreakdown(sales) {
+function buildPaymentBreakdown(
+  recognizedSales,
+  allSales = [],
+  monthKey = ""
+) {
   const totals = CASH_METHODS.reduce((result, method) => {
     result[method] = 0;
     return result;
   }, {});
 
-  let pendingAddi = 0;
-
-  sales.forEach((sale) => {
+  recognizedSales.forEach((sale) => {
     normalizeSalePayments(sale).forEach((payment) => {
-      totals[payment.method] += numberOrZero(
-        payment.amount
-      );
+      const method = CASH_METHODS.includes(payment.method)
+        ? payment.method
+        : "otro";
 
-      if (
-        payment.method === "addi" &&
-        String(sale.addiStatus || "") !== "settled"
-      ) {
-        pendingAddi += numberOrZero(payment.amount);
-      }
+      totals[method] += numberOrZero(payment.amount);
     });
+  });
+
+  const pendingByProvider = {
+    addi: 0,
+    sistecredito: 0,
+  };
+
+  allSales.forEach((sale) => {
+    if (isSaleRecognized(sale)) return;
+
+    const provider = getDeferredProvider(sale);
+    if (!provider) return;
+
+    const originalDate = toDate(sale.createdAt);
+    if (!originalDate) return;
+
+    if (monthKey && getMonthKey(originalDate) !== monthKey) {
+      return;
+    }
+
+    pendingByProvider[provider] += getDeferredExpectedAmount(sale);
   });
 
   return {
     totals,
-    pendingAddi,
+    pendingByProvider,
+    pendingAddi: pendingByProvider.addi,
+    pendingSistecredito: pendingByProvider.sistecredito,
     total: Object.values(totals).reduce(
       (sum, value) => sum + numberOrZero(value),
       0
@@ -863,7 +937,7 @@ function CashTodayPanel({
               Caja de hoy
             </h2>
             <p className="mt-0.5 text-[12px] text-black/45">
-              Resumen consolidado de las cajas de {summary.businessDate}.
+              Caja compartida de Master Caps · {summary.businessDate}.
             </p>
           </div>
         </div>
@@ -880,20 +954,20 @@ function CashTodayPanel({
 
       <div className="grid gap-px bg-black/[0.06] sm:grid-cols-2 lg:grid-cols-6">
         <CashMetric
-          label="Cajas abiertas"
-          value={summary.openCount}
+          label="Estado"
+          value={summary.openCount > 0 ? "Abierta" : summary.closedCount > 0 ? "Cerrada" : "Sin abrir"}
         />
         <CashMetric
-          label="Cajas cerradas"
-          value={summary.closedCount}
-        />
-        <CashMetric
-          label="Base entregada"
+          label="Base inicial"
           value={formatCurrency(summary.openingAmount)}
         />
         <CashMetric
-          label="Ventas de cajas"
+          label="Ventas reconocidas"
           value={formatCurrency(summary.totalSales)}
+        />
+        <CashMetric
+          label="Operaciones"
+          value={summary.saleCount}
         />
         <CashMetric
           label="Efectivo esperado"
@@ -913,7 +987,7 @@ function CashTodayPanel({
           </p>
 
           <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
-            {CASH_METHODS.map((method) => (
+            {CASH_BALANCE_METHODS.map((method) => (
               <div
                 key={method}
                 className="rounded-xl bg-[#f7f7f8] px-3 py-2.5"
@@ -928,22 +1002,34 @@ function CashTodayPanel({
             ))}
           </div>
 
-          {summary.pendingAddi > 0 && (
-            <div className="mt-2 rounded-xl bg-amber-50 px-3 py-2.5 text-[11px] text-amber-800">
-              Addi pendiente por recibir: {formatCurrency(summary.pendingAddi)}
+          {(summary.pendingAddi > 0 ||
+            summary.pendingSistecredito > 0 ||
+            numberOrZero(summary.settledReceivedByProvider?.addi) > 0 ||
+            numberOrZero(summary.settledReceivedByProvider?.sistecredito) > 0) && (
+            <div className="mt-2 grid gap-2 sm:grid-cols-2">
+              <div className="rounded-xl bg-amber-50 px-3 py-2.5 text-[11px] text-amber-800">
+                <p className="font-medium">Addi</p>
+                <p className="mt-1">Pendiente: {formatCurrency(summary.pendingAddi)}</p>
+                <p>Recibido hoy: {formatCurrency(summary.settledReceivedByProvider?.addi)}</p>
+              </div>
+              <div className="rounded-xl bg-amber-50 px-3 py-2.5 text-[11px] text-amber-800">
+                <p className="font-medium">Sistecrédito</p>
+                <p className="mt-1">Pendiente: {formatCurrency(summary.pendingSistecredito)}</p>
+                <p>Recibido hoy: {formatCurrency(summary.settledReceivedByProvider?.sistecredito)}</p>
+              </div>
             </div>
           )}
         </div>
 
         <div>
           <p className="text-[11px] font-medium text-black/65">
-            Operadores de hoy
+            Sesión compartida
           </p>
 
           <div className="mt-2 space-y-2">
             {summary.sessions.length === 0 ? (
               <div className="rounded-xl bg-[#f7f7f8] px-3 py-4 text-[11px] text-black/40">
-                Todavía no hay cajas registradas hoy.
+                La caja compartida todavía no se ha abierto hoy.
               </div>
             ) : (
               summary.sessions.map((item) => (
@@ -953,12 +1039,14 @@ function CashTodayPanel({
                 >
                   <div className="min-w-0">
                     <p className="truncate text-[11px] font-medium text-black">
-                      {item.operatorName || "Vendedor"}
+                      {item.openedByName || "Sin registrar"}
                     </p>
                     <p className="mt-0.5 truncate text-[10px] text-black/40">
                       {item.status === "open"
-                        ? "Caja abierta"
-                        : "Caja cerrada"}
+                        ? "Abierta por este usuario"
+                        : item.closedByName
+                          ? `Cerrada por ${item.closedByName}`
+                          : "Caja cerrada"}
                     </p>
                   </div>
 
@@ -1235,7 +1323,7 @@ function RecentSalesTable({ sales, className = "" }) {
                       {sale.saleNumber || "Venta"}
                     </p>
                     <p className="text-[11px] text-black/40">
-                      {formatDateTime(sale.createdAt)}
+                      {formatDateTime(getSaleRecognitionDate(sale) || sale.createdAt)}
                     </p>
                   </td>
 
@@ -1334,7 +1422,7 @@ function DaySalesTable({ sales }) {
                       </p>
 
                       <p className="mt-1 text-[10px] leading-4 text-black/38">
-                        {formatDateTime(sale.createdAt)}
+                        {formatDateTime(getSaleRecognitionDate(sale) || sale.createdAt)}
                       </p>
                     </td>
 
@@ -1527,7 +1615,7 @@ function getSessionAnalytics(
     session.closingBalances &&
     typeof session.closingBalances === "object"
   ) {
-    const balances = CASH_METHODS.reduce(
+    const balances = CASH_BALANCE_METHODS.reduce(
       (result, method) => {
         result[method] = numberOrZero(
           session.closingBalances?.[method]
@@ -1547,10 +1635,41 @@ function getSessionAnalytics(
         session.closingSaleCount !== undefined
           ? numberOrZero(session.closingSaleCount)
           : liveSummary.saleCount,
+      pendingByProvider:
+        session.closingPendingByProvider &&
+        typeof session.closingPendingByProvider === "object"
+          ? {
+              addi: numberOrZero(
+                session.closingPendingByProvider.addi
+              ),
+              sistecredito: numberOrZero(
+                session.closingPendingByProvider.sistecredito
+              ),
+            }
+          : liveSummary.pendingByProvider || { addi: 0, sistecredito: 0 },
+      settledReceivedByProvider:
+        session.closingSettledReceivedByProvider &&
+        typeof session.closingSettledReceivedByProvider === "object"
+          ? {
+              addi: numberOrZero(
+                session.closingSettledReceivedByProvider.addi
+              ),
+              sistecredito: numberOrZero(
+                session.closingSettledReceivedByProvider.sistecredito
+              ),
+            }
+          : liveSummary.settledReceivedByProvider || {
+              addi: 0,
+              sistecredito: 0,
+            },
       pendingAddi:
         session.closingPendingAddi !== undefined
           ? numberOrZero(session.closingPendingAddi)
-          : liveSummary.pendingAddi,
+          : numberOrZero(liveSummary.pendingByProvider?.addi),
+      pendingSistecredito:
+        session.closingPendingSistecredito !== undefined
+          ? numberOrZero(session.closingPendingSistecredito)
+          : numberOrZero(liveSummary.pendingByProvider?.sistecredito),
       expectedCash:
         session.expectedCash !== undefined
           ? numberOrZero(session.expectedCash)
@@ -1704,19 +1823,24 @@ export default function DashboardPage() {
     });
   }, [dailyMonth]);
 
+  const recognizedSales = useMemo(
+    () => sales.filter((sale) => isSaleRecognized(sale)),
+    [sales]
+  );
+
   const monthASales = useMemo(
-    () => filterSalesByMonth(sales, monthA),
-    [sales, monthA]
+    () => filterSalesByMonth(recognizedSales, monthA),
+    [recognizedSales, monthA]
   );
 
   const monthBSales = useMemo(
-    () => filterSalesByMonth(sales, monthB),
-    [sales, monthB]
+    () => filterSalesByMonth(recognizedSales, monthB),
+    [recognizedSales, monthB]
   );
 
   const selectedDaySales = useMemo(
-    () => filterSalesByDay(sales, dailyMonth, dailyDay),
-    [sales, dailyMonth, dailyDay]
+    () => filterSalesByDay(recognizedSales, dailyMonth, dailyDay),
+    [recognizedSales, dailyMonth, dailyDay]
   );
 
   const monthAMetrics = useMemo(
@@ -1738,8 +1862,8 @@ export default function DashboardPage() {
   );
 
   const allTimeMetrics = useMemo(
-    () => finalizeMetrics(calculateMetrics(sales)),
-    [sales]
+    () => finalizeMetrics(calculateMetrics(recognizedSales)),
+    [recognizedSales]
   );
 
   const productRanking = useMemo(
@@ -1824,8 +1948,8 @@ export default function DashboardPage() {
   );
 
   const monthPaymentBreakdown = useMemo(
-    () => buildPaymentBreakdown(monthBSales),
-    [monthBSales]
+    () => buildPaymentBreakdown(monthBSales, sales, monthB),
+    [monthBSales, sales, monthB]
   );
 
   const inventoryMetrics = useMemo(() => {
@@ -1867,7 +1991,7 @@ export default function DashboardPage() {
   );
 
   const todayCashSummary = useMemo(() => {
-    const balances = CASH_METHODS.reduce(
+    const balances = CASH_BALANCE_METHODS.reduce(
       (result, method) => {
         result[method] = 0;
         return result;
@@ -1883,7 +2007,7 @@ export default function DashboardPage() {
           cashMovementsBySession[session.id] || []
         );
 
-        CASH_METHODS.forEach((method) => {
+        CASH_BALANCE_METHODS.forEach((method) => {
           balances[method] += numberOrZero(
             summary.balances?.[method]
           );
@@ -1891,12 +2015,30 @@ export default function DashboardPage() {
 
         return {
           id: session.id,
-          operatorName: session.operatorName,
+          openedByName:
+            session.openedByName ||
+            session.operatorName ||
+            "Sin registrar",
+          closedByName: session.closedByName || "",
           status: session.status,
           totalSales: summary.totalSales,
           saleCount: summary.saleCount,
           expectedCash: summary.expectedCash,
-          pendingAddi: summary.pendingAddi,
+          pendingByProvider: summary.pendingByProvider || {
+            addi: 0,
+            sistecredito: 0,
+          },
+          settledReceivedByProvider:
+            summary.settledReceivedByProvider || {
+              addi: 0,
+              sistecredito: 0,
+            },
+          pendingAddi: numberOrZero(
+            summary.pendingByProvider?.addi
+          ),
+          pendingSistecredito: numberOrZero(
+            summary.pendingByProvider?.sistecredito
+          ),
           openingAmount: numberOrZero(
             session.openingAmount
           ),
@@ -1937,6 +2079,38 @@ export default function DashboardPage() {
         (sum, item) => sum + item.pendingAddi,
         0
       ),
+      pendingSistecredito: sessionRows.reduce(
+        (sum, item) => sum + item.pendingSistecredito,
+        0
+      ),
+      pendingByProvider: {
+        addi: sessionRows.reduce(
+          (sum, item) => sum + item.pendingAddi,
+          0
+        ),
+        sistecredito: sessionRows.reduce(
+          (sum, item) => sum + item.pendingSistecredito,
+          0
+        ),
+      },
+      settledReceivedByProvider: {
+        addi: sessionRows.reduce(
+          (sum, item) =>
+            sum +
+            numberOrZero(
+              item.settledReceivedByProvider?.addi
+            ),
+          0
+        ),
+        sistecredito: sessionRows.reduce(
+          (sum, item) =>
+            sum +
+            numberOrZero(
+              item.settledReceivedByProvider?.sistecredito
+            ),
+          0
+        ),
+      },
       difference: sessionRows.reduce(
         (sum, item) => sum + item.difference,
         0
@@ -2640,11 +2814,19 @@ export default function DashboardPage() {
                   breakdown={monthPaymentBreakdown}
                 />
 
-                {monthPaymentBreakdown.pendingAddi > 0 && (
-                  <div className="mt-3 rounded-xl bg-amber-50 px-3 py-2.5 text-[11px] text-amber-800">
-                    Addi pendiente en el periodo: {formatCurrency(
-                      monthPaymentBreakdown.pendingAddi
-                    )}
+                {(monthPaymentBreakdown.pendingAddi > 0 ||
+                  monthPaymentBreakdown.pendingSistecredito > 0) && (
+                  <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                    <div className="rounded-xl bg-amber-50 px-3 py-2.5 text-[11px] text-amber-800">
+                      Addi pendiente creado en el periodo: {formatCurrency(
+                        monthPaymentBreakdown.pendingAddi
+                      )}
+                    </div>
+                    <div className="rounded-xl bg-amber-50 px-3 py-2.5 text-[11px] text-amber-800">
+                      Sistecrédito pendiente creado en el periodo: {formatCurrency(
+                        monthPaymentBreakdown.pendingSistecredito
+                      )}
+                    </div>
                   </div>
                 )}
               </SectionCard>

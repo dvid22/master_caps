@@ -324,16 +324,18 @@ function buildGroups(groups, reservations) {
     normalized.push(buildFallbackGroup(groupKey, lines));
   });
 
-  return normalized.sort((a, b) => {
-    const dateA = getTimestampMilliseconds(
-      a.reservedAt || a.createdAt
-    );
-    const dateB = getTimestampMilliseconds(
-      b.reservedAt || b.createdAt
-    );
+  return normalized
+    .filter((group) => group.status !== "cancelled")
+    .sort((a, b) => {
+      const dateA = getTimestampMilliseconds(
+        a.reservedAt || a.createdAt
+      );
+      const dateB = getTimestampMilliseconds(
+        b.reservedAt || b.createdAt
+      );
 
-    return dateB - dateA;
-  });
+      return dateB - dateA;
+    });
 }
 
 export default function ReservationsPage() {
@@ -570,7 +572,7 @@ export default function ReservationsPage() {
     }
 
     const confirmed = window.confirm(
-      `¿Deseas liberar ${group.groupNumber}? Todos los productos volverán al inventario.`
+      `¿Deseas liberar y eliminar ${group.groupNumber}? Los productos volverán al inventario y el apartado dejará de aparecer en el historial.`
     );
 
     if (!confirmed) return;
@@ -578,7 +580,7 @@ export default function ReservationsPage() {
     try {
       setProcessing(true);
       await cancelReservationGroup(group.id, getCurrentUserActor());
-      alert("Apartado liberado correctamente.");
+      alert("Apartado liberado y eliminado correctamente.");
     } catch (error) {
       alert(error.message || "No se pudo liberar el apartado.");
     } finally {
@@ -677,7 +679,6 @@ export default function ReservationsPage() {
               <option value="active">Activos</option>
               <option value="completed">Vendidos</option>
               <option value="expired">Vencidos</option>
-              <option value="cancelled">Liberados</option>
             </select>
 
             <select
@@ -2869,7 +2870,15 @@ function SaleModal({
           label="Método del pago final"
           value={form.paymentMethod}
           onChange={(value) => onChange("paymentMethod", value)}
+          allowDeferred
         />
+
+        {["addi", "sistecredito"].includes(form.paymentMethod) &&
+          balance > 0 && (
+            <div className="rounded-xl border border-amber-100 bg-amber-50 px-3 py-2.5 text-[10px] leading-4 text-amber-800">
+              El saldo de {formatCurrency(balance)} quedará pendiente de desembolso por {form.paymentMethod === "addi" ? "Addi" : "Sistecrédito"}. Se reconocerá en caja cuando confirmes que el dinero fue recibido.
+            </div>
+          )}
 
         <Input
           label="Notas"
@@ -3059,6 +3068,7 @@ function Select({
   value,
   onChange,
   compact = false,
+  allowDeferred = false,
 }) {
   return (
     <label className="block">
@@ -3086,6 +3096,10 @@ function Select({
         <option value="nequi">Nequi</option>
         <option value="daviplata">Daviplata</option>
         <option value="tarjeta">Tarjeta</option>
+        {allowDeferred && <option value="addi">Addi</option>}
+        {allowDeferred && (
+          <option value="sistecredito">Sistecrédito</option>
+        )}
         <option value="otro">Otro</option>
       </select>
     </label>

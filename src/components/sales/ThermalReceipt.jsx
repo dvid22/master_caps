@@ -70,6 +70,9 @@ function formatPaymentMethod(value) {
     nequi: "Nequi",
     daviplata: "Daviplata",
     tarjeta: "Tarjeta",
+    addi: "Addi",
+    sistecredito: "Sistecrédito",
+    mixto: "Pago mixto",
     otro: "Otro",
   };
 
@@ -120,6 +123,62 @@ function normalizeReceiptItems(sale) {
   return [];
 }
 
+function normalizeReceiptPayments(sale = {}, total = 0) {
+  const source = Array.isArray(sale?.payments) && sale.payments.length > 0
+    ? sale.payments
+    : [
+        {
+          method: sale?.paymentMethod || "efectivo",
+          amount: total,
+          receivedAmount:
+            sale?.paymentMethod === "efectivo"
+              ? sale?.amountReceived ?? total
+              : total,
+        },
+      ];
+
+  return source
+    .map((payment, index) => ({
+      id: `receipt-payment-${index}`,
+      method: String(payment?.method || "otro").trim().toLowerCase(),
+      label: formatPaymentMethod(payment?.method || "otro"),
+      amount: Math.max(toSafeNumber(payment?.amount), 0),
+      receivedAmount: Math.max(
+        toSafeNumber(payment?.receivedAmount ?? payment?.amount),
+        0
+      ),
+    }))
+    .filter((payment) => payment.amount > 0);
+}
+
+function getReceiptFinancing(sale = {}, payments = []) {
+  const deferredMethods = new Set(["addi", "sistecredito"]);
+  const explicitProvider = String(sale?.settlementProvider || "").trim().toLowerCase();
+  const provider = deferredMethods.has(explicitProvider)
+    ? explicitProvider
+    : payments.find((payment) => deferredMethods.has(payment.method))?.method || "";
+
+  if (!provider) return null;
+
+  const legacyPrefix = provider === "addi" ? "addi" : "sistecredito";
+  const status =
+    sale?.settlementStatus ||
+    sale?.[`${legacyPrefix}Status`] ||
+    (sale?.paymentStatus === "paid" ? "settled" : "pending");
+
+  return {
+    provider,
+    label: formatPaymentMethod(provider),
+    isSettled: status === "settled",
+    expectedAmount: toSafeNumber(
+      sale?.settlementExpectedAmount ??
+        sale?.[`${legacyPrefix}ExpectedAmount`] ??
+        payments.find((payment) => payment.method === provider)?.amount ??
+        0
+    ),
+  };
+}
+
 function normalizeReceiptSale(sale = {}) {
   const items = normalizeReceiptItems(sale);
 
@@ -155,6 +214,9 @@ function normalizeReceiptSale(sale = {}) {
       ? toSafeNumber(sale.change)
       : Math.max(amountReceived - total, 0);
 
+  const payments = normalizeReceiptPayments(sale, total);
+  const financing = getReceiptFinancing(sale, payments);
+
   return {
     ...sale,
     items,
@@ -170,6 +232,8 @@ function normalizeReceiptSale(sale = {}) {
         ? toSafeNumber(sale.totalItems)
         : calculatedItems,
     paymentMethod: formatPaymentMethod(sale.paymentMethod),
+    payments,
+    financing,
     customerName: String(sale.customerName || "").trim(),
     customerDocument: String(sale.customerDocument || "").trim(),
     customerPhone: String(sale.customerPhone || "").trim(),
@@ -871,6 +935,24 @@ function ReceiptContent({ receipt, store, paperSize }) {
         <ReceiptTextRow label="Pago" value={receipt.paymentMethod} />
       </section>
 
+      {receipt.payments.length > 1 && (
+        <>
+          <ReceiptSeparator />
+          <section>
+            <p style={{ margin: 0, fontWeight: 700 }}>FORMAS DE PAGO</p>
+            <div style={{ marginTop: "4px" }}>
+              {receipt.payments.map((payment) => (
+                <ReceiptMoneyRow
+                  key={payment.id}
+                  label={payment.label}
+                  value={formatCurrency(payment.amount)}
+                />
+              ))}
+            </div>
+          </section>
+        </>
+      )}
+
       {(receipt.customerName ||
         receipt.customerDocument ||
         receipt.customerPhone) && (
@@ -944,18 +1026,18 @@ function ReceiptContent({ receipt, store, paperSize }) {
         </div>
 
         {receipt.paymentMethod.toLowerCase() === "efectivo" && (
-          <>
-            <ReceiptMoneyRow
-              label="Recibido"
-              value={formatCurrency(receipt.amountReceived)}
-            />
+          <ReceiptMoneyRow
+            label="Recibido"
+            value={formatCurrency(receipt.amountReceived)}
+          />
+        )}
 
-            <ReceiptMoneyRow
-              label="Cambio"
-              value={formatCurrency(receipt.change)}
-              strong
-            />
-          </>
+        {receipt.change > 0 && (
+          <ReceiptMoneyRow
+            label="Cambio"
+            value={formatCurrency(receipt.change)}
+            strong
+          />
         )}
       </section>
 

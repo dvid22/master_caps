@@ -22,12 +22,14 @@ import { getCurrentUserActor } from "../../services/auth.service";
 import { formatCurrency } from "../../utils/money";
 import { subscribeSales } from "../../services/sales.service";
 import {
+  CASH_BALANCE_METHODS,
   CASH_METHODS,
   CASH_METHOD_LABELS,
   buildCashSessionSummary,
   closeCashSession,
   createCashMovement,
   getBogotaBusinessDate,
+  getCashSessionId,
   openCashSession,
   recoverExpiredCashSessions,
   subscribeCashMovements,
@@ -71,6 +73,8 @@ function formatDateTime(value) {
     timeStyle: "short",
   }).format(date);
 }
+
+const DEFERRED_PROVIDER_ROWS = ["addi", "sistecredito"];
 
 export default function CashPage() {
   const actor = useMemo(() => getCurrentUserActor(), []);
@@ -182,12 +186,9 @@ export default function CashPage() {
     [session, sales, movements]
   );
 
-  const ownSessions = useMemo(
-    () =>
-      sessions
-        .filter((item) => item.operatorUid === actor?.uid)
-        .slice(0, 12),
-    [sessions, actor?.uid]
+  const sharedSessions = useMemo(
+    () => sessions.slice(0, 12),
+    [sessions]
   );
 
   function notify(type, text) {
@@ -355,7 +356,7 @@ export default function CashPage() {
         )}
 
         <CashHistory
-          sessions={ownSessions}
+          sessions={sharedSessions}
           onViewDetails={setHistoryDetailSession}
         />
       </section>
@@ -432,8 +433,13 @@ function CashHeader({
               />
 
               <HeaderValue
-                label="Operador"
-                value={session.operatorName || actor.name || "Vendedor"}
+                label="Abierta por"
+                value={
+                  session.openedByName ||
+                  session.operatorName ||
+                  actor.name ||
+                  "Usuario"
+                }
                 text
               />
             </div>
@@ -512,12 +518,12 @@ function OpenCashPanel({
               </p>
 
               <h2 className="mt-2 max-w-[620px] text-[28px] font-semibold leading-[1.08] tracking-[-0.045em] sm:text-[33px]">
-                Registra la base inicial y empieza la jornada con claridad.
+                Abre la caja compartida de la tienda para iniciar la jornada.
               </h2>
 
               <p className="mt-3 max-w-[620px] text-[12px] leading-5 text-black/48">
-                La caja inicia con una base separada de las ventas. Más tarde podrás
-                revisar movimientos, saldos por modalidad y el cierre final del día.
+                Solo existe una caja por tienda y día. Quien la abra queda registrado,
+                pero todos los usuarios autorizados trabajarán sobre la misma sesión.
               </p>
 
               <div className="mt-5 inline-flex items-center gap-2 rounded-full border border-black/[0.05] bg-white px-3 py-1.5 text-[9px] font-medium text-black/48 shadow-sm">
@@ -528,8 +534,8 @@ function OpenCashPanel({
 
             <div className="mt-8 grid gap-2 sm:grid-cols-3">
               <SoftInfo
-                label="Operador"
-                value={actor?.name || actor?.email || "Vendedor"}
+                label="La abre"
+                value={actor?.name || actor?.email || "Usuario"}
               />
 
               <SoftInfo
@@ -746,23 +752,40 @@ function OpenSessionDashboard({
               Saldos actuales
             </h2>
             <p className="mt-0.5 text-[10px] text-black/36">
-              Dónde está el dinero en este momento.
+              Dónde está realmente el dinero disponible en este momento.
             </p>
           </div>
         </div>
 
-        <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7">
-          {CASH_METHODS.map((method) => (
+        <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6">
+          {CASH_BALANCE_METHODS.map((method) => (
             <BalanceCard
               key={method}
               method={method}
               balance={summary.balances[method]}
               sold={summary.salesByMethod[method]}
-              pending={
-                method === "addi"
-                  ? summary.pendingAddi
-                  : 0
-              }
+            />
+          ))}
+        </div>
+      </section>
+
+      <section className="mt-4">
+        <div className="mb-2">
+          <h2 className="text-[13px] font-semibold tracking-[-0.02em]">
+            Financiaciones
+          </h2>
+          <p className="mt-0.5 text-[10px] text-black/36">
+            El proveedor muestra el origen; cuando desembolsa, el dinero queda en Transferencia / banco.
+          </p>
+        </div>
+
+        <div className="grid gap-2.5 sm:grid-cols-2">
+          {DEFERRED_PROVIDER_ROWS.map((provider) => (
+            <FinancingCard
+              key={provider}
+              provider={provider}
+              pending={summary.pendingByProvider?.[provider] || 0}
+              received={summary.settledReceivedByProvider?.[provider] || 0}
             />
           ))}
         </div>
@@ -833,7 +856,6 @@ function BalanceCard({
   method,
   balance,
   sold,
-  pending,
 }) {
   const amount = Number(balance || 0);
   const hasBalance = amount !== 0;
@@ -867,11 +889,43 @@ function BalanceCard({
           Vendido: {formatCurrency(sold)}
         </p>
 
-        {pending > 0 && (
-          <p className="mt-1 truncate text-[8px] font-medium text-amber-700">
-            Pendiente: {formatCurrency(pending)}
+      </div>
+    </article>
+  );
+}
+
+function FinancingCard({ provider, pending, received }) {
+  const label = CASH_METHOD_LABELS[provider] || provider;
+
+  return (
+    <article className="rounded-[16px] border border-black/[0.055] bg-white p-4 shadow-[0_8px_22px_rgba(15,23,42,0.025)]">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-[9px] font-semibold uppercase tracking-[0.08em] text-black/38">
+            {label}
           </p>
-        )}
+          <p className="mt-1 text-[10px] text-black/35">
+            Conciliación de desembolsos
+          </p>
+        </div>
+
+        <WalletCards size={15} className="text-red-600" />
+      </div>
+
+      <div className="mt-3 grid grid-cols-2 gap-2">
+        <div className="rounded-[12px] bg-amber-50 px-3 py-2.5">
+          <p className="text-[8px] font-medium text-amber-700">Pendiente</p>
+          <p className="mt-1 truncate text-[13px] font-semibold text-amber-900">
+            {formatCurrency(pending)}
+          </p>
+        </div>
+
+        <div className="rounded-[12px] bg-emerald-50 px-3 py-2.5">
+          <p className="text-[8px] font-medium text-emerald-700">Recibido hoy</p>
+          <p className="mt-1 truncate text-[13px] font-semibold text-emerald-800">
+            {formatCurrency(received)}
+          </p>
+        </div>
       </div>
     </article>
   );
@@ -992,7 +1046,7 @@ function MovementForm({
                 }))
               }
             >
-              {CASH_METHODS.map((method) => (
+              {CASH_BALANCE_METHODS.map((method) => (
                 <option
                   key={method}
                   value={method}
@@ -1015,7 +1069,7 @@ function MovementForm({
                 }))
               }
             >
-              {CASH_METHODS.map((method) => (
+              {CASH_BALANCE_METHODS.map((method) => (
                 <option
                   key={method}
                   value={method}
@@ -1141,12 +1195,17 @@ function SessionInfo({ session, actor }) {
 
       <div className="mt-4 space-y-2.5">
         <InfoRow
-          label="Operador"
+          label="Abierta por"
           value={
+            session.openedByName ||
             session.operatorName ||
-            actor.name ||
-            "Vendedor"
+            "Usuario"
           }
+        />
+
+        <InfoRow
+          label="Usuario actual"
+          value={actor.name || actor.email || "Usuario"}
         />
 
         <InfoRow
@@ -1277,7 +1336,18 @@ function ClosedCashPanel({ session }) {
         </div>
       </div>
 
-      <div className="mt-4 grid gap-2 sm:grid-cols-3">
+      <div className="mt-4 grid gap-2 sm:grid-cols-2">
+        <SoftInfo
+          label="Abierta por"
+          value={session.openedByName || session.operatorName || "Sin nombre"}
+        />
+        <SoftInfo
+          label="Cerrada por"
+          value={session.closedByName || (automatic ? "Sistema" : "Sin nombre")}
+        />
+      </div>
+
+      <div className="mt-2 grid gap-2 sm:grid-cols-3">
         <CloseMetric
           label="Esperado"
           value={formatCurrency(session.expectedCash)}
@@ -1334,44 +1404,59 @@ function CloseMetric({
 function saleBelongsToHistorySession(sale, session) {
   if (!sale || !session) return false;
 
-  if (sale.cashSessionId) {
+  const provider = String(
+    sale.settlementProvider || sale.paymentMethod || ""
+  ).trim();
+  const isDeferred = DEFERRED_PROVIDER_ROWS.includes(provider);
+
+  if (isDeferred) {
+    const status = String(
+      sale.settlementStatus ||
+        (provider === "addi"
+          ? sale.addiStatus
+          : sale.sistecreditoStatus) ||
+        ""
+    ).trim();
+
+    if (status !== "settled") return false;
+
+    if (sale.settlementCashSessionId) {
+      return sale.settlementCashSessionId === session.id;
+    }
+  } else if (sale.cashSessionId) {
     return sale.cashSessionId === session.id;
   }
 
-  const saleSellerUid = String(sale.sellerUid || "").trim();
-  const operatorUid = String(session.operatorUid || "").trim();
+  const expectedSharedId = getCashSessionId({
+    storeId: session.storeId || STORE_ID,
+    businessDate: session.businessDate,
+  });
+  const isSharedSession = session.id === expectedSharedId;
 
-  if (
-    saleSellerUid &&
-    operatorUid &&
-    saleSellerUid !== operatorUid
-  ) {
-    return false;
+  if (!isSharedSession) {
+    const saleSellerUid = String(sale.sellerUid || "").trim();
+    const operatorUid = String(session.operatorUid || "").trim();
+
+    if (saleSellerUid && operatorUid && saleSellerUid !== operatorUid) {
+      return false;
+    }
   }
 
-  const saleDate = toDate(sale.createdAt);
+  const saleDate = toDate(
+    isDeferred
+      ? sale.recognizedAt ||
+          sale.settlementSettledAt ||
+          (provider === "addi" ? sale.addiSettledAt : sale.sistecreditoSettledAt)
+      : sale.recognizedAt || sale.createdAt
+  );
   const openedAt = toDate(session.openedAt);
   const closedAt = toDate(session.closedAt);
 
-  if (!saleDate || !openedAt) {
-    return false;
-  }
+  if (!saleDate || !openedAt) return false;
+  if (saleDate.getTime() < openedAt.getTime()) return false;
+  if (closedAt && saleDate.getTime() > closedAt.getTime()) return false;
 
-  if (saleDate.getTime() < openedAt.getTime()) {
-    return false;
-  }
-
-  if (
-    closedAt &&
-    saleDate.getTime() > closedAt.getTime()
-  ) {
-    return false;
-  }
-
-  return (
-    getBogotaBusinessDate(saleDate) ===
-    session.businessDate
-  );
+  return getBogotaBusinessDate(saleDate) === session.businessDate;
 }
 
 function getSalePaymentSummary(sale) {
@@ -1419,7 +1504,7 @@ function CashHistory({
           </h2>
 
           <p className="mt-0.5 text-[9px] text-black/34">
-            Consulta aperturas, cierres, saldos, ventas y movimientos de cada jornada.
+            Consulta las jornadas compartidas de la tienda, quién abrió, quién cerró, ventas y movimientos.
           </p>
         </div>
 
@@ -1479,6 +1564,7 @@ function SessionHistoryCard({
               : automatic
                 ? "Cierre automático"
                 : "Cierre manual"}
+            {` · abrió ${session.openedByName || session.operatorName || "Usuario"}`}
           </p>
         </div>
 
@@ -1635,12 +1721,28 @@ function CashHistoryDetailModal({
       )
     : calculatedSummary.saleCount;
 
-  const pendingAddi = isClosed
-    ? numericOrFallback(
-        session.closingPendingAddi,
-        calculatedSummary.pendingAddi
-      )
-    : calculatedSummary.pendingAddi;
+  const pendingByProvider = isClosed
+    ? {
+        ...calculatedSummary.pendingByProvider,
+        ...objectOrEmpty(session.closingPendingByProvider),
+      }
+    : calculatedSummary.pendingByProvider;
+
+  const settledReceivedByProvider = isClosed
+    ? {
+        ...calculatedSummary.settledReceivedByProvider,
+        ...objectOrEmpty(session.closingSettledReceivedByProvider),
+      }
+    : calculatedSummary.settledReceivedByProvider;
+
+  const pendingAddi = numericOrFallback(
+    pendingByProvider?.addi,
+    session.closingPendingAddi ?? calculatedSummary.pendingAddi
+  );
+  const pendingSistecredito = numericOrFallback(
+    pendingByProvider?.sistecredito,
+    session.closingPendingSistecredito ?? calculatedSummary.pendingSistecredito
+  );
 
   const expectedCash = isClosed
     ? numericOrFallback(
@@ -1649,7 +1751,7 @@ function CashHistoryDetailModal({
       )
     : calculatedSummary.expectedCash;
 
-  const totalAvailable = CASH_METHODS.reduce(
+  const totalAvailable = CASH_BALANCE_METHODS.reduce(
     (total, method) =>
       total +
       numericOrFallback(finalBalances[method], 0),
@@ -1684,7 +1786,7 @@ function CashHistoryDetailModal({
     session.closeType?.startsWith("automatic");
 
   return (
-    <div className="fixed inset-0 z-[85] flex items-center justify-center bg-black/[0.025]5 p-2 backdrop-blur-sm sm:p-4">
+    <div className="fixed inset-0 z-[85] flex items-center justify-center bg-black/45 p-2 backdrop-blur-sm sm:p-4">
       <section className="flex max-h-[94vh] w-full max-w-[1320px] flex-col overflow-hidden rounded-[22px] border border-white/40 bg-[#f7f7f8] shadow-[0_32px_100px_rgba(15,23,42,0.22)]">
         <div className="flex items-start justify-between border-b border-black/[0.05] bg-white px-5 py-4 sm:px-6">
           <div>
@@ -1758,16 +1860,18 @@ function CashHistoryDetailModal({
             >
               <HistoryInfoGrid>
                 <HistoryInfo
-                  label="Operador"
+                  label="Abierta por"
                   value={
+                    session.openedByName ||
                     session.operatorName ||
                     "Sin nombre"
                   }
                 />
 
                 <HistoryInfo
-                  label="Correo"
+                  label="Correo apertura"
                   value={
+                    session.openedByEmail ||
                     session.operatorEmail ||
                     "Sin correo"
                   }
@@ -1844,15 +1948,18 @@ function CashHistoryDetailModal({
                 />
               </div>
 
-              {pendingAddi > 0 && (
-                <div className="mt-3 rounded-[12px] bg-amber-50 px-3 py-2.5">
-                  <p className="text-[8px] font-semibold uppercase tracking-[0.08em] text-amber-700">
-                    Addi pendiente por recibir
-                  </p>
-
-                  <p className="mt-1 text-[13px] font-semibold text-amber-900">
-                    {formatCurrency(pendingAddi)}
-                  </p>
+              {(pendingAddi > 0 || pendingSistecredito > 0) && (
+                <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                  <FinancingStatusBox
+                    label="Addi pendiente"
+                    value={pendingAddi}
+                    tone="pending"
+                  />
+                  <FinancingStatusBox
+                    label="Sistecrédito pendiente"
+                    value={pendingSistecredito}
+                    tone="pending"
+                  />
                 </div>
               )}
             </HistorySection>
@@ -1863,8 +1970,8 @@ function CashHistoryDetailModal({
               title="Saldo final por modalidad"
               icon={WalletCards}
             >
-              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
-                {CASH_METHODS.map((method) => (
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-3">
+                {CASH_BALANCE_METHODS.map((method) => (
                   <HistoryMethodBox
                     key={method}
                     label={CASH_METHOD_LABELS[method]}
@@ -1892,6 +1999,36 @@ function CashHistoryDetailModal({
                     )}
                   />
                 ))}
+              </div>
+            </HistorySection>
+          </div>
+
+          <div className="mt-3">
+            <HistorySection
+              title="Conciliación de financiaciones"
+              icon={WalletCards}
+            >
+              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                <FinancingStatusBox
+                  label="Addi pendiente"
+                  value={pendingAddi}
+                  tone="pending"
+                />
+                <FinancingStatusBox
+                  label="Addi recibido"
+                  value={numericOrFallback(settledReceivedByProvider?.addi, 0)}
+                  tone="received"
+                />
+                <FinancingStatusBox
+                  label="Sistecrédito pendiente"
+                  value={pendingSistecredito}
+                  tone="pending"
+                />
+                <FinancingStatusBox
+                  label="Sistecrédito recibido"
+                  value={numericOrFallback(settledReceivedByProvider?.sistecredito, 0)}
+                  tone="received"
+                />
               </div>
             </HistorySection>
           </div>
@@ -2086,6 +2223,27 @@ function HistoryMoneyBox({
   );
 }
 
+function FinancingStatusBox({ label, value, tone = "pending" }) {
+  const received = tone === "received";
+
+  return (
+    <div
+      className={`rounded-[11px] px-3 py-2.5 ${
+        received
+          ? "bg-emerald-50 text-emerald-800"
+          : "bg-amber-50 text-amber-900"
+      }`}
+    >
+      <p className="text-[7px] font-semibold uppercase tracking-[0.08em] opacity-70">
+        {label}
+      </p>
+      <p className="mt-1 truncate text-[11px] font-semibold">
+        {formatCurrency(value)}
+      </p>
+    </div>
+  );
+}
+
 function HistoryMethodBox({
   label,
   value,
@@ -2117,7 +2275,7 @@ function HistorySaleRow({ sale }) {
           </p>
 
           <span className="text-[7.5px] text-black/28">
-            {formatDateTime(sale.createdAt)}
+            {formatDateTime(sale.recognizedAt || sale.createdAt)}
           </span>
         </div>
 
@@ -2196,7 +2354,7 @@ function CloseCashModal({
     counted - Number(expectedCash || 0);
 
   return (
-    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/[0.025]5 p-3 backdrop-blur-sm">
+    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/45 p-3 backdrop-blur-sm">
       <form
         onSubmit={onSubmit}
         className="w-full max-w-[500px] overflow-hidden rounded-[20px] border border-white/40 bg-white shadow-[0_30px_90px_rgba(15,23,42,0.22)]"

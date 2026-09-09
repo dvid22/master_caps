@@ -506,7 +506,7 @@ export default function ClientsPage() {
             </h1>
 
             <p className="mt-1 text-[13px] text-black/48">
-              Fidelización, historial y volumen real de compra de tus clientes
+              Fidelización y compras realmente reconocidas de tus clientes
             </p>
           </div>
 
@@ -558,7 +558,7 @@ export default function ClientsPage() {
 
           <StatCard
             icon={ShieldCheck}
-            label="Ventas acumuladas"
+            label="Ventas reconocidas"
             value={formatCurrency(
               stats.accumulatedSales
             )}
@@ -580,7 +580,7 @@ export default function ClientsPage() {
                     Ranking de clientes
                   </p>
                   <p className="mt-0.5 text-[10px] text-black/38">
-                    Prioridad: productos comprados → compras realizadas → dinero gastado.
+                    Prioridad: productos reconocidos → compras reconocidas → dinero gastado. Financiaciones pendientes no suman.
                   </p>
                 </div>
 

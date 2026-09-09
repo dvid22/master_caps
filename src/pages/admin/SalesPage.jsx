@@ -89,6 +89,28 @@ const MIXED_PAYMENT_OPTIONS = [
   { value: "otro", label: "Otro" },
 ];
 
+const DEFERRED_PAYMENT_METHODS = ["addi", "sistecredito"];
+
+function isDeferredPaymentMethod(value) {
+  return DEFERRED_PAYMENT_METHODS.includes(String(value || "").trim());
+}
+
+function getPaymentMethodLabel(value) {
+  const labels = {
+    efectivo: "Efectivo",
+    transferencia: "Transferencia",
+    nequi: "Nequi",
+    daviplata: "Daviplata",
+    tarjeta: "Tarjeta",
+    addi: "Addi",
+    sistecredito: "Sistecrédito",
+    mixto: "Pago mixto",
+    otro: "Otro",
+  };
+
+  return labels[String(value || "").trim()] || String(value || "Otro");
+}
+
 function parseMoneyInput(value) {
   return Math.max(
     Number(
@@ -2251,6 +2273,7 @@ function CheckoutFields({
           <option value="daviplata">Daviplata</option>
           <option value="tarjeta">Tarjeta</option>
           <option value="addi">Addi</option>
+          <option value="sistecredito">Sistecrédito</option>
           <option value="mixto">Mixto</option>
           <option value="otro">Otro</option>
         </select>
@@ -2383,12 +2406,12 @@ function CheckoutFields({
             </div>
 
             <p className="mt-2 text-[7.5px] leading-3.5 text-black/40">
-              Addi se mantiene como método independiente porque su desembolso se confirma después.
+              Addi y Sistecrédito se mantienen como métodos independientes porque sus desembolsos se confirman después.
             </p>
           </div>
         )}
 
-        {checkout.paymentMethod === "addi" && (
+        {isDeferredPaymentMethod(checkout.paymentMethod) && (
           <div className="rounded-2xl border border-amber-200 bg-amber-50/80 px-3 py-2.5">
             <div className="flex items-start gap-2.5">
               <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-white text-amber-700 ring-1 ring-amber-200">
@@ -2397,12 +2420,12 @@ function CheckoutFields({
 
               <div className="min-w-0">
                 <p className="text-[10px] font-medium text-amber-800">
-                  Pago por Addi
+                  Pago por {getPaymentMethodLabel(checkout.paymentMethod)}
                 </p>
                 <p className="mt-0.5 text-[9px] leading-4 text-black/48">
                   La venta se registrará y descontará inventario normalmente,
-                  pero el desembolso quedará pendiente hasta confirmar que Addi
-                  realizó el pago.
+                  pero el desembolso quedará pendiente hasta confirmar que
+                  {" "}{getPaymentMethodLabel(checkout.paymentMethod)} realizó el pago.
                 </p>
               </div>
             </div>
@@ -2427,7 +2450,7 @@ function CheckoutFields({
               <span className="text-[10px] text-black/45">
                 {checkout.paymentMethod === "efectivo"
                   ? "Dinero recibido"
-                  : checkout.paymentMethod === "addi"
+                  : isDeferredPaymentMethod(checkout.paymentMethod)
                     ? "Monto financiado"
                     : "Total pagado"}
               </span>
@@ -2535,8 +2558,8 @@ function CartTotals({ summary, selling, disabled, paymentMethod }) {
         <CreditCard size={17} />
         {selling
           ? "Procesando venta..."
-          : paymentMethod === "addi"
-            ? "Registrar venta Addi"
+          : isDeferredPaymentMethod(paymentMethod)
+            ? `Registrar venta ${getPaymentMethodLabel(paymentMethod)}`
             : paymentMethod === "mixto"
               ? "Cobrar pago mixto"
               : "Cobrar venta"}
@@ -3070,17 +3093,19 @@ function SalesHistoryModal({ sales, onClose, onSelectSale }) {
                       {sale.totalItems || 0} artículo(s) · {sale.paymentMethod === "mixto" ? "pago mixto" : sale.paymentMethod || "efectivo"} · {sale.sellerName || "Sin vendedor"}
                     </p>
 
-                    {sale.paymentMethod === "addi" && (
+                    {isDeferredPaymentMethod(sale.paymentMethod) && (
                       <span
                         className={`mt-1.5 inline-flex rounded-full px-2 py-0.5 text-[8px] font-medium ${
-                          sale.addiStatus === "settled"
+                          sale.settlementStatus === "settled" ||
+                          (sale.paymentMethod === "addi" && sale.addiStatus === "settled")
                             ? "bg-emerald-50 text-emerald-700"
                             : "bg-amber-50 text-amber-700"
                         }`}
                       >
-                        {sale.addiStatus === "settled"
-                          ? "Addi recibido"
-                          : "Addi pendiente"}
+                        {sale.settlementStatus === "settled" ||
+                        (sale.paymentMethod === "addi" && sale.addiStatus === "settled")
+                          ? `${getPaymentMethodLabel(sale.paymentMethod)} recibido`
+                          : `${getPaymentMethodLabel(sale.paymentMethod)} pendiente`}
                       </span>
                     )}
                   </div>
@@ -3104,19 +3129,20 @@ function SalesHistoryModal({ sales, onClose, onSelectSale }) {
 }
 
 function CompletedSaleModal({ sale, onClose, onNewSale, onPrint }) {
-  const isAddi = sale.paymentMethod === "addi";
+  const isDeferred = isDeferredPaymentMethod(sale.paymentMethod);
+  const paymentLabel = getPaymentMethodLabel(sale.paymentMethod);
 
   return (
     <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/45 px-4 py-6 backdrop-blur-sm">
       <section className="w-full max-w-[520px] overflow-hidden rounded-[30px] bg-white p-6 text-center shadow-2xl">
         <div
           className={`mx-auto flex h-16 w-16 items-center justify-center rounded-full ${
-            isAddi
+            isDeferred
               ? "bg-amber-50 text-amber-700"
               : "bg-emerald-50 text-emerald-600"
           }`}
         >
-          {isAddi ? <Clock3 size={32} /> : <CheckCircle2 size={34} />}
+          {isDeferred ? <Clock3 size={32} /> : <CheckCircle2 size={34} />}
         </div>
 
         <p className="mt-5 text-[12px] text-red-600">
@@ -3124,22 +3150,22 @@ function CompletedSaleModal({ sale, onClose, onNewSale, onPrint }) {
         </p>
 
         <h2 className="mt-1 text-[25px] font-medium tracking-[-0.045em]">
-          {isAddi ? "Venta registrada" : "Venta completada"}
+          {isDeferred ? "Venta registrada" : "Venta completada"}
         </h2>
 
         <p className="mt-2 text-[13px] text-black/50">
-          {isAddi
-            ? "El inventario fue actualizado y el desembolso de Addi quedó pendiente."
+          {isDeferred
+            ? `El inventario fue actualizado y el desembolso de ${paymentLabel} quedó pendiente.`
             : "El inventario fue actualizado correctamente."}
         </p>
 
-        {isAddi && (
+        {isDeferred && (
           <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-left">
             <p className="text-[10px] font-medium text-amber-800">
               Pendiente de desembolso
             </p>
             <p className="mt-1 text-[10px] leading-4 text-black/48">
-              Esta operación aparecerá en Pagos Addi hasta que confirmes que el dinero fue recibido.
+              Esta operación aparecerá en Financiaciones hasta que confirmes que el dinero de {paymentLabel} fue recibido.
             </p>
           </div>
         )}
@@ -3154,8 +3180,8 @@ function CompletedSaleModal({ sale, onClose, onNewSale, onPrint }) {
 
           <div className="mt-2 flex items-center justify-between">
             <span className="text-[12px] text-black/45">Método</span>
-            <strong className="text-[13px] font-medium capitalize">
-              {sale.paymentMethod}
+            <strong className="text-[13px] font-medium">
+              {paymentLabel}
             </strong>
           </div>
 
@@ -3167,8 +3193,8 @@ function CompletedSaleModal({ sale, onClose, onNewSale, onPrint }) {
                     key={`${payment.method}-${payment.amount}`}
                     className="flex items-center justify-between text-[10px]"
                   >
-                    <span className="capitalize text-black/45">
-                      {payment.method}
+                    <span className="text-black/45">
+                      {getPaymentMethodLabel(payment.method)}
                     </span>
                     <span className="font-medium">
                       {formatCurrency(payment.amount)}
@@ -3178,45 +3204,37 @@ function CompletedSaleModal({ sale, onClose, onNewSale, onPrint }) {
               </div>
             )}
 
-          <div className="mt-3 flex items-end justify-between border-t border-black/[0.07] pt-3">
+          <div className="mt-3 flex items-center justify-between border-t border-black/[0.06] pt-3">
             <span className="text-[12px] text-black/45">Total</span>
-            <strong className="text-[24px] font-medium tracking-[-0.04em]">
+            <strong className="text-[18px] font-medium">
               {formatCurrency(sale.total)}
             </strong>
           </div>
+        </div>
 
-          {Number(sale.change || 0) > 0 && (
-            <div className="mt-3 flex items-center justify-between rounded-xl bg-emerald-50 px-3 py-2">
-              <span className="text-[11px] text-emerald-700">Cambio</span>
-              <strong className="text-[13px] text-emerald-700">
-                {formatCurrency(sale.change)}
-              </strong>
-            </div>
-          )}
+        <div className="mt-5 grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            onClick={onPrint}
+            className="inline-flex h-11 items-center justify-center gap-2 rounded-2xl border border-black/[0.08] bg-white text-[11px] font-medium transition hover:bg-black/[0.025]"
+          >
+            <Printer size={15} />
+            Imprimir
+          </button>
+
+          <button
+            type="button"
+            onClick={onNewSale}
+            className="h-11 rounded-2xl bg-red-600 text-[11px] font-medium text-white shadow-lg shadow-red-600/15 transition hover:bg-red-700"
+          >
+            Nueva venta
+          </button>
         </div>
 
         <button
           type="button"
-          onClick={onPrint}
-          className="mt-5 inline-flex h-11 w-full items-center justify-center gap-2 rounded-2xl border border-red-200 bg-red-50 text-[13px] font-medium text-red-600 transition hover:border-red-300 hover:bg-red-100"
-        >
-          <Printer size={16} />
-          Ver e imprimir recibo
-        </button>
-
-        <button
-          type="button"
-          onClick={onNewSale}
-          className="mt-2 inline-flex h-11 w-full items-center justify-center gap-2 rounded-2xl bg-red-600 text-[13px] font-medium text-white shadow-lg shadow-red-600/20 transition hover:bg-red-700"
-        >
-          <ShoppingBag size={16} />
-          Nueva venta
-        </button>
-
-        <button
-          type="button"
           onClick={onClose}
-          className="mt-3 text-[12px] text-black/45 transition hover:text-black"
+          className="mt-2 h-10 w-full rounded-2xl text-[10px] font-medium text-black/45 transition hover:bg-black/[0.025] hover:text-black/70"
         >
           Cerrar
         </button>

@@ -248,7 +248,7 @@ function getPendingState(sale) {
   };
 }
 
-export default function AddiPaymentsPage() {
+export default function FinancingPaymentsPage() {
   const [sales, setSales] = useState([]);
   const [loading, setLoading] = useState(true);
 

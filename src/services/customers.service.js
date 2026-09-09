@@ -510,6 +510,61 @@ export async function updateCustomer(
 /*                        MÉTRICAS DESDE LAS VENTAS                            */
 /* -------------------------------------------------------------------------- */
 
+function getMetricDateValue(value) {
+  if (!value) return null;
+  if (typeof value?.toDate === "function") return value.toDate();
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value;
+  }
+  if (typeof value?.seconds === "number") {
+    return new Date(value.seconds * 1000);
+  }
+
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function getMetricTimestamp(value) {
+  const date = getMetricDateValue(value);
+  return date ? date.getTime() : 0;
+}
+
+function getSaleMetricRecognitionValue(sale = {}) {
+  const explicitProvider = cleanText(sale.settlementProvider).toLowerCase();
+  const paymentMethod = cleanText(sale.paymentMethod).toLowerCase();
+
+  const provider = ["addi", "sistecredito"].includes(explicitProvider)
+    ? explicitProvider
+    : ["addi", "sistecredito"].includes(paymentMethod)
+      ? paymentMethod
+      : "";
+
+  if (!provider) {
+    return sale.recognizedAt || sale.createdAt || null;
+  }
+
+  const legacyStatus =
+    provider === "addi"
+      ? cleanText(sale.addiStatus).toLowerCase()
+      : cleanText(sale.sistecreditoStatus).toLowerCase();
+
+  const status =
+    cleanText(sale.settlementStatus).toLowerCase() || legacyStatus;
+
+  if (status !== "settled") {
+    return null;
+  }
+
+  return (
+    sale.recognizedAt ||
+    sale.settlementSettledAt ||
+    (provider === "addi"
+      ? sale.addiSettledAt
+      : sale.sistecreditoSettledAt) ||
+    null
+  );
+}
+
 export function buildCustomerSalesMetrics(customers, sales) {
   const safeCustomers = Array.isArray(customers) ? customers : [];
   const safeSales = Array.isArray(sales) ? sales : [];
@@ -535,6 +590,14 @@ export function buildCustomerSalesMetrics(customers, sales) {
   );
 
   safeSales.forEach((sale) => {
+    const recognitionValue = getSaleMetricRecognitionValue(sale);
+
+    // Una financiación pendiente existe para trazabilidad, pero todavía no
+    // es una compra reconocida para ranking, gasto ni última compra.
+    if (!recognitionValue) {
+      return;
+    }
+
     const saleCustomerId = cleanText(sale.customerId);
     const saleDocument = normalizeCustomerDocument(sale.customerDocument);
 
@@ -555,20 +618,11 @@ export function buildCustomerSalesMetrics(customers, sales) {
     metrics.purchases += 1;
     metrics.totalSpent += Number(sale.total || 0);
 
-    const createdAt = sale.createdAt || null;
+    const recognitionMillis = getMetricTimestamp(recognitionValue);
+    const previousMillis = getMetricTimestamp(metrics.lastPurchaseAt);
 
-    const createdAtMillis =
-      createdAt?.toMillis?.() ||
-      Number(createdAt?.seconds || 0) * 1000 ||
-      0;
-
-    const previousMillis =
-      metrics.lastPurchaseAt?.toMillis?.() ||
-      Number(metrics.lastPurchaseAt?.seconds || 0) * 1000 ||
-      0;
-
-    if (createdAtMillis > previousMillis) {
-      metrics.lastPurchaseAt = createdAt;
+    if (recognitionMillis > previousMillis) {
+      metrics.lastPurchaseAt = recognitionValue;
     }
 
     const items =

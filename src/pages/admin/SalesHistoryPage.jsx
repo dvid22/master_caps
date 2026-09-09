@@ -54,11 +54,14 @@ const PAYMENT_OPTIONS = [
   ["daviplata", "Daviplata"],
   ["tarjeta", "Tarjeta"],
   ["addi", "Addi"],
+  ["sistecredito", "Sistecrédito"],
   ["otro", "Otro"],
 ];
 
+const DEFERRED_PAYMENT_METHODS = new Set(["addi", "sistecredito"]);
+
 const MIXED_PAYMENT_OPTIONS = PAYMENT_OPTIONS.filter(
-  ([value]) => value !== "addi"
+  ([value]) => !DEFERRED_PAYMENT_METHODS.has(value)
 );
 
 const PAYMENT_FILTER_OPTIONS = [
@@ -107,6 +110,87 @@ function getPaymentLabel(value) {
     value ||
     "Otro"
   );
+}
+
+function isDeferredPaymentMethod(value) {
+  return DEFERRED_PAYMENT_METHODS.has(String(value || "").trim());
+}
+
+function getDeferredProvider(sale = {}) {
+  const explicit = String(sale.settlementProvider || "").trim();
+
+  if (isDeferredPaymentMethod(explicit)) {
+    return explicit;
+  }
+
+  const direct = String(sale.paymentMethod || "").trim();
+
+  if (isDeferredPaymentMethod(direct)) {
+    return direct;
+  }
+
+  const payment = getSalePayments(sale).find((item) =>
+    isDeferredPaymentMethod(item.method)
+  );
+
+  return payment?.method || "";
+}
+
+function getSettlementInfo(sale = {}) {
+  const provider = getDeferredProvider(sale);
+
+  if (!provider) return null;
+
+  const legacyPrefix = provider === "addi" ? "addi" : "sistecredito";
+  const legacyStatus = sale[`${legacyPrefix}Status`] || "";
+  const status = sale.settlementStatus || legacyStatus ||
+    (sale.paymentStatus === "paid" ? "settled" : "pending");
+
+  const expectedAmount = Number(
+    sale.settlementExpectedAmount ??
+      sale[`${legacyPrefix}ExpectedAmount`] ??
+      getSalePayments(sale).find((item) => item.method === provider)?.amount ??
+      sale.total ??
+      0
+  );
+
+  const settledAmount = Number(
+    sale.settlementSettledAmount ??
+      sale[`${legacyPrefix}SettledAmount`] ??
+      0
+  );
+
+  const settledAt =
+    sale.settlementSettledAt ||
+    sale[`${legacyPrefix}SettledAt`] ||
+    null;
+
+  const reference = String(
+    sale.settlementReference ||
+      sale[`${legacyPrefix}Reference`] ||
+      ""
+  ).trim();
+
+  const notes = String(
+    sale.settlementNotes ||
+      sale[`${legacyPrefix}Notes`] ||
+      ""
+  ).trim();
+
+  return {
+    provider,
+    providerLabel: getPaymentLabel(provider),
+    status,
+    isSettled: status === "settled",
+    expectedAmount,
+    settledAmount,
+    settledAt,
+    recognizedAt: sale.recognizedAt || settledAt || null,
+    reference,
+    notes,
+    settledByName: String(sale.settlementSettledByName || sale[`${legacyPrefix}SettledByName`] || "").trim(),
+    settledByEmail: String(sale.settlementSettledByEmail || sale[`${legacyPrefix}SettledByEmail`] || "").trim(),
+  };
 }
 
 function getSaleItems(sale) {
@@ -957,6 +1041,7 @@ function SaleListItem({
     sale.customerName ||
     sale.customerDocument ||
     "Venta sin cliente";
+  const financing = getSettlementInfo(sale);
 
   return (
     <button
@@ -982,6 +1067,18 @@ function SaleListItem({
             {sale.paymentMethod === "mixto" && (
               <span className="rounded-full border border-blue-100 bg-blue-50/70 px-2 py-0.5 text-[7px] font-semibold text-blue-700">
                 MIXTO
+              </span>
+            )}
+
+            {financing && (
+              <span
+                className={`rounded-full border px-2 py-0.5 text-[7px] font-semibold ${
+                  financing.isSettled
+                    ? "border-emerald-100 bg-emerald-50 text-emerald-700"
+                    : "border-amber-100 bg-amber-50 text-amber-700"
+                }`}
+              >
+                {financing.providerLabel.toUpperCase()} · {financing.isSettled ? "RECIBIDO" : "PENDIENTE"}
               </span>
             )}
           </div>
@@ -1035,6 +1132,7 @@ function SaleDetail({
 }) {
   const items = getSaleItems(sale);
   const payments = getSalePayments(sale);
+  const financing = getSettlementInfo(sale);
 
   return (
     <section className="overflow-hidden rounded-[clamp(15px,1.1vw,20px)] border border-black/[0.055] bg-white shadow-[0_14px_36px_rgba(15,23,42,0.032)]">
@@ -1050,10 +1148,25 @@ function SaleDetail({
                 Editada {sale.editCount} vez/veces
               </span>
             )}
+
+            {financing && (
+              <span
+                className={`rounded-full border px-2 py-0.5 text-[6.5px] font-semibold ${
+                  financing.isSettled
+                    ? "border-emerald-100 bg-emerald-50 text-emerald-700"
+                    : "border-amber-100 bg-amber-50 text-amber-700"
+                }`}
+              >
+                {financing.providerLabel} · {financing.isSettled ? "Recibido" : "Pendiente"}
+              </span>
+            )}
           </div>
 
           <p className="mt-1 text-[10px] text-black/38">
-            {formatSaleDate(sale.createdAt)}
+            Venta creada: {formatSaleDate(sale.createdAt)}
+            {financing?.isSettled && financing.recognizedAt
+              ? ` · Reconocida: ${formatSaleDate(financing.recognizedAt)}`
+              : ""}
           </p>
         </div>
 
@@ -1121,7 +1234,11 @@ function SaleDetail({
               value={getPaymentLabel(
                 sale.paymentMethod
               )}
-              detail={`${payments.length} medio(s)`}
+              detail={
+                financing
+                  ? `${financing.providerLabel} · ${financing.isSettled ? "desembolso recibido" : "desembolso pendiente"}`
+                  : `${payments.length} medio(s)`
+              }
             />
           </div>
 
@@ -1301,17 +1418,72 @@ function SaleDetail({
             </p>
           </div>
 
-          {sale.paymentMethod === "addi" && (
-            <div className="mt-3 rounded-[12px] border border-amber-100 bg-amber-50/70 px-3 py-2.5">
-              <p className="text-[9px] font-semibold text-amber-800">
-                Addi
-              </p>
+          {financing && (
+            <div
+              className={`mt-3 rounded-[14px] border px-3.5 py-3 ${
+                financing.isSettled
+                  ? "border-emerald-100 bg-emerald-50/70"
+                  : "border-amber-100 bg-amber-50/70"
+              }`}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p
+                    className={`text-[9px] font-semibold ${
+                      financing.isSettled ? "text-emerald-800" : "text-amber-800"
+                    }`}
+                  >
+                    Financiación · {financing.providerLabel}
+                  </p>
+                  <p className="mt-1 text-[8px] leading-4 text-black/48">
+                    {financing.isSettled
+                      ? "El desembolso fue confirmado y la venta ya fue reconocida contablemente."
+                      : "La venta permanece pendiente hasta que el proveedor desembolse el dinero."}
+                  </p>
+                </div>
 
-              <p className="mt-1 text-[9px] leading-4 text-amber-900/60">
-                {sale.addiStatus === "settled"
-                  ? "Desembolso recibido."
-                  : "Desembolso pendiente por recibir."}
-              </p>
+                <span
+                  className={`shrink-0 rounded-full border px-2 py-1 text-[7px] font-semibold ${
+                    financing.isSettled
+                      ? "border-emerald-200 bg-white text-emerald-700"
+                      : "border-amber-200 bg-white text-amber-700"
+                  }`}
+                >
+                  {financing.isSettled ? "RECIBIDO" : "PENDIENTE"}
+                </span>
+              </div>
+
+              <div className="mt-2.5 grid grid-cols-2 gap-2">
+                <div className="rounded-[10px] bg-white/75 px-2.5 py-2">
+                  <p className="text-[6.5px] uppercase tracking-[0.08em] text-black/30">
+                    Valor financiado
+                  </p>
+                  <p className="mt-1 text-[10px] font-semibold">
+                    {formatCurrency(financing.expectedAmount)}
+                  </p>
+                </div>
+
+                <div className="rounded-[10px] bg-white/75 px-2.5 py-2">
+                  <p className="text-[6.5px] uppercase tracking-[0.08em] text-black/30">
+                    {financing.isSettled ? "Valor recibido" : "Fecha venta"}
+                  </p>
+                  <p className="mt-1 truncate text-[10px] font-semibold">
+                    {financing.isSettled
+                      ? formatCurrency(financing.settledAmount || financing.expectedAmount)
+                      : formatSaleDate(sale.createdAt)}
+                  </p>
+                </div>
+              </div>
+
+              {financing.isSettled && (
+                <div className="mt-2 space-y-1 text-[8px] text-black/50">
+                  <p>Recibido: {formatSaleDate(financing.settledAt)}</p>
+                  {financing.reference && <p>Referencia: {financing.reference}</p>}
+                  {(financing.settledByName || financing.settledByEmail) && (
+                    <p>Confirmado por: {financing.settledByName || financing.settledByEmail}</p>
+                  )}
+                </div>
+              )}
             </div>
           )}
         </aside>
@@ -1565,6 +1737,15 @@ function SaleEditModal({
   onClose,
   onSaved,
 }) {
+  const financing = getSettlementInfo(sale);
+  const originalPayments = getSalePayments(sale);
+  const hasDeferredMixedPayment = Boolean(
+    financing && originalPayments.length > 1
+  );
+  const lockPaymentEditing = Boolean(
+    financing?.isSettled || hasDeferredMixedPayment
+  );
+
   const [form, setForm] = useState(() => ({
     customerName: sale.customerName || "",
     customerDocument: sale.customerDocument || "",
@@ -2042,13 +2223,22 @@ function SaleEditModal({
   function updatePayment(localId, field, value) {
     setError("");
 
+    if (lockPaymentEditing) {
+      setError(
+        financing?.isSettled
+          ? "La financiación ya fue desembolsada. El método y la distribución del pago están bloqueados para proteger la conciliación."
+          : "Esta venta proviene de un apartado con financiación. Su distribución histórica de abonos y financiación no se puede modificar."
+      );
+      return;
+    }
+
     if (
       field === "method" &&
-      value === "addi" &&
+      isDeferredPaymentMethod(value) &&
       payments.length > 1
     ) {
       setError(
-        "Addi debe quedar como único medio de pago. Elimina los otros medios antes de seleccionarlo."
+        `${getPaymentLabel(value)} debe quedar como único medio de pago. Elimina los otros medios antes de seleccionarlo.`
       );
       return;
     }
@@ -2086,14 +2276,21 @@ function SaleEditModal({
   function addPayment() {
     setError("");
 
+    if (lockPaymentEditing) {
+      setError(
+        "La distribución de pagos de esta financiación está bloqueada para conservar la trazabilidad contable."
+      );
+      return;
+    }
+
     setPayments((current) => {
       if (
         current.some(
-          (payment) => payment.method === "addi"
+          (payment) => isDeferredPaymentMethod(payment.method)
         )
       ) {
         setError(
-          "Addi debe permanecer como pago único."
+          "Addi y Sistecrédito deben permanecer como pago único cuando se registran directamente en una venta."
         );
         return current;
       }
@@ -2131,6 +2328,13 @@ function SaleEditModal({
   }
 
   function removePayment(localId) {
+    if (lockPaymentEditing) {
+      setError(
+        "La distribución de pagos de esta financiación está bloqueada para conservar la trazabilidad contable."
+      );
+      return;
+    }
+
     setPayments((current) =>
       current.length <= 1
         ? current
@@ -2198,12 +2402,13 @@ function SaleEditModal({
 
     if (
       normalizedPayments.some(
-        (payment) => payment.method === "addi"
+        (payment) => isDeferredPaymentMethod(payment.method)
       ) &&
-      normalizedPayments.length > 1
+      normalizedPayments.length > 1 &&
+      !hasDeferredMixedPayment
     ) {
       setError(
-        "Por ahora Addi debe quedar como pago único; no lo mezcles con otros medios."
+        "Addi y Sistecrédito deben quedar como pago único en ventas directas; no los mezcles con otros medios."
       );
       return;
     }
@@ -2351,6 +2556,23 @@ function SaleEditModal({
             {error && (
               <div className="mb-3 rounded-[12px] border border-red-100 bg-red-50/70 px-3.5 py-3 text-[10px] leading-5 text-red-700">
                 {error}
+              </div>
+            )}
+
+            {financing && (
+              <div
+                className={`mb-3 rounded-[12px] border px-3.5 py-3 text-[9px] leading-4 ${
+                  financing.isSettled
+                    ? "border-emerald-100 bg-emerald-50/70 text-emerald-800"
+                    : "border-amber-100 bg-amber-50/70 text-amber-800"
+                }`}
+              >
+                <strong>{financing.providerLabel}:</strong>{" "}
+                {financing.isSettled
+                  ? "el desembolso ya fue conciliado. Puedes corregir datos descriptivos, pero el total y la distribución del pago deben conservarse."
+                  : hasDeferredMixedPayment
+                    ? "esta venta conserva abonos anteriores y una financiación pendiente. La distribución de pagos queda bloqueada para no alterar el historial de caja."
+                    : "el desembolso todavía está pendiente. Puedes corregir la venta mientras no afectes una caja ya cerrada."}
               </div>
             )}
 
@@ -2735,9 +2957,10 @@ function SaleEditModal({
                       type="button"
                       onClick={addPayment}
                       disabled={
+                        lockPaymentEditing ||
                         payments.some(
                           (payment) =>
-                            payment.method === "addi"
+                            isDeferredPaymentMethod(payment.method)
                         ) ||
                         new Set(
                           payments.map(
@@ -2779,6 +3002,7 @@ function SaleEditModal({
                           }
                           onChange={updatePayment}
                           onRemove={removePayment}
+                          disabled={lockPaymentEditing}
                         />
                       ))}
                     </div>
@@ -3138,12 +3362,14 @@ function PaymentRow({
   usedMethods = new Set(),
   onChange,
   onRemove,
+  disabled = false,
 }) {
   return (
     <div className="rounded-[11px] border border-black/[0.045] bg-[#fbfbfc] p-2.5">
       <div className="grid gap-1.5 min-[900px]:grid-cols-[1fr_1fr_auto]">
         <select
           value={payment.method}
+          disabled={disabled}
           onChange={(event) =>
             onChange(
               payment.localId,
@@ -3159,8 +3385,9 @@ function PaymentRow({
                 key={value}
                 value={value}
                 disabled={
-                  usedMethods.has(value) &&
-                  value !== payment.method
+                  disabled ||
+                  (usedMethods.has(value) &&
+                    value !== payment.method)
                 }
               >
                 {label}
@@ -3176,6 +3403,7 @@ function PaymentRow({
 
           <input
             value={payment.amount}
+            disabled={disabled}
             onChange={(event) =>
               onChange(
                 payment.localId,
@@ -3196,7 +3424,7 @@ function PaymentRow({
           onClick={() =>
             onRemove(payment.localId)
           }
-          disabled={!canRemove}
+          disabled={disabled || !canRemove}
           className="flex h-9 w-9 items-center justify-center rounded-[9px] text-black/28 transition hover:bg-red-50 hover:text-red-600 disabled:opacity-15"
         >
           <Trash2 size={10} />
@@ -3216,6 +3444,7 @@ function PaymentRow({
 
             <input
               value={payment.receivedAmount}
+              disabled={disabled}
               onChange={(event) =>
                 onChange(
                   payment.localId,

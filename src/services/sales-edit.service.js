@@ -7,6 +7,13 @@ import {
 import { db } from "../firebase/firebase";
 import { STORE_ID } from "./categories.service";
 import {
+  ADDI_PAYMENT_METHOD,
+  SISTECREDITO_PAYMENT_METHOD,
+  SETTLEMENT_STATUS_PENDING,
+  SETTLEMENT_STATUS_SETTLED,
+  isDeferredPaymentMethod,
+} from "./sales.service";
+import {
   getCustomerDocumentId,
   normalizeCustomerDocument,
   normalizeCustomerPhone,
@@ -19,13 +26,10 @@ const VALID_PAYMENT_METHODS = [
   "daviplata",
   "tarjeta",
   "addi",
+  "sistecredito",
   "otro",
   "mixto",
 ];
-
-const ADDI_PAYMENT_METHOD = "addi";
-const ADDI_STATUS_PENDING = "pending";
-const ADDI_STATUS_SETTLED = "settled";
 
 function normalizeText(value) {
   return String(value || "").trim();
@@ -76,12 +80,11 @@ function inferCashSessionId(sale, storeId) {
   const explicitId = normalizeText(sale?.cashSessionId);
   if (explicitId) return explicitId;
 
-  const sellerUid = safeId(sale?.sellerUid);
   const businessDate = getBogotaBusinessDate(sale?.createdAt);
 
-  if (!sellerUid || !businessDate) return "";
+  if (!businessDate) return "";
 
-  return `${safeId(storeId)}__${sellerUid}__${businessDate}`;
+  return `${safeId(storeId)}__${businessDate}`;
 }
 
 function normalizeMoney(value) {
@@ -99,6 +102,7 @@ function normalizePaymentBreakdown({
   fallbackMethod = "efectivo",
   total = 0,
   amountReceived = null,
+  allowDeferredMixed = false,
 }) {
   const cleanTotal = normalizeMoney(total);
   const rawPayments = Array.isArray(payments) ? payments : [];
@@ -172,9 +176,19 @@ function normalizePaymentBreakdown({
     );
   }
 
-  if (normalized.some((payment) => payment.method === ADDI_PAYMENT_METHOD) && normalized.length > 1) {
+  const deferredPayments = normalized.filter((payment) =>
+    isDeferredPaymentMethod(payment.method)
+  );
+
+  if (deferredPayments.length > 1) {
     throw new Error(
-      "Por ahora Addi debe registrarse como pago único. No lo mezcles con efectivo, transferencia u otros medios."
+      "Una venta solo puede tener un proveedor de financiación: Addi o Sistecrédito."
+    );
+  }
+
+  if (deferredPayments.length === 1 && normalized.length > 1 && !allowDeferredMixed) {
+    throw new Error(
+      "Addi y Sistecrédito deben registrarse como pago único en ventas directas. Las combinaciones con abonos previos solo se conservan para ventas originadas desde Apartados."
     );
   }
 
@@ -740,6 +754,49 @@ function getCurrentSaleTotal(sale = {}) {
   );
 }
 
+function getDeferredProviderFromSale(sale = {}) {
+  const explicit = normalizeText(sale.settlementProvider);
+
+  if (isDeferredPaymentMethod(explicit)) return explicit;
+
+  const direct = normalizeText(sale.paymentMethod);
+
+  if (isDeferredPaymentMethod(direct)) return direct;
+
+  const payment = Array.isArray(sale.payments)
+    ? sale.payments.find((item) => isDeferredPaymentMethod(item?.method))
+    : null;
+
+  return normalizeText(payment?.method);
+}
+
+function getSettlementStatusFromSale(sale = {}, provider = "") {
+  const explicit = normalizeText(sale.settlementStatus);
+  if (explicit) return explicit;
+
+  if (provider === ADDI_PAYMENT_METHOD) {
+    return normalizeText(sale.addiStatus);
+  }
+
+  if (provider === SISTECREDITO_PAYMENT_METHOD) {
+    return normalizeText(sale.sistecreditoStatus);
+  }
+
+  return "";
+}
+
+function getDeferredPaymentFromBreakdown(payments = []) {
+  return payments.find((payment) =>
+    isDeferredPaymentMethod(payment?.method)
+  ) || null;
+}
+
+function getDeferredProviderLabel(provider) {
+  if (provider === ADDI_PAYMENT_METHOD) return "Addi";
+  if (provider === SISTECREDITO_PAYMENT_METHOD) return "Sistecrédito";
+  return "la financiación";
+}
+
 /**
  * Edita una venta SIN borrarla.
  *
@@ -854,6 +911,38 @@ export async function updateSale({
         linkedCashSession = {
           id: cashSessionSnapshot.id,
           ...cashSessionSnapshot.data(),
+        };
+      }
+    }
+
+    const currentDeferredProvider = getDeferredProviderFromSale(currentSale);
+    const currentSettlementStatus = getSettlementStatusFromSale(
+      currentSale,
+      currentDeferredProvider
+    );
+    const currentIsPendingDeferred =
+      Boolean(currentDeferredProvider) &&
+      currentSettlementStatus !== SETTLEMENT_STATUS_SETTLED;
+    const currentWasSettledDeferred =
+      Boolean(currentDeferredProvider) &&
+      currentSettlementStatus === SETTLEMENT_STATUS_SETTLED;
+
+    const todayBusinessDate = getBogotaBusinessDate(new Date());
+    const todayCashSessionId = todayBusinessDate
+      ? `${safeId(storeId)}__${todayBusinessDate}`
+      : "";
+    const todayCashSessionRef = todayCashSessionId
+      ? doc(db, "cashSessions", todayCashSessionId)
+      : null;
+    let todayCashSession = null;
+
+    if (todayCashSessionRef) {
+      const todayCashSnapshot = await transaction.get(todayCashSessionRef);
+
+      if (todayCashSnapshot.exists()) {
+        todayCashSession = {
+          id: todayCashSnapshot.id,
+          ...todayCashSnapshot.data(),
         };
       }
     }
@@ -1426,11 +1515,26 @@ export async function updateSale({
       0
     );
 
+    const currentPayments = Array.isArray(currentSale.payments) && currentSale.payments.length > 0
+      ? currentSale.payments
+      : [
+          {
+            method: normalizeText(currentSale.paymentMethod) || "efectivo",
+            amount: getCurrentSaleTotal(currentSale),
+          },
+        ];
+    const currentHasDeferredMixed =
+      currentPayments.length > 1 &&
+      currentPayments.some((payment) =>
+        isDeferredPaymentMethod(payment?.method)
+      );
+
     const paymentBreakdown = normalizePaymentBreakdown({
       payments,
       fallbackMethod: requestedPaymentMethod,
       total,
       amountReceived,
+      allowDeferredMixed: currentHasDeferredMixed,
     });
 
     const cleanPaymentMethod = paymentBreakdown.paymentMethod;
@@ -1445,18 +1549,34 @@ export async function updateSale({
       0
     );
 
-    if (linkedCashSession?.status === "closed") {
-      const totalChanged =
-        Math.abs(normalizeMoney(currentSale.total) - total) > 0.001;
-      const paymentsChanged =
-        paymentSignatureFromSale(currentSale) !==
-        paymentSignatureFromBreakdown(finalPayments);
+    const totalChanged =
+      Math.abs(normalizeMoney(currentSale.total) - total) > 0.001;
+    const paymentsChanged =
+      paymentSignatureFromSale(currentSale) !==
+      paymentSignatureFromBreakdown(finalPayments);
 
-      if (totalChanged || paymentsChanged) {
-        throw new Error(
-          "Esta venta pertenece a una caja ya cerrada. Para proteger el cierre, no puedes cambiar su total ni la distribución del pago; registra después un movimiento de caja si el dinero cambió de lugar."
-        );
-      }
+    if (
+      linkedCashSession?.status === "closed" &&
+      !currentIsPendingDeferred &&
+      (totalChanged || paymentsChanged)
+    ) {
+      throw new Error(
+        "Esta venta pertenece a una caja ya cerrada. Para proteger el cierre, no puedes cambiar su total ni la distribución del pago; registra después un movimiento de caja si el dinero cambió de lugar."
+      );
+    }
+
+    if (currentHasDeferredMixed && paymentsChanged) {
+      throw new Error(
+        "Esta venta conserva abonos previos y una financiación de Apartados. Su distribución histórica de pagos no se puede modificar."
+      );
+    }
+
+    if (currentWasSettledDeferred && (totalChanged || paymentsChanged)) {
+      throw new Error(
+        `El desembolso de ${getDeferredProviderLabel(
+          currentDeferredProvider
+        )} ya fue conciliado. Para proteger la contabilidad, la venta debe conservar exactamente el mismo total y la misma distribución de pagos.`
+      );
     }
 
     /*
@@ -1518,90 +1638,199 @@ export async function updateSale({
       }
     }
 
-    /*
-     * Addi ya desembolsado no se puede alterar contablemente.
-     * Se puede corregir texto/cliente/productos únicamente si el total final
-     * sigue siendo exactamente el mismo y continúa siendo Addi.
-     */
-    const currentWasSettledAddi =
-      normalizeText(
-        currentSale.paymentMethod
-      ) === ADDI_PAYMENT_METHOD &&
-      normalizeText(
-        currentSale.addiStatus
-      ) === ADDI_STATUS_SETTLED;
-
-    if (
-      currentWasSettledAddi &&
-      (
-        cleanPaymentMethod !==
-          ADDI_PAYMENT_METHOD ||
-        total !==
-          getCurrentSaleTotal(
-            currentSale
-          )
-      )
-    ) {
-      throw new Error(
-        "Esta venta de Addi ya fue desembolsada. Para proteger la contabilidad, debe conservar el método Addi y el mismo total."
-      );
-    }
+    const nextDeferredPayment = getDeferredPaymentFromBreakdown(finalPayments);
+    const nextDeferredProvider = normalizeText(nextDeferredPayment?.method);
+    const nextIsDeferred = isDeferredPaymentMethod(nextDeferredProvider);
+    const nextDeferredExpectedAmount = nextIsDeferred
+      ? normalizeMoney(nextDeferredPayment.amount)
+      : 0;
 
     let paymentStatus = "paid";
-    let addiStatus = "";
-    let addiExpectedAmount = 0;
-    let addiSettledAmount = 0;
-    let addiSettledAt = null;
-    let addiReference = "";
-    let addiNotes = "";
-    let addiSettledByUid = "";
-    let addiSettledByName = "";
-    let addiSettledByEmail = "";
+    let settlementProvider = "";
+    let settlementStatus = "";
+    let settlementExpectedAmount = 0;
+    let settlementSettledAmount = 0;
+    let settlementSettledAt = null;
+    let settlementReference = "";
+    let settlementNotes = "";
+    let settlementSettledByUid = "";
+    let settlementSettledByName = "";
+    let settlementSettledByEmail = "";
+    let settlementCashSessionId = "";
+    let settlementDestination = "";
 
-    if (
-      cleanPaymentMethod ===
-      ADDI_PAYMENT_METHOD
-    ) {
-      addiExpectedAmount = total;
+    let recognizedAt = currentSale.recognizedAt || null;
+    let recognizedBusinessDate = normalizeText(
+      currentSale.recognizedBusinessDate
+    );
+    let finalCashSessionId = normalizeText(currentSale.cashSessionId);
 
-      if (currentWasSettledAddi) {
-        paymentStatus = "paid";
-        addiStatus =
-          ADDI_STATUS_SETTLED;
-        addiSettledAmount =
-          normalizeMoney(
-            currentSale.addiSettledAmount
-          );
-        addiSettledAt =
-          currentSale.addiSettledAt ||
-          null;
-        addiReference =
-          normalizeText(
-            currentSale.addiReference
-          );
-        addiNotes =
-          normalizeText(
-            currentSale.addiNotes
-          );
-        addiSettledByUid =
-          normalizeText(
-            currentSale.addiSettledByUid
-          );
-        addiSettledByName =
-          normalizeText(
-            currentSale.addiSettledByName
-          );
-        addiSettledByEmail =
-          normalizeText(
-            currentSale.addiSettledByEmail
-          );
-      } else {
-        paymentStatus =
-          "pending_settlement";
-        addiStatus =
-          ADDI_STATUS_PENDING;
+    if (currentWasSettledDeferred) {
+      paymentStatus = "paid";
+      settlementProvider = currentDeferredProvider;
+      settlementStatus = SETTLEMENT_STATUS_SETTLED;
+      settlementExpectedAmount = normalizeMoney(
+        currentSale.settlementExpectedAmount ||
+          nextDeferredExpectedAmount ||
+          currentSale.total
+      );
+      settlementSettledAmount = normalizeMoney(
+        currentSale.settlementSettledAmount ||
+          (currentDeferredProvider === ADDI_PAYMENT_METHOD
+            ? currentSale.addiSettledAmount
+            : currentSale.sistecreditoSettledAmount) ||
+          settlementExpectedAmount
+      );
+      settlementSettledAt =
+        currentSale.settlementSettledAt ||
+        (currentDeferredProvider === ADDI_PAYMENT_METHOD
+          ? currentSale.addiSettledAt
+          : currentSale.sistecreditoSettledAt) ||
+        null;
+      settlementReference = normalizeText(
+        currentSale.settlementReference ||
+          (currentDeferredProvider === ADDI_PAYMENT_METHOD
+            ? currentSale.addiReference
+            : currentSale.sistecreditoReference)
+      );
+      settlementNotes = normalizeText(
+        currentSale.settlementNotes ||
+          (currentDeferredProvider === ADDI_PAYMENT_METHOD
+            ? currentSale.addiNotes
+            : currentSale.sistecreditoNotes)
+      );
+      settlementSettledByUid = normalizeText(
+        currentSale.settlementSettledByUid ||
+          (currentDeferredProvider === ADDI_PAYMENT_METHOD
+            ? currentSale.addiSettledByUid
+            : currentSale.sistecreditoSettledByUid)
+      );
+      settlementSettledByName = normalizeText(
+        currentSale.settlementSettledByName ||
+          (currentDeferredProvider === ADDI_PAYMENT_METHOD
+            ? currentSale.addiSettledByName
+            : currentSale.sistecreditoSettledByName)
+      );
+      settlementSettledByEmail = normalizeText(
+        currentSale.settlementSettledByEmail ||
+          (currentDeferredProvider === ADDI_PAYMENT_METHOD
+            ? currentSale.addiSettledByEmail
+            : currentSale.sistecreditoSettledByEmail)
+      );
+      settlementCashSessionId = normalizeText(
+        currentSale.settlementCashSessionId
+      );
+      settlementDestination =
+        normalizeText(currentSale.settlementDestination) || "transferencia";
+      recognizedAt =
+        currentSale.recognizedAt || settlementSettledAt || null;
+      recognizedBusinessDate =
+        normalizeText(currentSale.recognizedBusinessDate) ||
+        getBogotaBusinessDate(recognizedAt);
+    } else if (nextIsDeferred) {
+      paymentStatus = "pending_settlement";
+      settlementProvider = nextDeferredProvider;
+      settlementStatus = SETTLEMENT_STATUS_PENDING;
+      settlementExpectedAmount = nextDeferredExpectedAmount;
+      settlementDestination = "transferencia";
+      recognizedAt = null;
+      recognizedBusinessDate = "";
+    } else if (currentIsPendingDeferred) {
+      if (
+        !todayCashSession ||
+        todayCashSession.status !== "open" ||
+        todayCashSession.businessDate !== todayBusinessDate
+      ) {
+        throw new Error(
+          "Para cambiar una financiación pendiente a un método ya pagado debes tener abierta la caja de hoy. El ingreso se reconocerá en la fecha de esta corrección."
+        );
       }
+
+      paymentStatus = "paid";
+      recognizedAt = serverTimestamp();
+      recognizedBusinessDate = todayBusinessDate;
+      finalCashSessionId = todayCashSessionId;
+    } else {
+      paymentStatus = "paid";
+      recognizedAt = currentSale.recognizedAt || currentSale.createdAt || null;
+      recognizedBusinessDate =
+        normalizeText(currentSale.recognizedBusinessDate) ||
+        getBogotaBusinessDate(recognizedAt);
     }
+
+    const addiStatus =
+      settlementProvider === ADDI_PAYMENT_METHOD
+        ? settlementStatus
+        : "";
+    const addiExpectedAmount =
+      settlementProvider === ADDI_PAYMENT_METHOD
+        ? settlementExpectedAmount
+        : 0;
+    const addiSettledAmount =
+      settlementProvider === ADDI_PAYMENT_METHOD
+        ? settlementSettledAmount
+        : 0;
+    const addiSettledAt =
+      settlementProvider === ADDI_PAYMENT_METHOD
+        ? settlementSettledAt
+        : null;
+    const addiReference =
+      settlementProvider === ADDI_PAYMENT_METHOD
+        ? settlementReference
+        : "";
+    const addiNotes =
+      settlementProvider === ADDI_PAYMENT_METHOD
+        ? settlementNotes
+        : "";
+    const addiSettledByUid =
+      settlementProvider === ADDI_PAYMENT_METHOD
+        ? settlementSettledByUid
+        : "";
+    const addiSettledByName =
+      settlementProvider === ADDI_PAYMENT_METHOD
+        ? settlementSettledByName
+        : "";
+    const addiSettledByEmail =
+      settlementProvider === ADDI_PAYMENT_METHOD
+        ? settlementSettledByEmail
+        : "";
+
+    const sistecreditoStatus =
+      settlementProvider === SISTECREDITO_PAYMENT_METHOD
+        ? settlementStatus
+        : "";
+    const sistecreditoExpectedAmount =
+      settlementProvider === SISTECREDITO_PAYMENT_METHOD
+        ? settlementExpectedAmount
+        : 0;
+    const sistecreditoSettledAmount =
+      settlementProvider === SISTECREDITO_PAYMENT_METHOD
+        ? settlementSettledAmount
+        : 0;
+    const sistecreditoSettledAt =
+      settlementProvider === SISTECREDITO_PAYMENT_METHOD
+        ? settlementSettledAt
+        : null;
+    const sistecreditoReference =
+      settlementProvider === SISTECREDITO_PAYMENT_METHOD
+        ? settlementReference
+        : "";
+    const sistecreditoNotes =
+      settlementProvider === SISTECREDITO_PAYMENT_METHOD
+        ? settlementNotes
+        : "";
+    const sistecreditoSettledByUid =
+      settlementProvider === SISTECREDITO_PAYMENT_METHOD
+        ? settlementSettledByUid
+        : "";
+    const sistecreditoSettledByName =
+      settlementProvider === SISTECREDITO_PAYMENT_METHOD
+        ? settlementSettledByName
+        : "";
+    const sistecreditoSettledByEmail =
+      settlementProvider === SISTECREDITO_PAYMENT_METHOD
+        ? settlementSettledByEmail
+        : "";
 
     const profit = total - totalCost;
 
@@ -1721,6 +1950,24 @@ export async function updateSale({
       change,
 
       paymentStatus,
+
+      settlementProvider,
+      settlementStatus,
+      settlementExpectedAmount,
+      settlementSettledAmount,
+      settlementSettledAt,
+      settlementReference,
+      settlementNotes,
+      settlementSettledByUid,
+      settlementSettledByName,
+      settlementSettledByEmail,
+      settlementCashSessionId,
+      settlementDestination,
+
+      recognizedAt,
+      recognizedBusinessDate,
+      cashSessionId: finalCashSessionId,
+
       addiStatus,
       addiExpectedAmount,
       addiSettledAmount,
@@ -1730,6 +1977,16 @@ export async function updateSale({
       addiSettledByUid,
       addiSettledByName,
       addiSettledByEmail,
+
+      sistecreditoStatus,
+      sistecreditoExpectedAmount,
+      sistecreditoSettledAmount,
+      sistecreditoSettledAt,
+      sistecreditoReference,
+      sistecreditoNotes,
+      sistecreditoSettledByUid,
+      sistecreditoSettledByName,
+      sistecreditoSettledByEmail,
 
       notes:
         normalizeText(notes),
@@ -1790,6 +2047,16 @@ export async function updateSale({
       amountReceived:
         finalAmountReceived,
       change,
+
+      paymentStatus,
+      settlementProvider,
+      settlementStatus,
+      settlementExpectedAmount,
+      settlementSettledAmount,
+      settlementSettledAt,
+      recognizedAt,
+      recognizedBusinessDate,
+      cashSessionId: finalCashSessionId,
 
       notes:
         normalizeText(notes),
