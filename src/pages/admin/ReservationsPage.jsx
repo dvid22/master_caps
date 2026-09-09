@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  Barcode,
   Camera,
   CheckCircle2,
   Clock,
@@ -11,6 +12,7 @@ import {
   Pencil,
   Plus,
   RefreshCcw,
+  ScanLine,
   Search,
   Settings2,
   ShoppingBag,
@@ -49,6 +51,10 @@ import {
   getCustomerByDocument,
   normalizeCustomerDocument,
 } from "../../services/customers.service";
+import {
+  getVariantBarcodeAliases,
+  normalizeScannerBarcode,
+} from "../../services/barcode.service";
 
 const emptySaleForm = {
   paymentMethod: "efectivo",
@@ -1143,6 +1149,10 @@ function getManualTotalStock(product) {
   );
 }
 
+function normalizeReservationScannerValue(value) {
+  return normalizeScannerBarcode(value);
+}
+
 function getManualStockStatus(stock) {
   const value = Number(stock || 0);
 
@@ -1343,11 +1353,46 @@ function ManualReservationModal({
   const [stockFilter, setStockFilter] = useState("available");
   const [variantProduct, setVariantProduct] = useState(null);
 
+  const [scannerValue, setScannerValue] = useState("");
+  const [scannerStatus, setScannerStatus] = useState(null);
+  const scannerInputRef = useRef(null);
+  const scannerLockRef = useRef({ code: "", timestamp: 0 });
+
   const [customerLookup, setCustomerLookup] = useState({
     status: "idle",
     document: "",
     customer: null,
   });
+
+  useEffect(() => {
+    const initialFocusId = window.setTimeout(() => {
+      if (!variantProduct) {
+        scannerInputRef.current?.focus();
+      }
+    }, 80);
+
+    const focusScanner = (event) => {
+      const target = event.target;
+      const isInteractiveElement =
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        target instanceof HTMLSelectElement ||
+        target instanceof HTMLButtonElement ||
+        target instanceof HTMLAnchorElement ||
+        target?.isContentEditable;
+
+      if (!isInteractiveElement && !variantProduct) {
+        scannerInputRef.current?.focus();
+      }
+    };
+
+    window.addEventListener("keydown", focusScanner);
+
+    return () => {
+      window.clearTimeout(initialFocusId);
+      window.removeEventListener("keydown", focusScanner);
+    };
+  }, [variantProduct]);
 
   useEffect(() => {
     const documentNumber = normalizeCustomerDocument(
@@ -1521,6 +1566,203 @@ function ManualReservationModal({
     (total, item) => total + Number(item.quantity || 0),
     0
   );
+
+  function findProductFromScanner(rawValue) {
+    const scannedCode = normalizeReservationScannerValue(rawValue);
+
+    if (!scannedCode) return null;
+
+    const variantMatches = [];
+
+    for (const product of products) {
+      const variants = normalizeManualVariants(product);
+
+      for (let index = 0; index < variants.length; index += 1) {
+        const variant = variants[index];
+
+        const aliases = getVariantBarcodeAliases(
+          product,
+          variant,
+          index
+        ).map(normalizeReservationScannerValue);
+
+        if (aliases.includes(scannedCode)) {
+          variantMatches.push({ product, variant });
+        }
+      }
+    }
+
+    if (variantMatches.length === 1) {
+      return variantMatches[0];
+    }
+
+    if (variantMatches.length > 1) {
+      return {
+        ambiguous: true,
+        scannedCode,
+        matches: variantMatches,
+      };
+    }
+
+    const productMatches = products.filter(
+      (product) =>
+        normalizeReservationScannerValue(product.code) === scannedCode ||
+        normalizeReservationScannerValue(product.barcode) === scannedCode
+    );
+
+    if (productMatches.length === 1) {
+      return {
+        product: productMatches[0],
+        variant: null,
+      };
+    }
+
+    if (productMatches.length > 1) {
+      return {
+        ambiguous: true,
+        scannedCode,
+        matches: productMatches.map((product) => ({
+          product,
+          variant: null,
+        })),
+      };
+    }
+
+    return null;
+  }
+
+  function addScannedVariant(product, variant) {
+    const stock = getEditAvailableStock(
+      product,
+      variant,
+      false
+    );
+
+    const key = `${product.id}__${variant.id}__normal`;
+    const existing = items.find((item) => item.key === key);
+
+    if (stock <= 0) {
+      setScannerStatus({
+        type: "error",
+        message: `La talla ${variant.size} de ${product.name} no tiene unidades normales disponibles.`,
+      });
+      return;
+    }
+
+    if (existing && Number(existing.quantity || 0) >= stock) {
+      setScannerStatus({
+        type: "error",
+        message: `Ya agregaste las ${stock} unidad(es) disponibles de ${product.name} talla ${variant.size}.`,
+      });
+      return;
+    }
+
+    addToCart(product, variant, false);
+
+    setScannerStatus({
+      type: "success",
+      message: `${product.name} · ${variant.size} agregado al apartado`,
+    });
+  }
+
+  function processScannedCode(rawValue) {
+    const scannedCode = normalizeReservationScannerValue(rawValue);
+
+    if (!scannedCode) return;
+
+    const now = Date.now();
+
+    if (
+      scannerLockRef.current.code === scannedCode &&
+      now - scannerLockRef.current.timestamp < 650
+    ) {
+      return;
+    }
+
+    scannerLockRef.current = {
+      code: scannedCode,
+      timestamp: now,
+    };
+
+    const match = findProductFromScanner(scannedCode);
+
+    if (!match) {
+      setScannerStatus({
+        type: "error",
+        message: `No se encontró el código ${scannedCode}`,
+      });
+      return;
+    }
+
+    if (match.ambiguous) {
+      console.error(
+        "Código asociado a más de una variante o producto:",
+        match
+      );
+
+      setScannerStatus({
+        type: "error",
+        message:
+          `El código ${scannedCode} está duplicado. ` +
+          "No se agregó ningún producto por seguridad.",
+      });
+      return;
+    }
+
+    if (match.variant) {
+      addScannedVariant(match.product, match.variant);
+      return;
+    }
+
+    const availableVariants = normalizeManualVariants(
+      match.product
+    ).filter(
+      (variant) =>
+        getEditAvailableStock(
+          match.product,
+          variant,
+          false
+        ) > 0
+    );
+
+    if (availableVariants.length === 0) {
+      setScannerStatus({
+        type: "error",
+        message: `${match.product.name} no tiene stock normal disponible para apartar.`,
+      });
+      return;
+    }
+
+    if (availableVariants.length === 1) {
+      addScannedVariant(match.product, availableVariants[0]);
+      return;
+    }
+
+    setVariantProduct(match.product);
+    setScannerStatus({
+      type: "info",
+      message: `${match.product.name} encontrado. Selecciona la talla para agregarlo.`,
+    });
+  }
+
+  function submitScannerValue() {
+    processScannedCode(scannerValue);
+    setScannerValue("");
+
+    window.setTimeout(() => {
+      if (!variantProduct) {
+        scannerInputRef.current?.focus();
+      }
+    }, 30);
+  }
+
+  function handleScannerKeyDown(event) {
+    if (event.key !== "Enter") return;
+
+    event.preventDefault();
+    event.stopPropagation();
+    submitScannerValue();
+  }
 
   function openProduct(product) {
     const variants = normalizeManualVariants(
@@ -1732,6 +1974,72 @@ function ManualReservationModal({
           className="grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)_auto] gap-2 overflow-hidden p-2 sm:gap-2 sm:p-2 lg:grid-cols-[minmax(0,1fr)_clamp(330px,25vw,430px)] lg:grid-rows-1 2xl:grid-cols-[minmax(0,1fr)_clamp(390px,24vw,470px)] xl:gap-[clamp(8px,0.65vw,12px)] xl:p-[clamp(8px,0.65vw,12px)]"
         >
           <section className="min-h-0 min-w-0 overflow-y-auto overscroll-contain rounded-[18px] border border-white bg-white/95 p-2.5 shadow-[0_20px_65px_rgba(0,0,0,0.055)] ring-1 ring-black/[0.045] sm:rounded-[22px] sm:p-3 lg:rounded-[24px] xl:p-4">
+            <section className="mb-2.5 rounded-[16px] border border-red-100 bg-gradient-to-br from-red-50/80 to-white p-2.5 shadow-[0_8px_24px_rgba(220,38,38,0.045)] sm:rounded-[18px] sm:p-3">
+              <div className="grid gap-2 xl:grid-cols-[minmax(160px,0.72fr)_minmax(0,1.8fr)_auto] xl:items-center">
+                <div className="flex min-w-0 items-center gap-2.5">
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-red-600 text-white shadow-md shadow-red-600/15">
+                    <ScanLine size={17} />
+                  </div>
+
+                  <div className="min-w-0">
+                    <p className="truncate text-[10px] font-semibold text-black/80 sm:text-[11px]">
+                      Escáner de productos
+                    </p>
+                    <p className="mt-0.5 truncate text-[7.5px] text-black/40 sm:text-[8.5px]">
+                      Lector USB o código manual
+                    </p>
+                  </div>
+                </div>
+
+                <label className="relative block min-w-0">
+                  <Barcode
+                    size={15}
+                    className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-red-500"
+                  />
+
+                  <input
+                    ref={scannerInputRef}
+                    value={scannerValue}
+                    onChange={(event) => setScannerValue(event.target.value)}
+                    onKeyDown={handleScannerKeyDown}
+                    autoComplete="off"
+                    className="h-[clamp(36px,2.45vw,42px)] w-full rounded-[clamp(10px,0.75vw,13px)] border border-red-100 bg-white pl-9 pr-3 text-[clamp(9px,0.65vw,11px)] outline-none transition placeholder:text-black/30 focus:border-red-500 focus:ring-3 focus:ring-red-600/10"
+                    placeholder="Escanea o escribe el código del producto..."
+                  />
+                </label>
+
+                <button
+                  type="button"
+                  onClick={submitScannerValue}
+                  className="inline-flex h-[clamp(36px,2.45vw,42px)] items-center justify-center gap-1.5 rounded-[clamp(10px,0.75vw,13px)] bg-red-600 px-4 text-[clamp(8px,0.6vw,10px)] font-medium text-white shadow-md shadow-red-600/15 transition hover:bg-red-700"
+                >
+                  <Plus size={14} />
+                  Agregar
+                </button>
+              </div>
+
+              {scannerStatus && (
+                <div
+                  className={`mt-2 flex items-center gap-1.5 rounded-xl border px-2.5 py-1.5 text-[8px] leading-4 sm:text-[9px] ${
+                    scannerStatus.type === "success"
+                      ? "border-emerald-100 bg-emerald-50 text-emerald-700"
+                      : scannerStatus.type === "info"
+                        ? "border-black/[0.06] bg-white text-black/55"
+                        : "border-red-100 bg-red-50 text-red-700"
+                  }`}
+                >
+                  {scannerStatus.type === "success" ? (
+                    <CheckCircle2 size={12} className="shrink-0" />
+                  ) : scannerStatus.type === "info" ? (
+                    <ScanLine size={12} className="shrink-0" />
+                  ) : (
+                    <X size={12} className="shrink-0" />
+                  )}
+                  <span>{scannerStatus.message}</span>
+                </div>
+              )}
+            </section>
+
             <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-[minmax(220px,1.35fr)_minmax(150px,.85fr)_minmax(120px,.65fr)_minmax(135px,.72fr)]">
               <label className="relative block">
                 <Search
@@ -2146,13 +2454,22 @@ function ManualReservationModal({
               false
             )
           }
-          onSelect={(variant) =>
+          onSelect={(variant) => {
             addToCart(
               variantProduct,
               variant,
               false
-            )
-          }
+            );
+
+            setScannerStatus({
+              type: "success",
+              message: `${variantProduct.name} · ${variant.size} agregado al apartado`,
+            });
+
+            window.setTimeout(() => {
+              scannerInputRef.current?.focus();
+            }, 30);
+          }}
         />
       )}
     </div>
