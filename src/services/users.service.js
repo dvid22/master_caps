@@ -11,12 +11,14 @@ import {
   collection,
   doc,
   getDoc,
+  getDocs,
   onSnapshot,
   query,
   serverTimestamp,
   setDoc,
   updateDoc,
   where,
+  writeBatch,
 } from "firebase/firestore";
 
 import { db, firebaseConfig } from "../firebase/firebase";
@@ -357,6 +359,126 @@ export async function setUserActiveStatus(
 
     updatedAt: serverTimestamp(),
   });
+}
+
+
+async function deleteRefsInChunks(refs = [], chunkSize = 400) {
+  let deleted = 0;
+
+  for (let index = 0; index < refs.length; index += chunkSize) {
+    const batch = writeBatch(db);
+    const chunk = refs.slice(index, index + chunkSize);
+
+    chunk.forEach((ref) => {
+      batch.delete(ref);
+    });
+
+    await batch.commit();
+    deleted += chunk.length;
+  }
+
+  return deleted;
+}
+
+export async function deleteStoreWorker(
+  userId,
+  actor = null,
+  storeId = STORE_ID
+) {
+  const cleanUserId = cleanString(userId);
+  const cleanStoreId = cleanString(storeId) || STORE_ID;
+
+  if (!cleanUserId) {
+    throw new Error("No se encontró el trabajador.");
+  }
+
+  if (actor?.uid && actor.uid === cleanUserId) {
+    throw new Error(
+      "No puedes eliminar tu propio usuario desde esta opción."
+    );
+  }
+
+  const userRef = doc(db, "users", cleanUserId);
+  const userSnapshot = await getDoc(userRef);
+
+  if (!userSnapshot.exists()) {
+    throw new Error("El trabajador ya no existe.");
+  }
+
+  const user = userSnapshot.data();
+
+  if (user.storeId !== cleanStoreId) {
+    throw new Error(
+      "El trabajador no pertenece a esta tienda."
+    );
+  }
+
+  if (user.role !== "seller") {
+    throw new Error(
+      "Esta opción solo permite eliminar trabajadores con rol vendedor."
+    );
+  }
+
+  /*
+   * Primero lo desactivamos para impedir que pueda abrir una nueva jornada
+   * mientras se ejecuta la limpieza de sus datos laborales.
+   */
+  await updateDoc(userRef, {
+    active: false,
+    statusUpdatedAt: serverTimestamp(),
+    statusUpdatedByUid: actor?.uid || "",
+    statusUpdatedByName: actor?.name || "",
+    statusUpdatedByEmail: actor?.email || "",
+    updatedAt: serverTimestamp(),
+  });
+
+  const [timeEntriesSnapshot, activeEntriesSnapshot] =
+    await Promise.all([
+      getDocs(
+        query(
+          collection(db, "timeEntries"),
+          where("storeId", "==", cleanStoreId),
+          where("userId", "==", cleanUserId)
+        )
+      ),
+      getDocs(
+        query(
+          collection(db, "activeTimeEntries"),
+          where("storeId", "==", cleanStoreId),
+          where("userId", "==", cleanUserId)
+        )
+      ),
+    ]);
+
+  const laborRefs = [
+    ...timeEntriesSnapshot.docs.map((item) => item.ref),
+    ...activeEntriesSnapshot.docs.map((item) => item.ref),
+  ];
+
+  const deletedLaborDocuments =
+    await deleteRefsInChunks(laborRefs);
+
+  /*
+   * Los pagos de nómina ya confirmados, gastos y ventas se conservan como
+   * historial financiero. Esos documentos contienen snapshots del nombre,
+   * correo, horas y valores, por lo que no dependen del perfil del vendedor.
+   *
+   * Finalmente eliminamos el perfil Firestore del trabajador.
+   */
+  const finalBatch = writeBatch(db);
+  finalBatch.delete(userRef);
+  await finalBatch.commit();
+
+  return {
+    userId: cleanUserId,
+    displayName:
+      cleanString(user.displayName) ||
+      cleanString(user.email) ||
+      "Trabajador",
+    deletedTimeEntries: timeEntriesSnapshot.size,
+    deletedActiveEntries: activeEntriesSnapshot.size,
+    deletedLaborDocuments,
+  };
 }
 
 export function subscribeUserProfile(uid, callback, onError) {
