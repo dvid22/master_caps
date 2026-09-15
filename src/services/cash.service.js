@@ -13,6 +13,7 @@ import {
 import { db } from "../firebase/firebase";
 import { STORE_ID } from "./categories.service";
 import { getSales } from "./sales.service";
+import { getSaleCommercialTrace } from "./promotionAccounting.service";
 
 export const CASH_TIME_ZONE = "America/Bogota";
 
@@ -406,6 +407,13 @@ export function buildCashSessionSummary(session, sales = [], movements = []) {
   let totalSales = 0;
   let saleCount = 0;
 
+  let regularSalesTotal = 0;
+  let promotionDiscountTotal = 0;
+  let manualDiscountTotal = 0;
+  let totalDiscountTotal = 0;
+  let promotionSaleCount = 0;
+  let promotionUnits = 0;
+
   (Array.isArray(sales) ? sales : []).forEach((sale) => {
     const provider = getDeferredProvider(sale);
     const createdInThisSession = saleCreatedInSession(sale, safeSession);
@@ -436,6 +444,17 @@ export function buildCashSessionSummary(session, sales = [], movements = []) {
 
     saleCount += 1;
     totalSales += money(sale.total);
+
+    const commercialTrace = getSaleCommercialTrace(sale);
+    regularSalesTotal += commercialTrace.regularSubtotal;
+    promotionDiscountTotal += commercialTrace.promotionDiscount;
+    manualDiscountTotal += commercialTrace.manualDiscount;
+    totalDiscountTotal += commercialTrace.totalDiscount;
+    promotionUnits += commercialTrace.promotionUnits;
+
+    if (commercialTrace.hasPromotion) {
+      promotionSaleCount += 1;
+    }
 
     if (provider) {
       const expectedAmount = getSettlementExpectedAmount(sale, provider);
@@ -526,6 +545,13 @@ export function buildCashSessionSummary(session, sales = [], movements = []) {
     salesByMethod,
     totalSales,
     saleCount,
+
+    regularSalesTotal,
+    promotionDiscountTotal,
+    manualDiscountTotal,
+    totalDiscountTotal,
+    promotionSaleCount,
+    promotionUnits,
 
     pendingByProvider,
     settledByProvider,
@@ -966,6 +992,14 @@ export async function closeCashSession({
       difference,
       closingTotalSales: summary.totalSales,
       closingSaleCount: summary.saleCount,
+
+      closingRegularSalesTotal: summary.regularSalesTotal,
+      closingPromotionDiscountTotal: summary.promotionDiscountTotal,
+      closingManualDiscountTotal: summary.manualDiscountTotal,
+      closingTotalDiscountTotal: summary.totalDiscountTotal,
+      closingPromotionSaleCount: summary.promotionSaleCount,
+      closingPromotionUnits: summary.promotionUnits,
+
       closingBalances: summary.balances,
       closingSalesByMethod: summary.salesByMethod,
       closingPendingByProvider: summary.pendingByProvider,

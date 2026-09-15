@@ -1,7 +1,12 @@
 import {
+  collection,
   doc,
+  getDoc,
+  getDocs,
+  query,
   runTransaction,
   serverTimestamp,
+  where,
 } from "firebase/firestore";
 
 import { db } from "../firebase/firebase";
@@ -11,8 +16,16 @@ import {
   SISTECREDITO_PAYMENT_METHOD,
   SETTLEMENT_STATUS_PENDING,
   SETTLEMENT_STATUS_SETTLED,
+  getSales,
   isDeferredPaymentMethod,
 } from "./sales.service";
+import {
+  getEffectiveProductPromotion,
+} from "./products.service";
+import {
+  buildCashSessionSummary,
+  getCashMovements,
+} from "./cash.service";
 import {
   getCustomerDocumentId,
   normalizeCustomerDocument,
@@ -658,7 +671,29 @@ function normalizeStoredItems(sale = {}) {
           : normalizeMoney(item?.unitPrice),
       isPromotion: Boolean(item?.isPromotion),
       promotionPrice: normalizeMoney(item?.promotionPrice),
+      promotionPercentage: normalizeMoney(item?.promotionPercentage),
+      promotionSource: normalizeText(item?.promotionSource),
       promotionNote: normalizeText(item?.promotionNote),
+      regularSubtotal:
+        item?.regularSubtotal !== undefined
+          ? normalizeMoney(item.regularSubtotal)
+          : normalizeMoney(
+              item?.regularUnitPrice !== undefined
+                ? item.regularUnitPrice
+                : item?.unitPrice
+            ) * normalizeQuantity(item?.quantity),
+      promotionDiscount:
+        item?.promotionDiscount !== undefined
+          ? normalizeMoney(item.promotionDiscount)
+          : Math.max(
+              (normalizeMoney(
+                item?.regularUnitPrice !== undefined
+                  ? item.regularUnitPrice
+                  : item?.unitPrice
+              ) - normalizeMoney(item?.unitPrice)) *
+                normalizeQuantity(item?.quantity),
+              0
+            ),
       costPrice: normalizeMoney(item?.costPrice),
       subtotal:
         item?.subtotal !== undefined
@@ -716,7 +751,29 @@ function normalizeStoredItems(sale = {}) {
           : normalizeMoney(sale.unitPrice),
       isPromotion: Boolean(sale.isPromotion),
       promotionPrice: normalizeMoney(sale.promotionPrice),
+      promotionPercentage: normalizeMoney(sale.promotionPercentage),
+      promotionSource: normalizeText(sale.promotionSource),
       promotionNote: normalizeText(sale.promotionNote),
+      regularSubtotal:
+        sale.regularSubtotal !== undefined
+          ? normalizeMoney(sale.regularSubtotal)
+          : normalizeMoney(
+              sale.regularUnitPrice !== undefined
+                ? sale.regularUnitPrice
+                : sale.unitPrice
+            ) * normalizeQuantity(sale.quantity),
+      promotionDiscount:
+        sale.promotionDiscount !== undefined
+          ? normalizeMoney(sale.promotionDiscount)
+          : Math.max(
+              (normalizeMoney(
+                sale.regularUnitPrice !== undefined
+                  ? sale.regularUnitPrice
+                  : sale.unitPrice
+              ) - normalizeMoney(sale.unitPrice)) *
+                normalizeQuantity(sale.quantity),
+              0
+            ),
       costPrice: normalizeMoney(sale.costPrice),
       subtotal: normalizeMoney(sale.total),
       totalCost: normalizeMoney(sale.totalCost),
@@ -1051,29 +1108,36 @@ export async function updateSale({
         );
       }
 
-      variant.stock =
-        normalizeQuantity(variant.stock) +
+      const previousStock =
+        normalizeQuantity(variant.stock);
+      const previousPrinted =
+        variant.printedLabels !== undefined
+          ? normalizeQuantity(
+              variant.printedLabels
+            )
+          : null;
+      const wasFullyPrinted =
+        previousPrinted !== null &&
+        previousStock > 0 &&
+        previousPrinted >= previousStock;
+      const restoredQuantity =
         normalizeQuantity(oldItem.quantity);
 
-      const currentPromotionEnabled =
-        Boolean(entry.product.isPromotion) &&
-        normalizeMoney(entry.product.promotionPrice) > 0;
+      variant.stock =
+        previousStock + restoredQuantity;
 
-      /*
-       * Si la promoción sigue activa, la unidad vuelve a la bolsa promocional.
-       * Si la promoción ya terminó, vuelve únicamente al stock físico normal;
-       * de esta forma no revivimos promociones antiguas.
-       */
       if (
-        oldItem.isPromotion &&
-        currentPromotionEnabled
+        previousPrinted !== null &&
+        wasFullyPrinted
       ) {
-        entry.promotionVariants = addPromotionStock(
-          entry.promotionVariants,
-          variant,
-          oldItem.quantity
-        );
+        variant.printedLabels =
+          Math.min(
+            previousPrinted +
+              restoredQuantity,
+            variant.stock
+          );
       }
+
     }
 
     const oldLineByKey = new Map();
@@ -1099,69 +1163,21 @@ export async function updateSale({
     });
 
     /*
-     * Presupuesto de reclasificación Promoción -> Normal.
-     *
-     * Si una venta histórica tenía 2 unidades promocionales y ahora se
-     * corrige a 1 promo + 1 normal, esa unidad que deja de ser promo puede
-     * salir de la bolsa promocional para convertirse en stock normal.
-     * Esto evita fallos falsos cuando no existe otro stock normal disponible.
-     */
-    const oldPromoByVariant = new Map();
-    const newPromoByVariant = new Map();
-
-    oldItems.forEach((item) => {
-      if (item.isManual || !item.isPromotion) return;
-
-      const entry = productEntries.get(item.productId);
-      const variant = entry
-        ? findRequestedVariant(entry.variants, item)
-        : null;
-
-      if (!variant) return;
-
-      const key = `${item.productId}__${variant.id}`;
-      oldPromoByVariant.set(
-        key,
-        (oldPromoByVariant.get(key) || 0) +
-          normalizeQuantity(item.quantity)
-      );
-    });
-
-    requestedItems.forEach((item) => {
-      if (item.isManual || !item.isPromotion) return;
-
-      const entry = productEntries.get(item.productId);
-      const variant = entry
-        ? findRequestedVariant(entry.variants, item)
-        : null;
-
-      if (!variant) return;
-
-      const key = `${item.productId}__${variant.id}`;
-      newPromoByVariant.set(
-        key,
-        (newPromoByVariant.get(key) || 0) +
-          normalizeQuantity(item.quantity)
-      );
-    });
-
-    const promoToNormalBudget = new Map();
-
-    oldPromoByVariant.forEach((oldQuantity, key) => {
-      promoToNormalBudget.set(
-        key,
-        Math.max(
-          oldQuantity -
-            normalizeQuantity(newPromoByVariant.get(key)),
-          0
-        )
-      );
-    });
-
-    /*
      * PASO 2: construir y descontar la nueva composición.
+     *
+     * Desde la migración de promociones por producto ya no existe una bolsa
+     * separada de stock promocional. El stock físico es único.
+     *
+     * - Las líneas que ya existían conservan SIEMPRE su precio histórico.
+     * - Las líneas nuevas toman automáticamente la promoción vigente del producto.
+     * - Cambiar o retirar hoy una promoción nunca altera una venta histórica.
      */
     const newSaleItems = [];
+
+    let regularSubtotal = 0;
+    let promotionDiscount = 0;
+    let promotionUnits = 0;
+    let promotionLineCount = 0;
 
     let subtotal = 0;
     let totalCost = 0;
@@ -1193,6 +1209,7 @@ export async function updateSale({
         const lineSubtotal = unitPrice * quantity;
         const lineTotalCost = costPrice * quantity;
 
+        regularSubtotal += lineSubtotal;
         subtotal += lineSubtotal;
         totalCost += lineTotalCost;
         totalItems += quantity;
@@ -1235,7 +1252,12 @@ export async function updateSale({
           regularUnitPrice: unitPrice,
           isPromotion: false,
           promotionPrice: 0,
+          promotionPercentage: 0,
+          promotionSource: "",
           promotionNote: "",
+
+          regularSubtotal: lineSubtotal,
+          promotionDiscount: 0,
 
           costPrice,
           subtotal: lineSubtotal,
@@ -1275,161 +1297,106 @@ export async function updateSale({
       const quantity = normalizeQuantity(
         requestedItem.quantity
       );
+      const physicalStock = normalizeQuantity(
+        variant.stock
+      );
+
+      if (quantity > physicalStock) {
+        throw new Error(
+          `Solo hay ${physicalStock} unidad(es) disponibles de "${entry.product.name || "el producto"}" talla ${variant.size}.`
+        );
+      }
 
       const historicalLine = oldLineByKey.get(
         getLineKey(requestedItem, variant)
       );
 
-      const oppositeHistoricalLine = oldLineByKey.get(
-        getLineKey(
-          {
-            ...requestedItem,
-            isPromotion: !requestedItem.isPromotion,
-          },
-          variant
-        )
-      );
+      const priceHistoryLine =
+        historicalLine || null;
 
-      const currentPromotionEnabled =
-        Boolean(entry.product.isPromotion) &&
-        normalizeMoney(entry.product.promotionPrice) > 0;
-
-      let promotionStock =
-        getPromotionStockForVariant(
-          entry.promotionVariants,
-          variant
+      const effectivePromotion =
+        getEffectiveProductPromotion(
+          entry.product
         );
-
-      const physicalStock =
-        normalizeQuantity(variant.stock);
-
-      let availableForMode = 0;
-
-      if (requestedItem.isPromotion) {
-        if (currentPromotionEnabled) {
-          availableForMode = promotionStock;
-        } else if (
-          historicalLine?.isPromotion
-        ) {
-          /*
-           * Permite conservar o reducir una promoción histórica aunque
-           * la promoción del producto ya haya terminado. No permite
-           * aumentar esa promoción antigua.
-           */
-          availableForMode = Math.min(
-            physicalStock,
-            normalizeQuantity(
-              historicalLine.quantity
-            )
-          );
-        } else {
-          throw new Error(
-            `La promoción de "${entry.product.name}" ya no está disponible.`
-          );
-        }
-      } else {
-        let normalAvailable = Math.max(
-          physicalStock - promotionStock,
-          0
-        );
-
-        const variantKey =
-          `${requestedItem.productId}__${variant.id}`;
-        const conversionBudget = normalizeQuantity(
-          promoToNormalBudget.get(variantKey)
-        );
-        const neededFromFormerPromo = Math.max(
-          quantity - normalAvailable,
-          0
-        );
-
-        if (neededFromFormerPromo > 0) {
-          const convertible = Math.min(
-            neededFromFormerPromo,
-            conversionBudget,
-            promotionStock
-          );
-
-          if (convertible > 0) {
-            entry.promotionVariants = subtractPromotionStock(
-              entry.promotionVariants,
-              variant,
-              convertible
-            );
-
-            promoToNormalBudget.set(
-              variantKey,
-              conversionBudget - convertible
-            );
-
-            promotionStock -= convertible;
-            normalAvailable += convertible;
-          }
-        }
-
-        availableForMode = normalAvailable;
-      }
-
-      if (quantity > availableForMode) {
-        throw new Error(
-          requestedItem.isPromotion
-            ? `Solo hay ${availableForMode} unidad(es) disponibles en promoción de "${entry.product.name}" talla ${variant.size}.`
-            : `Solo hay ${availableForMode} unidad(es) normales disponibles de "${entry.product.name}" talla ${variant.size}.`
-        );
-      }
-
-      variant.stock = physicalStock - quantity;
-
-      if (
-        requestedItem.isPromotion &&
-        currentPromotionEnabled
-      ) {
-        entry.promotionVariants = subtractPromotionStock(
-          entry.promotionVariants,
-          variant,
-          quantity
-        );
-      }
 
       /*
-       * Una línea que ya existía conserva el precio histórico de la venta.
-       * Un producto/talla nuevo usa el precio actual del inventario.
+       * Si la misma referencia/talla ya formaba parte de la venta, la
+       * corrección conserva el precio que quedó congelado en esa operación.
+       * Solo una línea completamente nueva usa el precio/promoción de hoy.
        */
-      const priceHistoryLine =
-        historicalLine ||
-        oppositeHistoricalLine ||
-        null;
+      const linePromotionActive = priceHistoryLine
+        ? Boolean(priceHistoryLine.isPromotion)
+        : Boolean(effectivePromotion.active);
 
       const regularUnitPrice = priceHistoryLine
         ? normalizeMoney(
             priceHistoryLine.regularUnitPrice ||
-              (!priceHistoryLine.isPromotion
-                ? priceHistoryLine.unitPrice
-                : 0)
-          ) || normalizeMoney(entry.product.salePrice)
+              priceHistoryLine.unitPrice
+          )
         : normalizeMoney(
-            entry.product.salePrice
+            effectivePromotion.regularPrice ??
+              entry.product.salePrice
           );
 
-      const promotionPrice =
-        requestedItem.isPromotion
-          ? historicalLine?.isPromotion
+      const promotionPrice = linePromotionActive
+        ? priceHistoryLine
+          ? normalizeMoney(
+              priceHistoryLine.promotionPrice ||
+                priceHistoryLine.unitPrice
+            )
+          : normalizeMoney(
+              effectivePromotion.price
+            )
+        : 0;
+
+      const promotionPercentage =
+        linePromotionActive
+          ? priceHistoryLine
             ? normalizeMoney(
-                historicalLine.promotionPrice ||
-                  historicalLine.unitPrice
+                priceHistoryLine.promotionPercentage
+              ) ||
+              (
+                regularUnitPrice > 0
+                  ? Math.round(
+                      (1 -
+                        normalizeMoney(
+                          priceHistoryLine.unitPrice
+                        ) /
+                          regularUnitPrice) *
+                        10000
+                    ) / 100
+                  : 0
               )
             : normalizeMoney(
-                entry.product.promotionPrice
+                effectivePromotion.percentage
               )
           : 0;
 
-      const unitPrice = historicalLine
-        ? normalizeMoney(
-            historicalLine.unitPrice
-          )
-        : requestedItem.isPromotion
-          ? promotionPrice
-          : regularUnitPrice;
+      const promotionSource =
+        linePromotionActive
+          ? priceHistoryLine
+            ? normalizeText(
+                priceHistoryLine.promotionSource
+              ) || "historical"
+            : normalizeText(
+                effectivePromotion.source
+              )
+          : "";
+
+      const promotionNote =
+        linePromotionActive
+          ? priceHistoryLine
+            ? normalizeText(
+                priceHistoryLine.promotionNote
+              )
+            : normalizeText(
+                effectivePromotion.note
+              )
+          : "";
+
+      const unitPrice = linePromotionActive
+        ? promotionPrice
+        : regularUnitPrice;
 
       const costPrice = priceHistoryLine
         ? normalizeMoney(
@@ -1439,10 +1406,30 @@ export async function updateSale({
             entry.product.costPrice
           );
 
-      const lineSubtotal = unitPrice * quantity;
-      const lineTotalCost = costPrice * quantity;
+      variant.stock =
+        physicalStock - quantity;
+
+      const lineRegularSubtotal =
+        regularUnitPrice * quantity;
+      const lineSubtotal =
+        unitPrice * quantity;
+      const linePromotionDiscount =
+        Math.max(
+          lineRegularSubtotal - lineSubtotal,
+          0
+        );
+      const lineTotalCost =
+        costPrice * quantity;
       const lineProfit =
         lineSubtotal - lineTotalCost;
+
+      regularSubtotal += lineRegularSubtotal;
+      promotionDiscount += linePromotionDiscount;
+
+      if (linePromotionActive) {
+        promotionUnits += quantity;
+        promotionLineCount += 1;
+      }
 
       subtotal += lineSubtotal;
       totalCost += lineTotalCost;
@@ -1450,9 +1437,11 @@ export async function updateSale({
 
       newSaleItems.push({
         lineId:
-          historicalLine?.lineId ||
-          oppositeHistoricalLine?.lineId ||
+          priceHistoryLine?.lineId ||
           `line-${newSaleItems.length + 1}`,
+
+        isManual: false,
+        inventoryTracked: true,
 
         productId: requestedItem.productId,
         productName: normalizeText(
@@ -1481,20 +1470,15 @@ export async function updateSale({
 
         unitPrice,
         regularUnitPrice,
-        isPromotion: Boolean(
-          requestedItem.isPromotion
-        ),
+        isPromotion: linePromotionActive,
         promotionPrice,
-        promotionNote:
-          requestedItem.isPromotion
-            ? historicalLine
-              ? normalizeText(
-                  historicalLine.promotionNote
-                )
-              : normalizeText(
-                  entry.product.promotionNote
-                )
-            : "",
+        promotionPercentage,
+        promotionSource,
+        promotionNote,
+
+        regularSubtotal: lineRegularSubtotal,
+        promotionDiscount:
+          linePromotionDiscount,
 
         costPrice,
 
@@ -1510,8 +1494,15 @@ export async function updateSale({
       );
     }
 
+    const promotionSubtotal = subtotal;
+    const manualDiscount = cleanDiscount;
+    const totalDiscount =
+      promotionDiscount + manualDiscount;
+    const hasPromotion =
+      promotionDiscount > 0 || promotionUnits > 0;
+
     const total = Math.max(
-      subtotal - cleanDiscount,
+      subtotal - manualDiscount,
       0
     );
 
@@ -1644,6 +1635,12 @@ export async function updateSale({
     const nextDeferredExpectedAmount = nextIsDeferred
       ? normalizeMoney(nextDeferredPayment.amount)
       : 0;
+
+    if (hasPromotion && nextIsDeferred) {
+      throw new Error(
+        "Las promociones no pueden financiarse con Addi ni Sistecrédito. Selecciona un método de pago inmediato."
+      );
+    }
 
     let paymentStatus = "paid";
     let settlementProvider = "";
@@ -1844,17 +1841,20 @@ export async function updateSale({
           entry.variants
         );
 
-      const promotionStock =
-        getPromotionTotalStock(
-          entry.promotionVariants
+      const currentPromotion =
+        getEffectiveProductPromotion(
+          entry.product
         );
 
       transaction.update(entry.ref, {
         ...variantPayload,
 
-        promotionVariants:
-          entry.promotionVariants,
-        promotionStock,
+        // La promoción ya no maneja una bolsa separada de inventario.
+        promotionVariants: [],
+        promotionStock:
+          currentPromotion.active
+            ? variantPayload.totalStock
+            : 0,
 
         updatedByUid:
           actor?.uid || "",
@@ -1921,9 +1921,18 @@ export async function updateSale({
       uniqueItems:
         newSaleItems.length,
 
+      regularSubtotal,
+      promotionDiscount,
+      promotionSubtotal,
+      manualDiscount,
+      totalDiscount,
+      hasPromotion,
+      promotionUnits,
+      promotionLineCount,
+
       subtotal,
       discount:
-        cleanDiscount,
+        manualDiscount,
       total,
 
       totalCost,
@@ -2021,9 +2030,18 @@ export async function updateSale({
       uniqueItems:
         newSaleItems.length,
 
+      regularSubtotal,
+      promotionDiscount,
+      promotionSubtotal,
+      manualDiscount,
+      totalDiscount,
+      hasPromotion,
+      promotionUnits,
+      promotionLineCount,
+
       subtotal,
       discount:
-        cleanDiscount,
+        manualDiscount,
       total,
       totalCost,
       profit,
@@ -2083,3 +2101,747 @@ export async function updateSale({
     };
   });
 }
+
+/* -------------------------------------------------------------------------- */
+/*                    ELIMINAR / REVERSAR VENTA COMPLETA                      */
+/* -------------------------------------------------------------------------- */
+
+function getSaleReservationGroupId(sale = {}) {
+  return normalizeText(
+    sale.reservationGroupId ||
+      sale.reservationId ||
+      ""
+  );
+}
+
+function uniqueStrings(values = []) {
+  return [...new Set(values.map(normalizeText).filter(Boolean))];
+}
+
+function buildClosedCashSnapshotPayload(
+  session,
+  summary,
+  actor = null,
+  saleNumber = ""
+) {
+  const countedCash =
+    session?.countedCash === null ||
+    session?.countedCash === undefined
+      ? null
+      : normalizeMoney(session.countedCash);
+
+  const difference =
+    countedCash === null
+      ? null
+      : countedCash -
+        normalizeMoney(summary.expectedCash);
+
+  return {
+    expectedCash: normalizeMoney(summary.expectedCash),
+    difference,
+
+    closingTotalSales: normalizeMoney(summary.totalSales),
+    closingSaleCount: normalizeQuantity(summary.saleCount),
+    closingBalances: summary.balances,
+    closingSalesByMethod: summary.salesByMethod,
+    closingPendingByProvider: summary.pendingByProvider,
+    closingSettledByProvider: summary.settledByProvider,
+    closingSettledReceivedByProvider:
+      summary.settledReceivedByProvider,
+
+    closingRegularSalesTotal:
+      normalizeMoney(summary.regularSalesTotal),
+    closingPromotionDiscountTotal:
+      normalizeMoney(summary.promotionDiscountTotal),
+    closingManualDiscountTotal:
+      normalizeMoney(summary.manualDiscountTotal),
+    closingTotalDiscountTotal:
+      normalizeMoney(summary.totalDiscountTotal),
+    closingPromotionSaleCount:
+      normalizeQuantity(summary.promotionSaleCount),
+    closingPromotionUnits:
+      normalizeQuantity(summary.promotionUnits),
+
+    closingPendingAddi:
+      normalizeMoney(summary.pendingAddi),
+    closingPendingSistecredito:
+      normalizeMoney(summary.pendingSistecredito),
+
+    lastCorrectionType: "sale_deleted",
+    lastCorrectedSaleNumber:
+      normalizeText(saleNumber),
+    lastCorrectedByUid: actor?.uid || "",
+    lastCorrectedByName: actor?.name || "",
+    lastCorrectedByEmail: actor?.email || "",
+    lastCorrectedAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  };
+}
+
+/**
+ * Elimina una venta como operación comercial, pero deja una auditoría interna.
+ *
+ * Reversa en una sola operación:
+ * - inventario por variante,
+ * - documento de venta,
+ * - relación con Apartados (si la venta nació allí),
+ * - movimientos de caja de esos apartados,
+ * - snapshots de cajas cerradas afectadas.
+ *
+ * Dashboard, Clientes, Financiaciones, reportes y ventas del día se corrigen
+ * automáticamente porque consumen la colección `sales`.
+ */
+export async function deleteSaleCompletely({
+  saleId,
+  storeId = STORE_ID,
+  actor = null,
+  reason = "",
+} = {}) {
+  const cleanSaleId = normalizeText(saleId);
+
+  if (!cleanSaleId) {
+    throw new Error("No se encontró la venta a eliminar.");
+  }
+
+  if (
+    actor?.role &&
+    normalizeText(actor.role).toLowerCase() !== "admin"
+  ) {
+    throw new Error(
+      "Solo un administrador puede eliminar una venta."
+    );
+  }
+
+  const saleRef = doc(db, "sales", cleanSaleId);
+  const previewSnapshot = await getDoc(saleRef);
+
+  if (!previewSnapshot.exists()) {
+    throw new Error("La venta ya no existe.");
+  }
+
+  const previewSale = {
+    id: previewSnapshot.id,
+    ...previewSnapshot.data(),
+  };
+
+  const currentStoreId =
+    normalizeText(previewSale.storeId) ||
+    normalizeText(storeId) ||
+    STORE_ID;
+
+  if (
+    normalizeText(storeId) &&
+    currentStoreId !== normalizeText(storeId)
+  ) {
+    throw new Error(
+      "La venta no pertenece a la tienda actual."
+    );
+  }
+
+  /*
+   * Primero localizamos referencias auxiliares. Las lecturas definitivas de
+   * los documentos que se modificarán vuelven a hacerse dentro de la
+   * transacción.
+   */
+  const reservationLinesQuery = query(
+    collection(db, "reservations"),
+    where("saleId", "==", cleanSaleId)
+  );
+
+  const reservationLinesSnapshot =
+    await getDocs(reservationLinesQuery);
+
+  const reservationLineDocs =
+    reservationLinesSnapshot.docs.map((item) => ({
+      ref: item.ref,
+      id: item.id,
+      data: item.data(),
+    }));
+
+  const reservationGroupId =
+    getSaleReservationGroupId(previewSale) ||
+    normalizeText(
+      reservationLineDocs[0]?.data?.reservationGroupId
+    );
+
+  const reservationGroupRef = reservationGroupId
+    ? doc(db, "reservationGroups", reservationGroupId)
+    : null;
+
+  if (reservationGroupRef) {
+    const groupPreviewSnapshot =
+      await getDoc(reservationGroupRef);
+
+    if (groupPreviewSnapshot.exists()) {
+      const groupReservationIds = Array.isArray(
+        groupPreviewSnapshot.data()?.reservationIds
+      )
+        ? groupPreviewSnapshot
+            .data()
+            .reservationIds
+            .map(normalizeText)
+            .filter(Boolean)
+        : [];
+
+      const knownLineIds = new Set(
+        reservationLineDocs.map((item) => item.id)
+      );
+
+      for (const reservationId of groupReservationIds) {
+        if (knownLineIds.has(reservationId)) {
+          continue;
+        }
+
+        const lineRef = doc(
+          db,
+          "reservations",
+          reservationId
+        );
+        const lineSnapshot =
+          await getDoc(lineRef);
+
+        if (!lineSnapshot.exists()) {
+          continue;
+        }
+
+        reservationLineDocs.push({
+          ref: lineRef,
+          id: lineSnapshot.id,
+          data: lineSnapshot.data(),
+        });
+        knownLineIds.add(reservationId);
+      }
+    }
+  }
+
+  let reservationMovementDocs = [];
+
+  if (reservationGroupId) {
+    const movementSnapshot = await getDocs(
+      query(
+        collection(db, "cashMovements"),
+        where(
+          "reservationGroupId",
+          "==",
+          reservationGroupId
+        )
+      )
+    );
+
+    reservationMovementDocs =
+      movementSnapshot.docs.map((item) => ({
+        ref: item.ref,
+        id: item.id,
+        data: item.data(),
+      }));
+  }
+
+  const originCashSessionId =
+    normalizeText(previewSale.cashSessionId) ||
+    inferCashSessionId(
+      previewSale,
+      currentStoreId
+    );
+
+  const settlementCashSessionId =
+    normalizeText(
+      previewSale.settlementCashSessionId
+    );
+
+  const movementSessionIds =
+    reservationMovementDocs.map((item) =>
+      normalizeText(item.data?.sessionId)
+    );
+
+  const affectedSessionIds = uniqueStrings([
+    originCashSessionId,
+    settlementCashSessionId,
+    ...movementSessionIds,
+  ]);
+
+  /*
+   * Las cajas abiertas se recalculan solas porque escuchan ventas/movimientos
+   * en tiempo real. Las cajas cerradas sí tienen snapshots congelados; para
+   * ellas preparamos el resumen exacto que quedará tras la eliminación.
+   */
+  const closedCashRecalculations = new Map();
+  const allStoreSales =
+    affectedSessionIds.length > 0
+      ? await getSales(currentStoreId)
+      : [];
+
+  const movementIdsToDelete = new Set(
+    reservationMovementDocs.map((item) => item.id)
+  );
+
+  for (const sessionId of affectedSessionIds) {
+    const sessionSnapshot = await getDoc(
+      doc(db, "cashSessions", sessionId)
+    );
+
+    if (!sessionSnapshot.exists()) {
+      continue;
+    }
+
+    const session = {
+      id: sessionSnapshot.id,
+      ...sessionSnapshot.data(),
+    };
+
+    if (session.status !== "closed") {
+      continue;
+    }
+
+    const sessionMovements =
+      await getCashMovements(sessionId);
+
+    const remainingSales = allStoreSales.filter(
+      (sale) => sale.id !== cleanSaleId
+    );
+
+    const remainingMovements =
+      sessionMovements.filter(
+        (movement) =>
+          !movementIdsToDelete.has(movement.id)
+      );
+
+    closedCashRecalculations.set(
+      sessionId,
+      buildCashSessionSummary(
+        session,
+        remainingSales,
+        remainingMovements
+      )
+    );
+  }
+
+  const auditRef = doc(
+    collection(db, "saleDeletionAudit")
+  );
+
+  return runTransaction(db, async (transaction) => {
+    const saleSnapshot =
+      await transaction.get(saleRef);
+
+    if (!saleSnapshot.exists()) {
+      throw new Error(
+        "La venta ya fue eliminada."
+      );
+    }
+
+    const currentSale = {
+      id: saleSnapshot.id,
+      ...saleSnapshot.data(),
+    };
+
+    const saleStoreId =
+      normalizeText(currentSale.storeId) ||
+      currentStoreId;
+
+    if (saleStoreId !== currentStoreId) {
+      throw new Error(
+        "La venta cambió de tienda mientras se procesaba la eliminación."
+      );
+    }
+
+    const saleItems =
+      normalizeStoredItems(currentSale);
+
+    if (saleItems.length === 0) {
+      throw new Error(
+        "La venta no contiene información suficiente para restaurar el inventario."
+      );
+    }
+
+    const inventoryItems = saleItems.filter(
+      (item) =>
+        !item.isManual &&
+        item.inventoryTracked !== false &&
+        item.productId
+    );
+
+    const productIds = uniqueStrings(
+      inventoryItems.map((item) => item.productId)
+    );
+
+    const productEntries = new Map();
+
+    for (const productId of productIds) {
+      const productRef = doc(
+        db,
+        "products",
+        productId
+      );
+      const productSnapshot =
+        await transaction.get(productRef);
+
+      if (!productSnapshot.exists()) {
+        throw new Error(
+          `No se puede eliminar la venta porque el producto ${productId} ya no existe. Restáuralo primero para poder devolver su stock correctamente.`
+        );
+      }
+
+      const product = productSnapshot.data();
+
+      if (
+        normalizeText(product.storeId) &&
+        normalizeText(product.storeId) !==
+          currentStoreId
+      ) {
+        throw new Error(
+          `El producto "${product.name || productId}" pertenece a otra tienda.`
+        );
+      }
+
+      productEntries.set(productId, {
+        ref: productRef,
+        product,
+        variants: normalizeProductVariants(
+          productId,
+          product
+        ),
+      });
+    }
+
+    let currentReservationGroup = null;
+
+    if (reservationGroupRef) {
+      const groupSnapshot =
+        await transaction.get(
+          reservationGroupRef
+        );
+
+      if (groupSnapshot.exists()) {
+        currentReservationGroup = {
+          id: groupSnapshot.id,
+          ...groupSnapshot.data(),
+        };
+      }
+    }
+
+    const currentReservationLines = [];
+
+    for (const line of reservationLineDocs) {
+      const snapshot =
+        await transaction.get(line.ref);
+
+      if (snapshot.exists()) {
+        currentReservationLines.push({
+          ref: line.ref,
+          id: snapshot.id,
+          data: snapshot.data(),
+        });
+      }
+    }
+
+    const currentReservationMovements = [];
+
+    for (const movement of reservationMovementDocs) {
+      const snapshot =
+        await transaction.get(
+          movement.ref
+        );
+
+      if (snapshot.exists()) {
+        currentReservationMovements.push({
+          ref: movement.ref,
+          id: snapshot.id,
+          data: snapshot.data(),
+        });
+      }
+    }
+
+    const cashSessionEntries = new Map();
+
+    for (const sessionId of affectedSessionIds) {
+      const sessionRef = doc(
+        db,
+        "cashSessions",
+        sessionId
+      );
+      const sessionSnapshot =
+        await transaction.get(sessionRef);
+
+      if (sessionSnapshot.exists()) {
+        cashSessionEntries.set(
+          sessionId,
+          {
+            ref: sessionRef,
+            session: {
+              id: sessionSnapshot.id,
+              ...sessionSnapshot.data(),
+            },
+          }
+        );
+      }
+    }
+
+    /*
+     * RESTAURAR INVENTARIO.
+     *
+     * La unidad vuelve al stock físico actual. No se revive una promoción
+     * histórica: si el producto sigue hoy en promoción, el stock restaurado
+     * queda disponible con la promoción actual; si no, vuelve a precio normal.
+     */
+    for (const item of inventoryItems) {
+      const entry =
+        productEntries.get(item.productId);
+
+      if (!entry) {
+        throw new Error(
+          "No se pudo reconstruir uno de los productos de la venta."
+        );
+      }
+
+      let variant = findRequestedVariant(
+        entry.variants,
+        item
+      );
+
+      if (!variant) {
+        const restoredVariant = {
+          id:
+            normalizeText(item.variantId) ||
+            createFallbackVariantId(
+              item.productId,
+              item.size
+            ),
+          size: normalizeSize(item.size),
+          stock: 0,
+          printedLabels: 0,
+        };
+
+        entry.variants.push(
+          restoredVariant
+        );
+        variant = restoredVariant;
+      }
+
+      const previousStock =
+        normalizeQuantity(variant.stock);
+      const previousPrinted =
+        variant.printedLabels !== undefined
+          ? normalizeQuantity(
+              variant.printedLabels
+            )
+          : null;
+      const wasFullyPrinted =
+        previousPrinted !== null &&
+        previousStock > 0 &&
+        previousPrinted >= previousStock;
+
+      const restoredQuantity =
+        normalizeQuantity(item.quantity);
+
+      variant.stock =
+        previousStock + restoredQuantity;
+
+      /*
+       * Si todo el stock restante estaba etiquetado, asumimos que la unidad
+       * que regresa también conserva su etiqueta física y evitamos crear un
+       * falso pendiente de impresión.
+       */
+      if (
+        previousPrinted !== null &&
+        wasFullyPrinted
+      ) {
+        variant.printedLabels =
+          Math.min(
+            previousPrinted +
+              restoredQuantity,
+            variant.stock
+          );
+      }
+    }
+
+    for (const entry of productEntries.values()) {
+      const variantPayload =
+        buildProductVariantPayload(
+          entry.variants
+        );
+
+      const currentPromotion =
+        getEffectiveProductPromotion(
+          entry.product
+        );
+
+      transaction.update(entry.ref, {
+        ...variantPayload,
+        promotionVariants: [],
+        promotionStock:
+          currentPromotion.active
+            ? variantPayload.totalStock
+            : 0,
+
+        updatedByUid:
+          actor?.uid || "",
+        updatedByName:
+          actor?.name || "",
+        updatedByEmail:
+          actor?.email || "",
+        updatedAt: serverTimestamp(),
+      });
+    }
+
+    /*
+     * Si la venta nació de un apartado, al borrar la venta se elimina también
+     * ese apartado ya finalizado y sus abonos de caja. Esto permite devolver
+     * la mercancía a stock como una unidad corriente sin dejar referencias
+     * huérfanas ni dinero histórico asociado a una operación inexistente.
+     */
+    currentReservationLines.forEach(
+      (line) => {
+        transaction.delete(line.ref);
+      }
+    );
+
+    currentReservationMovements.forEach(
+      (movement) => {
+        transaction.delete(
+          movement.ref
+        );
+      }
+    );
+
+    if (
+      reservationGroupRef &&
+      currentReservationGroup
+    ) {
+      transaction.delete(
+        reservationGroupRef
+      );
+    }
+
+    /*
+     * Reparar snapshots de cajas ya cerradas. El efectivo contado físicamente
+     * se conserva; únicamente cambia el esperado y, por tanto, la diferencia.
+     */
+    for (const [
+      sessionId,
+      summary,
+    ] of closedCashRecalculations.entries()) {
+      const entry =
+        cashSessionEntries.get(sessionId);
+
+      if (
+        !entry ||
+        entry.session.status !== "closed"
+      ) {
+        continue;
+      }
+
+      transaction.update(
+        entry.ref,
+        buildClosedCashSnapshotPayload(
+          entry.session,
+          summary,
+          actor,
+          currentSale.saleNumber
+        )
+      );
+    }
+
+    transaction.set(auditRef, {
+      storeId: currentStoreId,
+      originalSaleId: cleanSaleId,
+      saleNumber:
+        normalizeText(
+          currentSale.saleNumber ||
+            currentSale.receiptNumber
+        ),
+      reason:
+        normalizeText(reason) ||
+        "Venta eliminada desde Historial de ventas",
+
+      total:
+        normalizeMoney(currentSale.total),
+      totalItems:
+        normalizeQuantity(
+          currentSale.totalItems
+        ),
+      customerId:
+        normalizeText(
+          currentSale.customerId
+        ),
+      customerName:
+        normalizeText(
+          currentSale.customerName
+        ),
+      customerDocument:
+        normalizeCustomerDocument(
+          currentSale.customerDocument
+        ),
+      sellerUid:
+        normalizeText(
+          currentSale.sellerUid
+        ),
+      sellerName:
+        normalizeText(
+          currentSale.sellerName
+        ),
+
+      source:
+        normalizeText(
+          currentSale.source
+        ),
+      reservationGroupId,
+      restoredUnits:
+        inventoryItems.reduce(
+          (sum, item) =>
+            sum +
+            normalizeQuantity(
+              item.quantity
+            ),
+          0
+        ),
+
+      affectedCashSessionIds: affectedSessionIds,
+      deletedReservationLineIds:
+        currentReservationLines.map(
+          (line) => line.id
+        ),
+      deletedCashMovementIds:
+        currentReservationMovements.map(
+          (movement) => movement.id
+        ),
+
+      saleSnapshot: currentSale,
+
+      deletedByUid:
+        actor?.uid || "",
+      deletedByName:
+        actor?.name || "",
+      deletedByEmail:
+        actor?.email || "",
+      deletedAt: serverTimestamp(),
+    });
+
+    transaction.delete(saleRef);
+
+    return {
+      id: cleanSaleId,
+      saleNumber:
+        normalizeText(
+          currentSale.saleNumber
+        ),
+      restoredUnits:
+        inventoryItems.reduce(
+          (sum, item) =>
+            sum +
+            normalizeQuantity(
+              item.quantity
+            ),
+          0
+        ),
+      reservationRemoved:
+        Boolean(
+          currentReservationGroup ||
+            currentReservationLines.length > 0
+        ),
+      cashMovementCount:
+        currentReservationMovements.length,
+      auditId: auditRef.id,
+    };
+  });
+}
+

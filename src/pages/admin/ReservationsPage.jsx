@@ -2905,6 +2905,9 @@ function SaleModal({
     Number(group.balanceDue ?? total - paid),
     0
   );
+  const hasPromotion = Array.isArray(group?.lines)
+    ? group.lines.some((line) => Boolean(line?.isPromotion))
+    : false;
 
   return (
     <ModalShell
@@ -2933,8 +2936,14 @@ function SaleModal({
           label="Método del pago final"
           value={form.paymentMethod}
           onChange={(value) => onChange("paymentMethod", value)}
-          allowDeferred
+          allowDeferred={!hasPromotion}
         />
+
+        {hasPromotion && (
+          <div className="rounded-xl border border-red-100 bg-red-50 px-3 py-2.5 text-[10px] leading-4 text-red-700">
+            Este apartado histórico contiene una promoción. Debe finalizarse con un método de pago inmediato; Addi y Sistecrédito no aplican.
+          </div>
+        )}
 
         {["addi", "sistecredito"].includes(form.paymentMethod) &&
           balance > 0 && (

@@ -24,6 +24,7 @@ import {
 } from "../../services/customers.service";
 import { getCurrentUserActor } from "../../services/auth.service";
 import { formatCurrency } from "../../utils/money";
+import { showPremiumAlert } from "../../utils/premiumDialog";
 
 const PAGE_SIZE = 8;
 
@@ -214,7 +215,10 @@ export default function ClientsPage() {
         console.error(error);
         loadedCustomers = true;
         updateLoading();
-        alert("No se pudieron cargar los clientes.");
+        showPremiumAlert("No se pudieron cargar los clientes.", {
+          title: "Error al cargar clientes",
+          tone: "warning",
+        });
       },
       STORE_ID
     );
@@ -229,7 +233,10 @@ export default function ClientsPage() {
         console.error(error);
         loadedSales = true;
         updateLoading();
-        alert("No se pudieron cargar las ventas.");
+        showPremiumAlert("No se pudieron cargar las ventas.", {
+          title: "Error al cargar ventas",
+          tone: "warning",
+        });
       },
       STORE_ID
     );
@@ -296,12 +303,19 @@ export default function ClientsPage() {
       0
     );
 
+    const accumulatedPromotionSavings = customerMetrics.reduce(
+      (total, customer) =>
+        total + Number(customer.promotionSavings || 0),
+      0
+    );
+
     return {
       totalCustomers,
       frequentCustomers,
       bestCustomer,
       accumulatedSales,
       accumulatedProducts,
+      accumulatedPromotionSavings,
     };
   }, [customerMetrics, rankedCustomers]);
 
@@ -425,7 +439,10 @@ export default function ClientsPage() {
         customerForm.documentNumber || ""
       ).trim()
     ) {
-      alert("La cédula es obligatoria.");
+      showPremiumAlert("La cédula es obligatoria.", {
+        title: "Información requerida",
+        tone: "warning",
+      });
       return;
     }
 
@@ -434,8 +451,12 @@ export default function ClientsPage() {
         customerForm.fullName || ""
       ).trim()
     ) {
-      alert(
-        "El nombre del cliente es obligatorio."
+      showPremiumAlert(
+        "El nombre del cliente es obligatorio.",
+        {
+          title: "Información requerida",
+          tone: "warning",
+        }
       );
       return;
     }
@@ -483,9 +504,13 @@ export default function ClientsPage() {
     } catch (error) {
       console.error(error);
 
-      alert(
+      showPremiumAlert(
         error?.message ||
-          "No se pudo guardar el cliente."
+          "No se pudo guardar el cliente.",
+        {
+          title: "No se pudo guardar",
+          tone: "warning",
+        }
       );
     } finally {
       setSaving(false);
@@ -566,7 +591,9 @@ export default function ClientsPage() {
               stats.accumulatedProducts || 0
             ).toLocaleString(
               "es-CO"
-            )} producto(s) comprados`}
+            )} producto(s) · ahorro promo ${formatCurrency(
+              stats.accumulatedPromotionSavings || 0
+            )}`}
             compactValue
           />
         </section>
@@ -980,9 +1007,17 @@ function CustomerRow({
         {customer.purchases || 0}
       </td>
 
-      <td className="px-4 py-3 text-[11px] font-medium">
-        {formatCurrency(
-          customer.totalSpent || 0
+      <td className="px-4 py-3">
+        <p className="text-[11px] font-medium">
+          {formatCurrency(
+            customer.totalSpent || 0
+          )}
+        </p>
+
+        {Number(customer.promotionSavings || 0) > 0 && (
+          <p className="mt-0.5 text-[8.5px] font-medium text-red-600">
+            Ahorró {formatCurrency(customer.promotionSavings)}
+          </p>
         )}
       </td>
 

@@ -14,6 +14,7 @@ import {
   Package,
   PieChart,
   ShoppingBag,
+  Sparkles,
   TrendingDown,
   TrendingUp,
   Trophy,
@@ -22,11 +23,15 @@ import {
 } from "lucide-react";
 
 import { STORE_ID } from "../../services/categories.service";
-import { subscribeProducts } from "../../services/products.service";
+import {
+  getEffectiveProductPromotion,
+  subscribeProducts,
+} from "../../services/products.service";
 import {
   getSaleRecognitionDate,
   subscribeSales,
 } from "../../services/sales.service";
+import { getSaleCommercialTrace } from "../../services/promotionAccounting.service";
 import {
   CASH_METHODS,
   CASH_BALANCE_METHODS,
@@ -301,12 +306,23 @@ function calculateMetrics(sales) {
       const total = numberOrZero(sale.total);
       const totalCost = getSaleCost(sale);
       const profit = getSaleProfit(sale);
+      const commercialTrace = getSaleCommercialTrace(sale);
 
       acc.salesCount += 1;
       acc.units += getSaleUnits(sale);
       acc.revenue += total;
       acc.cost += totalCost;
       acc.profit += profit;
+
+      acc.regularRevenue += commercialTrace.regularSubtotal;
+      acc.promotionDiscount += commercialTrace.promotionDiscount;
+      acc.manualDiscount += commercialTrace.manualDiscount;
+      acc.totalDiscount += commercialTrace.totalDiscount;
+      acc.promotionUnits += commercialTrace.promotionUnits;
+
+      if (commercialTrace.hasPromotion) {
+        acc.promotionSales += 1;
+      }
 
       return acc;
     },
@@ -316,6 +332,14 @@ function calculateMetrics(sales) {
       revenue: 0,
       cost: 0,
       profit: 0,
+
+      regularRevenue: 0,
+      promotionDiscount: 0,
+      manualDiscount: 0,
+      totalDiscount: 0,
+      promotionSales: 0,
+      promotionUnits: 0,
+
       margin: 0,
       averageTicket: 0,
     }
@@ -333,10 +357,16 @@ function finalizeMetrics(metrics) {
       ? metrics.revenue / metrics.salesCount
       : 0;
 
+  const promotionDiscountRate =
+    metrics.regularRevenue > 0
+      ? (metrics.promotionDiscount / metrics.regularRevenue) * 100
+      : 0;
+
   return {
     ...metrics,
     margin,
     averageTicket,
+    promotionDiscountRate,
   };
 }
 
@@ -1019,6 +1049,36 @@ function CashTodayPanel({
               </div>
             </div>
           )}
+
+          {(numberOrZero(summary.promotionDiscountTotal) > 0 ||
+            numberOrZero(summary.manualDiscountTotal) > 0) && (
+            <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
+              <div className="rounded-xl bg-[#f7f7f8] px-3 py-2.5">
+                <p className="text-[9px] text-black/40">Valor normal</p>
+                <p className="mt-1 text-[11px] font-medium">
+                  {formatCurrency(summary.regularSalesTotal)}
+                </p>
+              </div>
+              <div className="rounded-xl bg-red-50 px-3 py-2.5">
+                <p className="text-[9px] text-red-600">Ahorro promo</p>
+                <p className="mt-1 text-[11px] font-medium text-red-700">
+                  {formatCurrency(summary.promotionDiscountTotal)}
+                </p>
+              </div>
+              <div className="rounded-xl bg-orange-50 px-3 py-2.5">
+                <p className="text-[9px] text-orange-600">Desc. manual</p>
+                <p className="mt-1 text-[11px] font-medium text-orange-700">
+                  {formatCurrency(summary.manualDiscountTotal)}
+                </p>
+              </div>
+              <div className="rounded-xl bg-emerald-50 px-3 py-2.5">
+                <p className="text-[9px] text-emerald-700">Cobrado</p>
+                <p className="mt-1 text-[11px] font-medium text-emerald-800">
+                  {formatCurrency(summary.totalSales)}
+                </p>
+              </div>
+            </div>
+          )}
         </div>
 
         <div>
@@ -1410,6 +1470,7 @@ function DaySalesTable({ sales }) {
                 const items = getAllocatedSaleLines(sale);
                 const units = getSaleUnits(sale);
                 const profit = getSaleProfit(sale);
+                const commercialTrace = getSaleCommercialTrace(sale);
 
                 return (
                   <tr
@@ -1472,6 +1533,15 @@ function DaySalesTable({ sales }) {
                                     {" · Talla "}
                                     {item.size || "Talla única"}
                                   </p>
+
+                                  {item.isPromotion && (
+                                    <p className="mt-1 truncate text-[9px] font-medium text-red-600">
+                                      Promo {numberOrZero(item.promotionPercentage).toFixed(0)}%
+                                      {" · "}
+                                      {formatCurrency(item.regularUnitPrice)} →{" "}
+                                      {formatCurrency(item.unitPrice)}
+                                    </p>
+                                  )}
                                 </div>
 
                                 <div className="shrink-0 text-right">
@@ -1501,9 +1571,15 @@ function DaySalesTable({ sales }) {
                         {formatCurrency(sale.total)}
                       </p>
 
-                      {Number(sale.discount || 0) > 0 && (
+                      {commercialTrace.promotionDiscount > 0 && (
                         <p className="mt-1 text-[9px] text-red-600">
-                          - {formatCurrency(sale.discount)} desc.
+                          - {formatCurrency(commercialTrace.promotionDiscount)} promo
+                        </p>
+                      )}
+
+                      {commercialTrace.manualDiscount > 0 && (
+                        <p className="mt-0.5 text-[9px] text-orange-600">
+                          - {formatCurrency(commercialTrace.manualDiscount)} desc. manual
                         </p>
                       )}
                     </td>
@@ -1635,6 +1711,32 @@ function getSessionAnalytics(
         session.closingSaleCount !== undefined
           ? numberOrZero(session.closingSaleCount)
           : liveSummary.saleCount,
+
+      regularSalesTotal:
+        session.closingRegularSalesTotal !== undefined
+          ? numberOrZero(session.closingRegularSalesTotal)
+          : numberOrZero(liveSummary.regularSalesTotal),
+      promotionDiscountTotal:
+        session.closingPromotionDiscountTotal !== undefined
+          ? numberOrZero(session.closingPromotionDiscountTotal)
+          : numberOrZero(liveSummary.promotionDiscountTotal),
+      manualDiscountTotal:
+        session.closingManualDiscountTotal !== undefined
+          ? numberOrZero(session.closingManualDiscountTotal)
+          : numberOrZero(liveSummary.manualDiscountTotal),
+      totalDiscountTotal:
+        session.closingTotalDiscountTotal !== undefined
+          ? numberOrZero(session.closingTotalDiscountTotal)
+          : numberOrZero(liveSummary.totalDiscountTotal),
+      promotionSaleCount:
+        session.closingPromotionSaleCount !== undefined
+          ? numberOrZero(session.closingPromotionSaleCount)
+          : numberOrZero(liveSummary.promotionSaleCount),
+      promotionUnits:
+        session.closingPromotionUnits !== undefined
+          ? numberOrZero(session.closingPromotionUnits)
+          : numberOrZero(liveSummary.promotionUnits),
+
       pendingByProvider:
         session.closingPendingByProvider &&
         typeof session.closingPendingByProvider === "object"
@@ -1958,13 +2060,26 @@ export default function DashboardPage() {
         const stock = numberOrZero(product.stock);
         const costPrice = numberOrZero(product.costPrice);
         const salePrice = numberOrZero(product.salePrice);
+        const effectivePromotion = getEffectiveProductPromotion(product);
+        const effectiveSalePrice = effectivePromotion.active
+          ? numberOrZero(effectivePromotion.price)
+          : salePrice;
 
         acc.products += 1;
         acc.units += stock;
         acc.cost += costPrice * stock;
-        acc.potentialRevenue += salePrice * stock;
+
+        acc.regularPotentialRevenue += salePrice * stock;
+        acc.promotionPotentialDiscount +=
+          Math.max(salePrice - effectiveSalePrice, 0) * stock;
+
+        acc.potentialRevenue += effectiveSalePrice * stock;
         acc.potentialProfit +=
-          (salePrice - costPrice) * stock;
+          (effectiveSalePrice - costPrice) * stock;
+
+        if (effectivePromotion.active) {
+          acc.promotionalProducts += 1;
+        }
 
         if (stock <= 0) acc.emptyProducts += 1;
         if (stock > 0 && stock <= 3) {
@@ -1977,6 +2092,9 @@ export default function DashboardPage() {
         products: 0,
         units: 0,
         cost: 0,
+        regularPotentialRevenue: 0,
+        promotionPotentialDiscount: 0,
+        promotionalProducts: 0,
         potentialRevenue: 0,
         potentialProfit: 0,
         emptyProducts: 0,
@@ -2023,6 +2141,16 @@ export default function DashboardPage() {
           status: session.status,
           totalSales: summary.totalSales,
           saleCount: summary.saleCount,
+
+          regularSalesTotal: numberOrZero(summary.regularSalesTotal),
+          promotionDiscountTotal: numberOrZero(
+            summary.promotionDiscountTotal
+          ),
+          manualDiscountTotal: numberOrZero(summary.manualDiscountTotal),
+          totalDiscountTotal: numberOrZero(summary.totalDiscountTotal),
+          promotionSaleCount: numberOrZero(summary.promotionSaleCount),
+          promotionUnits: numberOrZero(summary.promotionUnits),
+
           expectedCash: summary.expectedCash,
           pendingByProvider: summary.pendingByProvider || {
             addi: 0,
@@ -2071,6 +2199,32 @@ export default function DashboardPage() {
         (sum, item) => sum + item.saleCount,
         0
       ),
+
+      regularSalesTotal: sessionRows.reduce(
+        (sum, item) => sum + item.regularSalesTotal,
+        0
+      ),
+      promotionDiscountTotal: sessionRows.reduce(
+        (sum, item) => sum + item.promotionDiscountTotal,
+        0
+      ),
+      manualDiscountTotal: sessionRows.reduce(
+        (sum, item) => sum + item.manualDiscountTotal,
+        0
+      ),
+      totalDiscountTotal: sessionRows.reduce(
+        (sum, item) => sum + item.totalDiscountTotal,
+        0
+      ),
+      promotionSaleCount: sessionRows.reduce(
+        (sum, item) => sum + item.promotionSaleCount,
+        0
+      ),
+      promotionUnits: sessionRows.reduce(
+        (sum, item) => sum + item.promotionUnits,
+        0
+      ),
+
       expectedCash: sessionRows.reduce(
         (sum, item) => sum + item.expectedCash,
         0
@@ -2732,6 +2886,44 @@ export default function DashboardPage() {
               />
             </section>
 
+            <section className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              <MetricCard
+                title="Valor a precio normal"
+                value={monthBMetrics.regularRevenue}
+                subtitle="Antes de promociones y descuentos"
+                icon={BadgeDollarSign}
+                currency
+                color="#64748b"
+              />
+
+              <MetricCard
+                title="Ahorro en promociones"
+                value={monthBMetrics.promotionDiscount}
+                subtitle={`${monthBMetrics.promotionSales} venta(s) · ${monthBMetrics.promotionUnits} unidad(es)`}
+                icon={Sparkles}
+                currency
+                color="#c1121f"
+              />
+
+              <MetricCard
+                title="Descuento manual"
+                value={monthBMetrics.manualDiscount}
+                subtitle="Descuentos adicionales en POS"
+                icon={TrendingDown}
+                currency
+                color="#ea580c"
+              />
+
+              <MetricCard
+                title="Descuento total"
+                value={monthBMetrics.totalDiscount}
+                subtitle={`Promo efectiva ${monthBMetrics.promotionDiscountRate.toFixed(1)}%`}
+                icon={CircleDollarSign}
+                currency
+                color="#7c3aed"
+              />
+            </section>
+
             <CashTodayPanel
               summary={todayCashSummary}
               onOpenCash={() => navigate("/admin/caja")}
@@ -2880,7 +3072,7 @@ export default function DashboardPage() {
               <MetricCard
                 title="Venta potencial"
                 value={inventoryMetrics.potentialRevenue}
-                subtitle="Si se vende todo"
+                subtitle={`Precio vigente · ${inventoryMetrics.promotionalProducts} promo(s)`}
                 icon={BadgeDollarSign}
                 currency
                 color="#db2777"
@@ -2889,7 +3081,9 @@ export default function DashboardPage() {
               <MetricCard
                 title="Ganancia potencial"
                 value={inventoryMetrics.potentialProfit}
-                subtitle="Utilidad esperada"
+                subtitle={`Con promociones actuales · ahorro ${formatCompactCurrency(
+                  inventoryMetrics.promotionPotentialDiscount
+                )}`}
                 icon={CircleDollarSign}
                 currency
                 color="#059669"
@@ -3062,6 +3256,44 @@ export default function DashboardPage() {
                 subtitle="Productos vendidos"
                 icon={Boxes}
                 color="#16a34a"
+              />
+            </section>
+
+            <section className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              <MetricCard
+                title="Valor normal"
+                value={selectedDayMetrics.regularRevenue}
+                subtitle="Sin promociones"
+                icon={BadgeDollarSign}
+                currency
+                color="#64748b"
+              />
+
+              <MetricCard
+                title="Ahorro promociones"
+                value={selectedDayMetrics.promotionDiscount}
+                subtitle={`${selectedDayMetrics.promotionUnits} unidad(es) en promoción`}
+                icon={Sparkles}
+                currency
+                color="#c1121f"
+              />
+
+              <MetricCard
+                title="Descuento manual"
+                value={selectedDayMetrics.manualDiscount}
+                subtitle="Adicional al precio promocional"
+                icon={TrendingDown}
+                currency
+                color="#ea580c"
+              />
+
+              <MetricCard
+                title="Descuento total"
+                value={selectedDayMetrics.totalDiscount}
+                subtitle={`${selectedDayMetrics.promotionSales} venta(s) con promoción`}
+                icon={CircleDollarSign}
+                currency
+                color="#7c3aed"
               />
             </section>
 

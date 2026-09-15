@@ -455,12 +455,23 @@ function normalizeProductVariants(productId, product = {}) {
         variant?.size || variant?.name || variant?.label
       );
 
+      const stock = normalizeQuantity(variant?.stock);
+
       return {
+        ...variant,
         id:
           normalizeText(variant?.id) ||
           createFallbackVariantId(productId, `${size}-${index}`),
         size,
-        stock: normalizeQuantity(variant?.stock),
+        stock,
+        ...(variant?.printedLabels !== undefined
+          ? {
+              printedLabels: Math.min(
+                normalizeQuantity(variant.printedLabels),
+                stock
+              ),
+            }
+          : {}),
       };
     });
   }
@@ -485,11 +496,24 @@ function calculateTotalStock(variants) {
 }
 
 function buildProductVariantPayload(variants) {
-  const normalizedVariants = variants.map((variant) => ({
-    id: normalizeText(variant.id),
-    size: normalizeSize(variant.size),
-    stock: normalizeQuantity(variant.stock),
-  }));
+  const normalizedVariants = variants.map((variant) => {
+    const stock = normalizeQuantity(variant.stock);
+
+    return {
+      ...variant,
+      id: normalizeText(variant.id),
+      size: normalizeSize(variant.size),
+      stock,
+      ...(variant?.printedLabels !== undefined
+        ? {
+            printedLabels: Math.min(
+              normalizeQuantity(variant.printedLabels),
+              stock
+            ),
+          }
+        : {}),
+    };
+  });
 
   const totalStock = calculateTotalStock(normalizedVariants);
   const sizes = normalizedVariants.map((variant) => variant.size);
@@ -748,6 +772,28 @@ function normalizeLegacySaleItem(sale) {
     promotionSource: normalizeText(sale.promotionSource),
     promotionNote: normalizeText(sale.promotionNote),
 
+    regularSubtotal:
+      sale.regularSubtotal !== undefined
+        ? normalizeMoney(sale.regularSubtotal)
+        : normalizeMoney(
+            sale.regularUnitPrice !== undefined
+              ? sale.regularUnitPrice
+              : sale.unitPrice
+          ) * normalizeQuantity(sale.quantity),
+    promotionDiscount:
+      sale.promotionDiscount !== undefined
+        ? normalizeMoney(sale.promotionDiscount)
+        : Math.max(
+            (normalizeMoney(
+              sale.regularUnitPrice !== undefined
+                ? sale.regularUnitPrice
+                : sale.unitPrice
+            ) -
+              normalizeMoney(sale.unitPrice)) *
+              normalizeQuantity(sale.quantity),
+            0
+          ),
+
     costPrice: normalizeMoney(sale.costPrice),
 
     subtotal: normalizeMoney(sale.total),
@@ -759,6 +805,10 @@ function normalizeLegacySaleItem(sale) {
 function normalizeSaleItem(item, index = 0) {
   const quantity = normalizeQuantity(item?.quantity);
   const unitPrice = normalizeMoney(item?.unitPrice);
+  const regularUnitPrice =
+    item?.regularUnitPrice !== undefined
+      ? normalizeMoney(item.regularUnitPrice)
+      : unitPrice;
   const costPrice = normalizeMoney(item?.costPrice);
 
   const subtotal =
@@ -800,15 +850,21 @@ function normalizeSaleItem(item, index = 0) {
     quantity,
     unitPrice,
 
-    regularUnitPrice:
-      item?.regularUnitPrice !== undefined
-        ? normalizeMoney(item.regularUnitPrice)
-        : unitPrice,
+    regularUnitPrice,
     isPromotion: Boolean(item?.isPromotion),
     promotionPrice: normalizeMoney(item?.promotionPrice),
     promotionPercentage: normalizeMoney(item?.promotionPercentage),
     promotionSource: normalizeText(item?.promotionSource),
     promotionNote: normalizeText(item?.promotionNote),
+
+    regularSubtotal:
+      item?.regularSubtotal !== undefined
+        ? normalizeMoney(item.regularSubtotal)
+        : regularUnitPrice * quantity,
+    promotionDiscount:
+      item?.promotionDiscount !== undefined
+        ? normalizeMoney(item.promotionDiscount)
+        : Math.max((regularUnitPrice - unitPrice) * quantity, 0),
 
     costPrice,
     subtotal,
@@ -833,6 +889,47 @@ function normalizeSaleDocument(sale) {
     0
   );
 
+  const calculatedRegularSubtotal = modernItems.reduce(
+    (total, item) =>
+      total +
+      (item?.regularSubtotal !== undefined
+        ? normalizeMoney(item.regularSubtotal)
+        : normalizeMoney(item.regularUnitPrice) *
+          normalizeQuantity(item.quantity)),
+    0
+  );
+
+  const calculatedPromotionDiscount = modernItems.reduce(
+    (total, item) =>
+      total +
+      (item?.promotionDiscount !== undefined
+        ? normalizeMoney(item.promotionDiscount)
+        : Math.max(
+            (normalizeMoney(item.regularUnitPrice) -
+              normalizeMoney(item.unitPrice)) *
+              normalizeQuantity(item.quantity),
+            0
+          )),
+    0
+  );
+
+  const calculatedPromotionUnits = modernItems.reduce(
+    (total, item) =>
+      total +
+      (Boolean(item?.isPromotion)
+        ? normalizeQuantity(item.quantity)
+        : 0),
+    0
+  );
+
+  const calculatedPromotionLineCount = modernItems.filter(
+    (item) => Boolean(item?.isPromotion)
+  ).length;
+
+  const calculatedHasPromotion =
+    calculatedPromotionUnits > 0 ||
+    calculatedPromotionLineCount > 0;
+
   const calculatedTotalCost = modernItems.reduce(
     (total, item) => total + normalizeMoney(item.totalCost),
     0
@@ -843,17 +940,62 @@ function normalizeSaleDocument(sale) {
     0
   );
 
-  const discount = normalizeMoney(sale.discount);
+  const discount = normalizeMoney(
+    sale.manualDiscount !== undefined
+      ? sale.manualDiscount
+      : sale.discount
+  );
 
   const subtotal =
     sale.subtotal !== undefined
       ? normalizeMoney(sale.subtotal)
       : calculatedSubtotal;
 
+  const regularSubtotal =
+    sale.regularSubtotal !== undefined
+      ? normalizeMoney(sale.regularSubtotal)
+      : Math.max(calculatedRegularSubtotal, subtotal);
+
+  const promotionDiscount =
+    sale.promotionDiscount !== undefined
+      ? normalizeMoney(sale.promotionDiscount)
+      : calculatedHasPromotion
+        ? Math.max(
+            calculatedPromotionDiscount,
+            regularSubtotal - subtotal,
+            0
+          )
+        : calculatedPromotionDiscount;
+
+  const promotionSubtotal =
+    sale.promotionSubtotal !== undefined
+      ? normalizeMoney(sale.promotionSubtotal)
+      : subtotal;
+
   const total =
     sale.total !== undefined
       ? normalizeMoney(sale.total)
       : Math.max(subtotal - discount, 0);
+
+  const totalDiscount =
+    sale.totalDiscount !== undefined
+      ? normalizeMoney(sale.totalDiscount)
+      : promotionDiscount + discount;
+
+  const promotionUnits =
+    sale.promotionUnits !== undefined
+      ? normalizeQuantity(sale.promotionUnits)
+      : calculatedPromotionUnits;
+
+  const promotionLineCount =
+    sale.promotionLineCount !== undefined
+      ? normalizeQuantity(sale.promotionLineCount)
+      : calculatedPromotionLineCount;
+
+  const hasPromotion =
+    sale.hasPromotion !== undefined
+      ? Boolean(sale.hasPromotion)
+      : promotionDiscount > 0 || promotionUnits > 0;
 
   const amountReceived =
     sale.amountReceived !== undefined
@@ -885,6 +1027,18 @@ function normalizeSaleDocument(sale) {
         ? normalizeQuantity(sale.uniqueItems)
         : modernItems.length,
 
+    regularSubtotal,
+    promotionDiscount,
+    promotionSubtotal: Math.min(
+      promotionSubtotal,
+      regularSubtotal || promotionSubtotal
+    ),
+    manualDiscount: discount,
+    totalDiscount,
+    hasPromotion,
+    promotionUnits,
+    promotionLineCount,
+
     subtotal,
     discount,
     total,
@@ -897,7 +1051,10 @@ function normalizeSaleDocument(sale) {
     profit:
       sale.profit !== undefined
         ? Number(sale.profit || 0)
-        : calculatedProfit,
+        : total -
+          (sale.totalCost !== undefined
+            ? normalizeMoney(sale.totalCost)
+            : calculatedTotalCost),
 
     amountReceived,
     change,
@@ -1759,6 +1916,11 @@ export async function createMultiItemSale({
 
     const saleItems = [];
 
+    let regularSubtotal = 0;
+    let promotionDiscount = 0;
+    let promotionUnits = 0;
+    let promotionLineCount = 0;
+
     let subtotal = 0;
     let totalCost = 0;
     let totalItems = 0;
@@ -1775,6 +1937,7 @@ export async function createMultiItemSale({
       const lineProfit =
         lineSubtotal - lineTotalCost;
 
+      regularSubtotal += lineSubtotal;
       subtotal += lineSubtotal;
       totalCost += lineTotalCost;
       totalItems += item.quantity;
@@ -1807,6 +1970,9 @@ export async function createMultiItemSale({
         promotionPercentage: 0,
         promotionSource: "",
         promotionNote: "",
+
+        regularSubtotal: lineSubtotal,
+        promotionDiscount: 0,
 
         costPrice: item.costPrice,
 
@@ -1884,9 +2050,23 @@ export async function createMultiItemSale({
           : regularUnitPrice;
 
         const costPrice = normalizeMoney(product.costPrice);
+        const lineRegularSubtotal =
+          regularUnitPrice * requestedQuantity;
         const lineSubtotal = unitPrice * requestedQuantity;
+        const linePromotionDiscount = Math.max(
+          lineRegularSubtotal - lineSubtotal,
+          0
+        );
         const lineTotalCost = costPrice * requestedQuantity;
         const lineProfit = lineSubtotal - lineTotalCost;
+
+        regularSubtotal += lineRegularSubtotal;
+        promotionDiscount += linePromotionDiscount;
+
+        if (promotionActive) {
+          promotionUnits += requestedQuantity;
+          promotionLineCount += 1;
+        }
 
         subtotal += lineSubtotal;
         totalCost += lineTotalCost;
@@ -1922,6 +2102,9 @@ export async function createMultiItemSale({
           promotionSource,
           promotionNote,
 
+          regularSubtotal: lineRegularSubtotal,
+          promotionDiscount: linePromotionDiscount,
+
           costPrice,
 
           subtotal: lineSubtotal,
@@ -1955,7 +2138,22 @@ export async function createMultiItemSale({
       throw new Error("El descuento no puede ser mayor al subtotal de la venta.");
     }
 
-    const total = Math.max(subtotal - cleanDiscount, 0);
+    const promotionSubtotal = subtotal;
+    const manualDiscount = cleanDiscount;
+    const totalDiscount = promotionDiscount + manualDiscount;
+    const hasPromotion =
+      promotionDiscount > 0 || promotionUnits > 0;
+
+    const total = Math.max(subtotal - manualDiscount, 0);
+
+    if (
+      hasPromotion &&
+      isDeferredPaymentMethod(cleanPaymentMethod)
+    ) {
+      throw new Error(
+        "Los productos en promoción no pueden pagarse con Addi o Sistecrédito. Selecciona un método de pago inmediato."
+      );
+    }
 
     const normalizedPayments = normalizePayments({
       paymentMethod: cleanPaymentMethod,
@@ -2076,8 +2274,17 @@ export async function createMultiItemSale({
       totalItems,
       uniqueItems: saleItems.length,
 
+      regularSubtotal,
+      promotionDiscount,
+      promotionSubtotal,
+      manualDiscount,
+      totalDiscount,
+      hasPromotion,
+      promotionUnits,
+      promotionLineCount,
+
       subtotal,
-      discount: cleanDiscount,
+      discount: manualDiscount,
       total,
 
       totalCost,
@@ -2160,8 +2367,17 @@ export async function createMultiItemSale({
       totalItems,
       uniqueItems: saleItems.length,
 
+      regularSubtotal,
+      promotionDiscount,
+      promotionSubtotal,
+      manualDiscount,
+      totalDiscount,
+      hasPromotion,
+      promotionUnits,
+      promotionLineCount,
+
       subtotal,
-      discount: cleanDiscount,
+      discount: manualDiscount,
       total,
 
       totalCost,

@@ -21,6 +21,7 @@ import { STORE_ID } from "../../services/categories.service";
 import { getCurrentUserActor } from "../../services/auth.service";
 import { formatCurrency } from "../../utils/money";
 import { subscribeSales } from "../../services/sales.service";
+import { getSaleCommercialTrace } from "../../services/promotionAccounting.service";
 import {
   CASH_BALANCE_METHODS,
   CASH_METHODS,
@@ -745,6 +746,8 @@ function OpenSessionDashboard({
         </article>
       </section>
 
+      <CommercialTracePanel summary={summary} />
+
       <section className="mt-4">
         <div className="mb-2 flex flex-wrap items-end justify-between gap-3">
           <div>
@@ -812,6 +815,55 @@ function OpenSessionDashboard({
         </aside>
       </section>
     </>
+  );
+}
+
+function CommercialTracePanel({ summary }) {
+  const promotionSavings = Number(summary?.promotionDiscountTotal || 0);
+  const manualDiscount = Number(summary?.manualDiscountTotal || 0);
+
+  return (
+    <section className="mt-4 rounded-[20px] border border-black/[0.055] bg-white p-4 shadow-[0_10px_28px_rgba(15,23,42,0.025)]">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <p className="text-[9px] font-semibold uppercase tracking-[0.1em] text-red-600">
+            Trazabilidad comercial
+          </p>
+          <h2 className="mt-1 text-[14px] font-semibold tracking-[-0.025em]">
+            Precio normal, promociones y dinero realmente cobrado
+          </h2>
+          <p className="mt-0.5 text-[9px] text-black/36">
+            Las promociones son información comercial; Caja solo recibe el valor final cobrado.
+          </p>
+        </div>
+
+        <span className="rounded-full bg-red-50 px-3 py-1.5 text-[8px] font-semibold text-red-600">
+          {Number(summary?.promotionSaleCount || 0)} venta(s) con promo ·{" "}
+          {Number(summary?.promotionUnits || 0)} unidad(es)
+        </span>
+      </div>
+
+      <div className="mt-3 grid grid-cols-2 gap-2 lg:grid-cols-4">
+        <HistoryMoneyBox
+          label="Valor normal"
+          value={formatCurrency(summary?.regularSalesTotal || 0)}
+        />
+        <HistoryMoneyBox
+          label="Ahorro promociones"
+          value={formatCurrency(promotionSavings)}
+          alert={promotionSavings > 0}
+        />
+        <HistoryMoneyBox
+          label="Descuento manual"
+          value={formatCurrency(manualDiscount)}
+          alert={manualDiscount > 0}
+        />
+        <HistoryMoneyBox
+          label="Cobrado"
+          value={formatCurrency(summary?.totalSales || 0)}
+        />
+      </div>
+    </section>
   );
 }
 
@@ -1721,6 +1773,48 @@ function CashHistoryDetailModal({
       )
     : calculatedSummary.saleCount;
 
+  const regularSalesTotal = isClosed
+    ? numericOrFallback(
+        session.closingRegularSalesTotal,
+        calculatedSummary.regularSalesTotal
+      )
+    : calculatedSummary.regularSalesTotal;
+
+  const promotionDiscountTotal = isClosed
+    ? numericOrFallback(
+        session.closingPromotionDiscountTotal,
+        calculatedSummary.promotionDiscountTotal
+      )
+    : calculatedSummary.promotionDiscountTotal;
+
+  const manualDiscountTotal = isClosed
+    ? numericOrFallback(
+        session.closingManualDiscountTotal,
+        calculatedSummary.manualDiscountTotal
+      )
+    : calculatedSummary.manualDiscountTotal;
+
+  const totalDiscountTotal = isClosed
+    ? numericOrFallback(
+        session.closingTotalDiscountTotal,
+        calculatedSummary.totalDiscountTotal
+      )
+    : calculatedSummary.totalDiscountTotal;
+
+  const promotionSaleCount = isClosed
+    ? numericOrFallback(
+        session.closingPromotionSaleCount,
+        calculatedSummary.promotionSaleCount
+      )
+    : calculatedSummary.promotionSaleCount;
+
+  const promotionUnits = isClosed
+    ? numericOrFallback(
+        session.closingPromotionUnits,
+        calculatedSummary.promotionUnits
+      )
+    : calculatedSummary.promotionUnits;
+
   const pendingByProvider = isClosed
     ? {
         ...calculatedSummary.pendingByProvider,
@@ -1962,6 +2056,44 @@ function CashHistoryDetailModal({
                   />
                 </div>
               )}
+            </HistorySection>
+          </div>
+
+          <div className="mt-3">
+            <HistorySection
+              title="Trazabilidad de promociones y descuentos"
+              icon={Landmark}
+            >
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+                <HistoryMethodBox
+                  label="Valor normal"
+                  value={regularSalesTotal}
+                />
+                <HistoryMethodBox
+                  label="Promo descontado"
+                  value={promotionDiscountTotal}
+                />
+                <HistoryMethodBox
+                  label="Desc. manual"
+                  value={manualDiscountTotal}
+                />
+                <HistoryMethodBox
+                  label="Descuento total"
+                  value={totalDiscountTotal}
+                />
+                <HistoryMethodBox
+                  label="Cobrado"
+                  value={totalSales}
+                />
+                <div className="min-w-0 rounded-[11px] border border-black/[0.04] bg-[#fafafa] px-3 py-2.5">
+                  <p className="truncate text-[8px] font-medium text-black/38">
+                    Ventas / unidades promo
+                  </p>
+                  <p className="mt-1 truncate text-[11px] font-semibold">
+                    {promotionSaleCount} / {promotionUnits}
+                  </p>
+                </div>
+              </div>
             </HistorySection>
           </div>
 
@@ -2262,6 +2394,8 @@ function HistoryMethodBox({
 }
 
 function HistorySaleRow({ sale }) {
+  const commercialTrace = getSaleCommercialTrace(sale);
+
   return (
     <article className="flex items-center gap-3 bg-white px-3 py-2.5">
       <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[10px] bg-red-50 text-red-600">
@@ -2285,11 +2419,27 @@ function HistorySaleRow({ sale }) {
             "Venta sin cliente"}{" "}
           · {getSalePaymentSummary(sale)}
         </p>
+
+        {commercialTrace.promotionDiscount > 0 && (
+          <p className="mt-0.5 truncate text-[8px] font-medium text-red-600">
+            Promo: -{formatCurrency(commercialTrace.promotionDiscount)}
+            {commercialTrace.manualDiscount > 0
+              ? ` · Manual: -${formatCurrency(commercialTrace.manualDiscount)}`
+              : ""}
+          </p>
+        )}
       </div>
 
-      <strong className="shrink-0 text-[10.5px] font-semibold">
-        {formatCurrency(sale.total)}
-      </strong>
+      <div className="shrink-0 text-right">
+        <strong className="text-[10.5px] font-semibold">
+          {formatCurrency(sale.total)}
+        </strong>
+        {commercialTrace.regularSubtotal > Number(sale.total || 0) && (
+          <p className="mt-0.5 text-[7.5px] text-black/30 line-through">
+            {formatCurrency(commercialTrace.regularSubtotal)}
+          </p>
+        )}
+      </div>
     </article>
   );
 }

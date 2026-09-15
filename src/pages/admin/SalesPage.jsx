@@ -739,6 +739,24 @@ export default function SalesPage() {
     };
   }, [cart, checkout]);
 
+  const cartHasPromotion = useMemo(
+    () => cart.some((item) => Boolean(item?.isPromotion)),
+    [cart]
+  );
+
+  useEffect(() => {
+    if (
+      cartHasPromotion &&
+      isDeferredPaymentMethod(checkout.paymentMethod)
+    ) {
+      setCheckout((current) => ({
+        ...current,
+        paymentMethod: "efectivo",
+        amountReceived: "",
+      }));
+    }
+  }, [cartHasPromotion, checkout.paymentMethod]);
+
   function updateCheckout(field, value) {
     setCheckout((current) => ({ ...current, [field]: value }));
   }
@@ -1254,6 +1272,16 @@ export default function SalesPage() {
     }
 
     if (
+      cartHasPromotion &&
+      isDeferredPaymentMethod(checkout.paymentMethod)
+    ) {
+      showPremiumAlert(
+        "Las promociones no aplican con Addi ni Sistecrédito. Selecciona un método de pago inmediato."
+      );
+      return;
+    }
+
+    if (
       checkout.paymentMethod === "efectivo" &&
       cartSummary.amountReceived < cartSummary.total
     ) {
@@ -1625,6 +1653,7 @@ export default function SalesPage() {
           summary={cartSummary}
           selling={selling}
           isAdmin={isAdmin}
+          hasPromotion={cartHasPromotion}
           customerLookup={customerLookup}
           onClose={() => setMobileCartOpen(false)}
           onUpdateCheckout={updateCheckout}
@@ -1797,7 +1826,7 @@ function ProductSaleCard({ product, promotionSettings, onAdd }) {
                     {formatCurrency(regularPrice)}
                   </p>
                   <p className="mt-0.5 truncate text-[7.5px] font-medium text-amber-700">
-                    -{promotion.percentage}%{promotion.note ? ` · ${promotion.note}` : ""}
+                    -{promotion.percentage}%
                   </p>
                 </>
               ) : (
@@ -1828,6 +1857,7 @@ function CartPanel(props) {
     summary,
     selling,
     isAdmin,
+    hasPromotion,
     customerLookup,
     onUpdateCheckout,
     onCustomerDocumentChange,
@@ -1890,6 +1920,7 @@ function CartPanel(props) {
             checkout={checkout}
             summary={summary}
             customerLookup={customerLookup}
+            hasPromotion={hasPromotion}
             onUpdate={onUpdateCheckout}
             onCustomerDocumentChange={onCustomerDocumentChange}
             onCustomerPhoneChange={onCustomerPhoneChange}
@@ -2049,6 +2080,7 @@ function CheckoutFields({
   checkout,
   summary,
   customerLookup,
+  hasPromotion = false,
   onUpdate,
   onCustomerDocumentChange,
   onCustomerPhoneChange,
@@ -2237,11 +2269,34 @@ function CheckoutFields({
           <option value="nequi">Nequi</option>
           <option value="daviplata">Daviplata</option>
           <option value="tarjeta">Tarjeta</option>
-          <option value="addi">Addi</option>
-          <option value="sistecredito">Sistecrédito</option>
+          <option value="addi" disabled={hasPromotion}>
+            Addi{hasPromotion ? " · no disponible con promociones" : ""}
+          </option>
+          <option value="sistecredito" disabled={hasPromotion}>
+            Sistecrédito{hasPromotion ? " · no disponible con promociones" : ""}
+          </option>
           <option value="mixto">Mixto</option>
           <option value="otro">Otro</option>
         </select>
+
+        {hasPromotion && (
+          <div className="rounded-2xl border border-red-100 bg-red-50/70 px-3 py-2.5">
+            <div className="flex items-start gap-2.5">
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-white text-red-600 ring-1 ring-red-100">
+                <BadgePercent size={15} />
+              </div>
+
+              <div className="min-w-0">
+                <p className="text-[10px] font-medium text-red-700">
+                  Venta con promoción
+                </p>
+                <p className="mt-0.5 text-[9px] leading-4 text-black/48">
+                  Los productos en promoción deben pagarse con un método inmediato. Addi y Sistecrédito no están disponibles para esta venta.
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
 
         {checkout.paymentMethod === "mixto" && (
           <div className="rounded-2xl border border-black/[0.07] bg-[#fafafa] p-3">

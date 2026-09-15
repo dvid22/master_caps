@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { useAuth } from "../../context/AuthContext";
 import {
   ArrowLeft,
   BadgePercent,
@@ -35,11 +36,22 @@ import {
   subscribeProducts,
 } from "../../services/products.service";
 import { subscribeSales } from "../../services/sales.service";
-import { updateSale } from "../../services/sales-edit.service";
+import {
+  deleteSaleCompletely,
+  updateSale,
+} from "../../services/sales-edit.service";
+import {
+  getPromotionSavingsForItem,
+  getSaleCommercialTrace,
+} from "../../services/promotionAccounting.service";
 import { normalizeCustomerDocument } from "../../services/customers.service";
 import { getCurrentUserActor } from "../../services/auth.service";
 import { subscribeUsers } from "../../services/users.service";
 import { formatCurrency } from "../../utils/money";
+import {
+  showPremiumAlert,
+  showPremiumConfirm,
+} from "../../utils/premiumDialog";
 import ThermalReceipt from "../../components/sales/ThermalReceipt";
 import {
   isProductImagePreloaded,
@@ -408,6 +420,8 @@ function saleMatchesSeller(sale, sellerFilter) {
 
 export default function SalesHistoryPage() {
   const navigate = useNavigate();
+  const { role } = useAuth();
+  const isAdmin = role === "admin";
 
   const [sales, setSales] = useState([]);
   const [products, setProducts] = useState([]);
@@ -426,6 +440,7 @@ export default function SalesHistoryPage() {
   const [loading, setLoading] = useState(true);
   const [editingSale, setEditingSale] = useState(null);
   const [receiptSale, setReceiptSale] = useState(null);
+  const [deletingSaleId, setDeletingSaleId] = useState("");
 
   useEffect(() => {
     const unsubscribeSales = subscribeSales(
@@ -729,6 +744,73 @@ export default function SalesHistoryPage() {
     setDateTo("");
   }
 
+  async function handleDeleteSale(sale) {
+    if (!sale?.id || !isAdmin || deletingSaleId) {
+      return;
+    }
+
+    const trace = getSaleCommercialTrace(sale);
+    const reservationWarning =
+      sale.source === "reservation" ||
+      sale.reservationGroupId ||
+      sale.reservationId
+        ? "\n\nEsta venta proviene de un apartado. También se eliminarán el apartado asociado y sus abonos vinculados a caja para que la operación desaparezca completamente."
+        : "";
+
+    const confirmed = await showPremiumConfirm({
+      eyebrow: "Acción administrativa",
+      title: `Eliminar ${sale.saleNumber || "venta"}`,
+      message:
+        `Esta operación restaurará ${Number(
+          sale.totalItems || 0
+        ).toLocaleString("es-CO")} unidad(es) al inventario y retirará la venta de Caja, Dashboard, métricas del cliente, reportes y financiaciones.\n\nTotal cobrado: ${formatCurrency(
+          trace.total
+        )}${reservationWarning}\n\nEl número de venta no se reutilizará y quedará una auditoría interna de la eliminación.`,
+      confirmText: "Eliminar venta",
+      cancelText: "Conservar venta",
+      tone: "warning",
+    });
+
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      setDeletingSaleId(sale.id);
+
+      await deleteSaleCompletely({
+        saleId: sale.id,
+        storeId: STORE_ID,
+        actor: {
+          ...getCurrentUserActor(),
+          role,
+        },
+        reason: "Venta eliminada desde Historial de ventas",
+      });
+
+      setEditingSale(null);
+      setReceiptSale(null);
+      setSelectedSaleId("");
+
+      await showPremiumAlert(
+        "La venta fue retirada y el inventario, la caja y las métricas relacionadas quedaron reversadas.",
+        {
+          title: "Venta eliminada",
+          tone: "success",
+        }
+      );
+    } catch (error) {
+      console.error("No se pudo eliminar la venta:", error);
+
+      await showPremiumAlert(
+        error?.message ||
+          "No se pudo eliminar la venta."
+      );
+    } finally {
+      setDeletingSaleId("");
+    }
+  }
+
   return (
     <main className="min-h-screen bg-white px-[clamp(10px,1.2vw,24px)] py-[clamp(10px,1vw,20px)] text-[#171717]">
       <section className="mx-auto w-full max-w-[1920px]">
@@ -938,6 +1020,13 @@ export default function SalesHistoryPage() {
                 onPrint={() =>
                   setReceiptSale(selectedSale)
                 }
+                canDelete={isAdmin}
+                deleting={
+                  deletingSaleId === selectedSale.id
+                }
+                onDelete={() =>
+                  handleDeleteSale(selectedSale)
+                }
               />
             ) : (
               <div className="flex min-h-[clamp(420px,58vh,620px)] items-center justify-center rounded-[clamp(14px,1vw,18px)] border border-black/[0.06] bg-white p-[clamp(18px,2vw,32px)] text-center">
@@ -1042,6 +1131,7 @@ function SaleListItem({
     sale.customerDocument ||
     "Venta sin cliente";
   const financing = getSettlementInfo(sale);
+  const commercialTrace = getSaleCommercialTrace(sale);
 
   return (
     <button
@@ -1067,6 +1157,13 @@ function SaleListItem({
             {sale.paymentMethod === "mixto" && (
               <span className="rounded-full border border-blue-100 bg-blue-50/70 px-2 py-0.5 text-[7px] font-semibold text-blue-700">
                 MIXTO
+              </span>
+            )}
+
+            {commercialTrace.hasPromotion && (
+              <span className="inline-flex items-center gap-1 rounded-full border border-red-100 bg-red-50 px-2 py-0.5 text-[7px] font-semibold text-red-700">
+                <BadgePercent size={7} />
+                PROMO
               </span>
             )}
 
@@ -1129,10 +1226,14 @@ function SaleDetail({
   productsReady,
   onEdit,
   onPrint,
+  canDelete = false,
+  deleting = false,
+  onDelete,
 }) {
   const items = getSaleItems(sale);
   const payments = getSalePayments(sale);
   const financing = getSettlementInfo(sale);
+  const commercialTrace = getSaleCommercialTrace(sale);
 
   return (
     <section className="overflow-hidden rounded-[clamp(15px,1.1vw,20px)] border border-black/[0.055] bg-white shadow-[0_14px_36px_rgba(15,23,42,0.032)]">
@@ -1146,6 +1247,13 @@ function SaleDetail({
             {Number(sale.editCount || 0) > 0 && (
               <span className="rounded-full bg-blue-50 px-2 py-0.5 text-[6.5px] font-semibold text-blue-700">
                 Editada {sale.editCount} vez/veces
+              </span>
+            )}
+
+            {commercialTrace.hasPromotion && (
+              <span className="inline-flex items-center gap-1 rounded-full border border-red-100 bg-red-50 px-2 py-0.5 text-[6.5px] font-semibold text-red-700">
+                <BadgePercent size={7} />
+                PROMOCIÓN
               </span>
             )}
 
@@ -1192,11 +1300,24 @@ function SaleDetail({
           <button
             type="button"
             onClick={onEdit}
-            className="inline-flex h-10 items-center gap-1.5 rounded-[11px] bg-red-600 px-3.5 text-[10px] font-semibold text-white shadow-[0_8px_20px_rgba(220,38,38,0.13)] transition hover:-translate-y-0.5 hover:bg-red-700"
+            disabled={deleting}
+            className="inline-flex h-10 items-center gap-1.5 rounded-[11px] bg-red-600 px-3.5 text-[10px] font-semibold text-white shadow-[0_8px_20px_rgba(220,38,38,0.13)] transition hover:-translate-y-0.5 hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-45"
           >
             <Pencil size={11} />
             Editar
           </button>
+
+          {canDelete && (
+            <button
+              type="button"
+              onClick={onDelete}
+              disabled={deleting}
+              className="inline-flex h-10 items-center gap-1.5 rounded-[11px] border border-red-200 bg-white px-3.5 text-[10px] font-semibold text-red-600 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-45"
+            >
+              <Trash2 size={11} />
+              {deleting ? "Eliminando..." : "Eliminar"}
+            </button>
+          )}
         </div>
       </div>
 
@@ -1389,16 +1510,44 @@ function SaleDetail({
           <div className="my-4 border-t border-black/[0.055]" />
 
           <section className="space-y-2">
-            <SummaryMoneyRow
-              label="Subtotal"
-              value={sale.subtotal}
-            />
+            {commercialTrace.hasPromotion && (
+              <>
+                <SummaryMoneyRow
+                  label="Valor regular"
+                  value={commercialTrace.regularSubtotal}
+                />
+                <SummaryMoneyRow
+                  label="Ahorro promociones"
+                  value={commercialTrace.promotionDiscount}
+                  negative
+                />
+              </>
+            )}
 
             <SummaryMoneyRow
-              label="Descuento"
-              value={-Number(sale.discount || 0)}
-              negative
+              label={
+                commercialTrace.hasPromotion
+                  ? "Subtotal promocional"
+                  : "Subtotal"
+              }
+              value={commercialTrace.promotionSubtotal}
             />
+
+            {commercialTrace.manualDiscount > 0 && (
+              <SummaryMoneyRow
+                label="Descuento adicional"
+                value={commercialTrace.manualDiscount}
+                negative
+              />
+            )}
+
+            {commercialTrace.totalDiscount > 0 && (
+              <SummaryMoneyRow
+                label="Descuento total"
+                value={commercialTrace.totalDiscount}
+                negative
+              />
+            )}
 
             {Number(sale.change || 0) > 0 && (
               <SummaryMoneyRow
@@ -1656,6 +1805,30 @@ function StableProductImage({
   );
 }
 
+function getItemPromotionPercentage(item = {}) {
+  const explicit = Number(item?.promotionPercentage || 0);
+
+  if (Number.isFinite(explicit) && explicit > 0) {
+    return Math.round(explicit * 100) / 100;
+  }
+
+  const regular = Number(
+    item?.regularUnitPrice ?? item?.unitPrice ?? 0
+  );
+  const current = Number(item?.unitPrice || 0);
+
+  if (
+    !Number.isFinite(regular) ||
+    !Number.isFinite(current) ||
+    regular <= 0 ||
+    current >= regular
+  ) {
+    return 0;
+  }
+
+  return Math.round((1 - current / regular) * 10000) / 100;
+}
+
 function ProductLine({
   item,
   imageUrl,
@@ -1678,9 +1851,11 @@ function ProductLine({
           </p>
 
           {item.isPromotion && (
-            <span className="inline-flex items-center gap-1 rounded bg-amber-50 px-1.5 py-0.5 text-[5.8px] font-semibold text-amber-700">
+            <span className="inline-flex items-center gap-1 rounded bg-red-50 px-1.5 py-0.5 text-[5.8px] font-semibold text-red-700">
               <BadgePercent size={6} />
-              PROMO
+              {getItemPromotionPercentage(item) > 0
+                ? `-${getItemPromotionPercentage(item)}%`
+                : "PROMO"}
             </span>
           )}
         </div>
@@ -1690,6 +1865,21 @@ function ProductLine({
           {item.size || "Talla única"} · {item.quantity} ×{" "}
           {formatCurrency(item.unitPrice)}
         </p>
+
+        {item.isPromotion && (
+          <p className="mt-0.5 text-[7.5px] text-black/34">
+            Precio regular{" "}
+            <span className="line-through">
+              {formatCurrency(
+                item.regularUnitPrice ?? item.unitPrice
+              )}
+            </span>
+            {" · "}Ahorro{" "}
+            {formatCurrency(
+              getPromotionSavingsForItem(item)
+            )}
+          </p>
+        )}
       </div>
 
       <strong className="shrink-0 text-[11px] font-semibold">
@@ -1879,6 +2069,11 @@ function SaleEditModal({
     };
   }, [lines, payments, form.discount]);
 
+  const hasPromotionLines = useMemo(
+    () => lines.some((line) => Boolean(line?.isPromotion)),
+    [lines]
+  );
+
   const filteredProducts = useMemo(() => {
     const clean = normalizeSearch(productSearch);
 
@@ -1978,7 +2173,10 @@ function SaleEditModal({
     setAddDraft({
       productId,
       variantId: variants[0]?.id || "",
-      mode: "normal",
+      mode:
+        product && isPromotionProduct(product)
+          ? "promotion"
+          : "normal",
       quantity: "1",
     });
   }
@@ -2120,21 +2318,7 @@ function SaleEditModal({
     }
 
     const isPromotion =
-      addDraft.mode === "promotion";
-
-    if (
-      isPromotion &&
-      (!isPromotionProduct(draftProduct) ||
-        getPromotionStockForVariant(
-          draftProduct,
-          draftVariant
-        ) <= 0)
-    ) {
-      setError(
-        "Esta talla no tiene promoción disponible."
-      );
-      return;
-    }
+      isPromotionProduct(draftProduct);
 
     const key = makeLineKey(
       draftProduct.id,
@@ -2396,6 +2580,18 @@ function SaleEditModal({
     ) {
       setError(
         "No repitas el mismo medio de pago. Usa una sola línea por Efectivo, Nequi, Daviplata, etc."
+      );
+      return;
+    }
+
+    if (
+      hasPromotionLines &&
+      normalizedPayments.some(
+        (payment) => isDeferredPaymentMethod(payment.method)
+      )
+    ) {
+      setError(
+        "Las promociones no pueden pagarse con Addi ni Sistecrédito. Selecciona un método de pago inmediato."
       );
       return;
     }
@@ -2810,31 +3006,21 @@ function SaleEditModal({
                     </SelectField>
 
                     <SelectField
-                      label="Modalidad"
-                      value={addDraft.mode}
-                      disabled={!draftProduct}
-                      onChange={(value) =>
-                        setAddDraft(
-                          (current) => ({
-                            ...current,
-                            mode: value,
-                          })
-                        )
+                      label="Precio"
+                      value={
+                        draftProduct &&
+                        isPromotionProduct(draftProduct)
+                          ? "promotion"
+                          : "normal"
                       }
+                      disabled
+                      onChange={() => {}}
                     >
                       <option value="normal">
-                        Normal
+                        Precio normal
                       </option>
-                      <option
-                        value="promotion"
-                        disabled={
-                          !draftProduct ||
-                          !isPromotionProduct(
-                            draftProduct
-                          )
-                        }
-                      >
-                        Promoción
+                      <option value="promotion">
+                        Promoción vigente
                       </option>
                     </SelectField>
 
@@ -2936,6 +3122,13 @@ function SaleEditModal({
                   </div>
                 </section>
 
+                {hasPromotionLines && (
+                  <div className="rounded-[12px] border border-red-100 bg-red-50/70 px-3.5 py-3 text-[9px] leading-4 text-red-700">
+                    <strong>Venta con promoción:</strong>{" "}
+                    Addi y Sistecrédito no están disponibles. Las líneas promocionales conservan el precio que quedó registrado en la venta.
+                  </div>
+                )}
+
                 <section className="overflow-hidden rounded-[16px] border border-black/[0.05] bg-white shadow-[0_8px_24px_rgba(15,23,42,0.02)]">
                   <div className="flex items-center justify-between border-b border-black/[0.055] px-3.5 py-2.5">
                     <div className="flex items-center gap-2">
@@ -3003,6 +3196,7 @@ function SaleEditModal({
                           onChange={updatePayment}
                           onRemove={removePayment}
                           disabled={lockPaymentEditing}
+                          disableDeferred={hasPromotionLines}
                         />
                       ))}
                     </div>
@@ -3323,22 +3517,15 @@ function EditableLine({
                     ? "promotion"
                     : "normal"
                 }
-                onChange={(event) =>
-                  onMode(
-                    line.localId,
-                    event.target.value
-                  )
-                }
-                className="h-8 rounded-[9px] border border-black/[0.065] bg-white px-2.5 text-[8px] outline-none transition focus:border-red-300"
+                disabled
+                onChange={() => {}}
+                className="h-8 rounded-[9px] border border-black/[0.055] bg-[#fafafa] px-2.5 text-[8px] text-black/50 outline-none disabled:opacity-100"
               >
                 <option value="normal">
-                  Normal
+                  Precio normal
                 </option>
-                <option
-                  value="promotion"
-                  disabled={!canPromotion}
-                >
-                  Promoción
+                <option value="promotion">
+                  Precio promoción
                 </option>
               </select>
             )}
@@ -3363,6 +3550,7 @@ function PaymentRow({
   onChange,
   onRemove,
   disabled = false,
+  disableDeferred = false,
 }) {
   return (
     <div className="rounded-[11px] border border-black/[0.045] bg-[#fbfbfc] p-2.5">
@@ -3386,6 +3574,9 @@ function PaymentRow({
                 value={value}
                 disabled={
                   disabled ||
+                  (disableDeferred &&
+                    isDeferredPaymentMethod(value) &&
+                    value !== payment.method) ||
                   (usedMethods.has(value) &&
                     value !== payment.method)
                 }

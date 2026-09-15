@@ -227,12 +227,33 @@ function normalizeSize(value) {
 
 function normalizeVariants(product = {}) {
   if (Array.isArray(product.variants) && product.variants.length > 0) {
-    return product.variants.map((variant, index) => ({
-      id: safeString(variant.id) || `variant-${index + 1}`,
-      size: normalizeSize(variant.size),
-      stock: Math.max(Math.trunc(safeNumber(variant.stock)), 0),
-      barcode: safeString(variant.barcode),
-    }));
+    return product.variants.map((variant, index) => {
+      const stock = Math.max(
+        Math.trunc(safeNumber(variant.stock)),
+        0
+      );
+
+      return {
+        ...variant,
+        id: safeString(variant.id) || `variant-${index + 1}`,
+        size: normalizeSize(variant.size),
+        stock,
+        barcode: safeString(variant.barcode),
+        ...(variant?.printedLabels !== undefined
+          ? {
+              printedLabels: Math.min(
+                Math.max(
+                  Math.trunc(
+                    safeNumber(variant.printedLabels)
+                  ),
+                  0
+                ),
+                stock
+              ),
+            }
+          : {}),
+      };
+    });
   }
 
   return [
@@ -241,6 +262,7 @@ function normalizeVariants(product = {}) {
       size: normalizeSize(product.size),
       stock: Math.max(Math.trunc(safeNumber(product.stock)), 0),
       barcode: safeString(product.barcode),
+      printedLabels: 0,
     },
   ];
 }
@@ -700,6 +722,25 @@ export async function createReservationCart({
                 stock:
                   currentVariant.stock -
                   requested.quantity,
+                ...(currentVariant?.printedLabels !== undefined
+                  ? {
+                      printedLabels: Math.min(
+                        Math.max(
+                          Math.trunc(
+                            safeNumber(
+                              currentVariant.printedLabels
+                            )
+                          ),
+                          0
+                        ),
+                        Math.max(
+                          currentVariant.stock -
+                            requested.quantity,
+                          0
+                        )
+                      ),
+                    }
+                  : {}),
               }
             : currentVariant
       );
@@ -1285,11 +1326,43 @@ export async function updateReservationGroup({
         1
       );
 
+      const previousVariant =
+        state.variants[variantIndex];
+      const previousStock = Math.max(
+        Math.trunc(
+          safeNumber(previousVariant.stock)
+        ),
+        0
+      );
+      const previousPrinted =
+        previousVariant?.printedLabels !== undefined
+          ? Math.max(
+              Math.trunc(
+                safeNumber(
+                  previousVariant.printedLabels
+                )
+              ),
+              0
+            )
+          : null;
+      const wasFullyPrinted =
+        previousPrinted !== null &&
+        previousStock > 0 &&
+        previousPrinted >= previousStock;
+
       const restoredVariant = {
-        ...state.variants[variantIndex],
+        ...previousVariant,
         stock:
-          state.variants[variantIndex].stock +
+          previousStock +
           quantity,
+        ...(previousPrinted !== null &&
+        wasFullyPrinted
+          ? {
+              printedLabels:
+                previousPrinted +
+                quantity,
+            }
+          : {}),
       };
 
       state.variants =
@@ -1426,7 +1499,28 @@ export async function updateReservationGroup({
           currentIndex === variantIndex
             ? {
                 ...currentVariant,
-                stock: currentVariant.stock - requested.quantity,
+                stock:
+                  currentVariant.stock -
+                  requested.quantity,
+                ...(currentVariant?.printedLabels !== undefined
+                  ? {
+                      printedLabels: Math.min(
+                        Math.max(
+                          Math.trunc(
+                            safeNumber(
+                              currentVariant.printedLabels
+                            )
+                          ),
+                          0
+                        ),
+                        Math.max(
+                          currentVariant.stock -
+                            requested.quantity,
+                          0
+                        )
+                      ),
+                    }
+                  : {}),
               }
             : currentVariant
       );
@@ -1872,7 +1966,63 @@ export async function completeReservationGroupSale({
         ),
         isPromotion: Boolean(reservation.isPromotion),
         promotionPrice: Math.max(safeNumber(reservation.promotionPrice), 0),
+        promotionPercentage:
+          Math.max(
+            safeNumber(reservation.promotionPercentage),
+            0
+          ) ||
+          (
+            Math.max(
+              safeNumber(
+                reservation.regularUnitPrice,
+                unitPrice
+              ),
+              0
+            ) > 0 &&
+            unitPrice <
+              Math.max(
+                safeNumber(
+                  reservation.regularUnitPrice,
+                  unitPrice
+                ),
+                0
+              )
+              ? Math.round(
+                  (1 -
+                    unitPrice /
+                      Math.max(
+                        safeNumber(
+                          reservation.regularUnitPrice,
+                          unitPrice
+                        ),
+                        0
+                      )) *
+                    10000
+                ) / 100
+              : 0
+          ),
         promotionNote: safeString(reservation.promotionNote),
+        regularSubtotal:
+          Math.max(
+            safeNumber(
+              reservation.regularUnitPrice,
+              unitPrice
+            ),
+            0
+          ) * quantity,
+        promotionDiscount:
+          Math.max(
+            Math.max(
+              safeNumber(
+                reservation.regularUnitPrice,
+                unitPrice
+              ),
+              0
+            ) *
+              quantity -
+              lineSubtotal,
+            0
+          ),
         costPrice,
         subtotal: lineSubtotal,
         totalCost: lineTotalCost,
@@ -1881,11 +2031,55 @@ export async function completeReservationGroupSale({
     });
 
     const subtotal = items.reduce((sum, item) => sum + item.subtotal, 0);
+    const regularSubtotal = items.reduce(
+      (sum, item) =>
+        sum +
+        Math.max(
+          safeNumber(
+            item.regularSubtotal,
+            item.subtotal
+          ),
+          0
+        ),
+      0
+    );
+    const promotionDiscount = items.reduce(
+      (sum, item) =>
+        sum +
+        Math.max(
+          safeNumber(item.promotionDiscount),
+          0
+        ),
+      0
+    );
+    const promotionUnits = items.reduce(
+      (sum, item) =>
+        sum +
+        (item.isPromotion
+          ? Math.max(
+              Math.trunc(
+                safeNumber(item.quantity)
+              ),
+              0
+            )
+          : 0),
+      0
+    );
+    const promotionLineCount = items.filter(
+      (item) => item.isPromotion
+    ).length;
+
     const discount = Math.min(
       Math.max(safeNumber(group.discount), 0),
       subtotal
     );
-    const total = Math.max(subtotal - discount, 0);
+    const manualDiscount = discount;
+    const totalDiscount =
+      promotionDiscount + manualDiscount;
+    const hasPromotion =
+      promotionDiscount > 0 ||
+      promotionUnits > 0;
+    const total = Math.max(subtotal - manualDiscount, 0);
     const totalCost = items.reduce((sum, item) => sum + item.totalCost, 0);
     const amountPaid = Math.max(safeNumber(group.amountPaid), 0);
 
@@ -1897,6 +2091,17 @@ export async function completeReservationGroupSale({
 
     const finalPayment = Math.max(total - amountPaid, 0);
     const totalPaid = amountPaid + finalPayment;
+
+    if (
+      hasPromotion &&
+      isDeferredPaymentMethod(
+        cleanFinalPaymentMethod
+      )
+    ) {
+      throw new Error(
+        "Los productos en promoción no pueden finalizarse con Addi ni Sistecrédito. Selecciona un método de pago inmediato."
+      );
+    }
 
     const previousPaymentHistory = Array.isArray(group.paymentHistory)
       ? group.paymentHistory.filter((entry) => safeNumber(entry?.amount) > 0)
@@ -2024,11 +2229,21 @@ export async function completeReservationGroupSale({
       items,
       totalItems: items.reduce((sum, item) => sum + item.quantity, 0),
       uniqueItems: items.length,
+
+      regularSubtotal,
+      promotionDiscount,
+      promotionSubtotal: subtotal,
+      manualDiscount,
+      totalDiscount,
+      hasPromotion,
+      promotionUnits,
+      promotionLineCount,
+
       subtotal,
       total,
       totalCost,
       profit: total - totalCost,
-      discount,
+      discount: manualDiscount,
       amountPaidBeforeSale: amountPaid,
       finalPayment,
       totalPaid,
@@ -2323,12 +2538,48 @@ async function closeReservationGroup({
 
       state.variants = state.variants.map((variant, index) =>
         index === variantIndex
-          ? {
-              ...variant,
-              stock:
-                variant.stock +
-                quantity,
-            }
+          ? (() => {
+              const previousStock =
+                Math.max(
+                  Math.trunc(
+                    safeNumber(
+                      variant.stock
+                    )
+                  ),
+                  0
+                );
+              const previousPrinted =
+                variant?.printedLabels !== undefined
+                  ? Math.max(
+                      Math.trunc(
+                        safeNumber(
+                          variant.printedLabels
+                        )
+                      ),
+                      0
+                    )
+                  : null;
+              const wasFullyPrinted =
+                previousPrinted !== null &&
+                previousStock > 0 &&
+                previousPrinted >=
+                  previousStock;
+
+              return {
+                ...variant,
+                stock:
+                  previousStock +
+                  quantity,
+                ...(previousPrinted !== null &&
+                wasFullyPrinted
+                  ? {
+                      printedLabels:
+                        previousPrinted +
+                        quantity,
+                    }
+                  : {}),
+              };
+            })()
           : variant
       );
 

@@ -13,6 +13,7 @@ import {
 
 import { db } from "../firebase/firebase";
 import { STORE_ID } from "./categories.service";
+import { getSaleCommercialTrace } from "./promotionAccounting.service";
 
 /* -------------------------------------------------------------------------- */
 /*                                CONSTANTES                                   */
@@ -577,6 +578,14 @@ export function buildCustomerSalesMetrics(customers, sales) {
       purchases: 0,
       totalProducts: 0,
       totalSpent: 0,
+
+      regularValue: 0,
+      promotionSavings: 0,
+      manualDiscounts: 0,
+      totalSavings: 0,
+      promotionProducts: 0,
+      promotionPurchases: 0,
+
       lastPurchaseAt: null,
       productQuantities: new Map(),
     });
@@ -617,6 +626,17 @@ export function buildCustomerSalesMetrics(customers, sales) {
 
     metrics.purchases += 1;
     metrics.totalSpent += Number(sale.total || 0);
+
+    const commercialTrace = getSaleCommercialTrace(sale);
+    metrics.regularValue += commercialTrace.regularValue;
+    metrics.promotionSavings += commercialTrace.promotionSavings;
+    metrics.manualDiscounts += commercialTrace.manualDiscount;
+    metrics.totalSavings += commercialTrace.totalSavings;
+    metrics.promotionProducts += commercialTrace.promotionProducts;
+
+    if (commercialTrace.hasPromotion) {
+      metrics.promotionPurchases += 1;
+    }
 
     const recognitionMillis = getMetricTimestamp(recognitionValue);
     const previousMillis = getMetricTimestamp(metrics.lastPurchaseAt);
@@ -688,6 +708,14 @@ export function buildCustomerSalesMetrics(customers, sales) {
       purchases: 0,
       totalProducts: 0,
       totalSpent: 0,
+
+      regularValue: 0,
+      promotionSavings: 0,
+      manualDiscounts: 0,
+      totalSavings: 0,
+      promotionProducts: 0,
+      promotionPurchases: 0,
+
       lastPurchaseAt: null,
       productQuantities: new Map(),
     };
@@ -703,6 +731,14 @@ export function buildCustomerSalesMetrics(customers, sales) {
       purchases: metrics.purchases,
       totalProducts: metrics.totalProducts,
       totalSpent: metrics.totalSpent,
+
+      regularValue: metrics.regularValue,
+      promotionSavings: metrics.promotionSavings,
+      manualDiscounts: metrics.manualDiscounts,
+      totalSavings: metrics.totalSavings,
+      promotionProducts: metrics.promotionProducts,
+      promotionPurchases: metrics.promotionPurchases,
+
       averageTicket:
         metrics.purchases > 0
           ? metrics.totalSpent / metrics.purchases

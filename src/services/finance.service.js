@@ -8,6 +8,7 @@ import {
 
 import { db } from "../firebase/firebase";
 import { STORE_ID } from "./categories.service";
+import { getSaleRecognitionDate } from "./sales.service";
 
 export const FINANCE_PERIOD_TYPE = {
   MONTH: "month",
@@ -184,10 +185,21 @@ function getDateKeyFromDate(value) {
 }
 
 function getSaleDateKey(sale) {
+  const recognitionValue =
+    getSaleRecognitionDate(sale);
+
+  if (!recognitionValue) {
+    return "";
+  }
+
   return (
+    cleanString(
+      sale?.recognizedBusinessDate
+    ) ||
     cleanString(sale?.saleDate) ||
-    cleanString(sale?.createdDateKey) ||
-    getDateKeyFromDate(sale?.createdAt)
+    getDateKeyFromDate(
+      recognitionValue
+    )
   );
 }
 
@@ -225,7 +237,10 @@ function mapSnapshot(snapshot) {
 }
 
 function calculateSaleAmounts(sale) {
-  const quantity = toNonNegativeNumber(sale?.quantity);
+  const quantity = toNonNegativeNumber(
+    sale?.totalItems ??
+      sale?.quantity
+  );
   const revenue = toNonNegativeNumber(
     sale?.total ??
       sale?.totalAmount ??

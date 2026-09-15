@@ -8,6 +8,12 @@ import {
   X,
 } from "lucide-react";
 
+import {
+  getPromotionSavingsForItem,
+  getSaleCommercialTrace,
+} from "../../services/promotionAccounting.service";
+import { showPremiumAlert } from "../../utils/premiumDialog";
+
 const DEFAULT_STORE = {
   name: "MASTER CAPS",
   logoUrl: "",
@@ -85,6 +91,15 @@ function normalizeReceiptItems(sale) {
       const quantity = Math.max(toSafeNumber(item.quantity), 0);
       const unitPrice = Math.max(toSafeNumber(item.unitPrice), 0);
 
+      const regularUnitPrice = Math.max(
+        toSafeNumber(
+          item.regularUnitPrice !== undefined
+            ? item.regularUnitPrice
+            : item.unitPrice
+        ),
+        0
+      );
+
       return {
         lineId: item.lineId || `line-${index + 1}`,
         productName: item.productName || "Producto",
@@ -92,6 +107,24 @@ function normalizeReceiptItems(sale) {
         size: item.size || item.productSize || "Talla única",
         quantity,
         unitPrice,
+        regularUnitPrice,
+        isPromotion: Boolean(item.isPromotion),
+        promotionPrice: Math.max(
+          toSafeNumber(item.promotionPrice),
+          0
+        ),
+        promotionPercentage: Math.max(
+          toSafeNumber(item.promotionPercentage),
+          0
+        ),
+        promotionDiscount: Math.max(
+          toSafeNumber(
+            item.promotionDiscount !== undefined
+              ? item.promotionDiscount
+              : (regularUnitPrice - unitPrice) * quantity
+          ),
+          0
+        ),
         subtotal:
           item.subtotal !== undefined
             ? toSafeNumber(item.subtotal)
@@ -112,6 +145,27 @@ function normalizeReceiptItems(sale) {
         size: sale.productSize || sale.size || "Talla única",
         quantity,
         unitPrice,
+        regularUnitPrice: Math.max(
+          toSafeNumber(
+            sale.regularUnitPrice !== undefined
+              ? sale.regularUnitPrice
+              : sale.unitPrice
+          ),
+          0
+        ),
+        isPromotion: Boolean(sale.isPromotion),
+        promotionPrice: Math.max(
+          toSafeNumber(sale.promotionPrice),
+          0
+        ),
+        promotionPercentage: Math.max(
+          toSafeNumber(sale.promotionPercentage),
+          0
+        ),
+        promotionDiscount: Math.max(
+          toSafeNumber(sale.promotionDiscount),
+          0
+        ),
         subtotal:
           sale.total !== undefined
             ? toSafeNumber(sale.total)
@@ -216,6 +270,12 @@ function normalizeReceiptSale(sale = {}) {
 
   const payments = normalizeReceiptPayments(sale, total);
   const financing = getReceiptFinancing(sale, payments);
+  const commercialTrace = getSaleCommercialTrace({
+    ...sale,
+    items,
+    subtotal,
+    total,
+  });
 
   return {
     ...sale,
@@ -225,6 +285,7 @@ function normalizeReceiptSale(sale = {}) {
     subtotal,
     discount,
     total,
+    commercialTrace,
     amountReceived,
     change,
     totalItems:
@@ -555,7 +616,9 @@ export default function ThermalReceipt({
 
   async function handlePrint() {
     if (!sale || receipt.items.length === 0) {
-      alert("No hay información suficiente para imprimir el recibo.");
+      showPremiumAlert(
+        "No hay información suficiente para imprimir el recibo."
+      );
       return;
     }
 
@@ -571,7 +634,7 @@ export default function ThermalReceipt({
       }
     } catch (error) {
       console.error("No se pudo abrir la impresión:", error);
-      alert(
+      showPremiumAlert(
         error?.message ||
           "No se pudo abrir el diálogo de impresión."
       );
@@ -994,15 +1057,39 @@ function ReceiptContent({ receipt, store, paperSize }) {
       <ReceiptSeparator />
 
       <section>
+        {receipt.commercialTrace?.hasPromotion && (
+          <>
+            <ReceiptMoneyRow
+              label="Valor regular"
+              value={formatCurrency(
+                receipt.commercialTrace.regularSubtotal
+              )}
+            />
+
+            <ReceiptMoneyRow
+              label="Ahorro promoción"
+              value={`- ${formatCurrency(
+                receipt.commercialTrace.promotionDiscount
+              )}`}
+            />
+          </>
+        )}
+
         <ReceiptMoneyRow
-          label="Subtotal"
+          label={
+            receipt.commercialTrace?.hasPromotion
+              ? "Subtotal promo"
+              : "Subtotal"
+          }
           value={formatCurrency(receipt.subtotal)}
         />
 
-        {receipt.discount > 0 && (
+        {receipt.commercialTrace?.manualDiscount > 0 && (
           <ReceiptMoneyRow
-            label="Descuento"
-            value={`- ${formatCurrency(receipt.discount)}`}
+            label="Descuento adicional"
+            value={`- ${formatCurrency(
+              receipt.commercialTrace.manualDiscount
+            )}`}
           />
         )}
 
@@ -1082,6 +1169,43 @@ function ReceiptContent({ receipt, store, paperSize }) {
 }
 
 function ReceiptProductLine({ item }) {
+  const percentage = (() => {
+    const explicit = Number(
+      item?.promotionPercentage || 0
+    );
+
+    if (
+      Number.isFinite(explicit) &&
+      explicit > 0
+    ) {
+      return Math.round(explicit * 100) / 100;
+    }
+
+    const regular = Number(
+      item?.regularUnitPrice ??
+        item?.unitPrice ??
+        0
+    );
+    const current = Number(
+      item?.unitPrice || 0
+    );
+
+    if (
+      !Number.isFinite(regular) ||
+      !Number.isFinite(current) ||
+      regular <= 0 ||
+      current >= regular
+    ) {
+      return 0;
+    }
+
+    return (
+      Math.round(
+        (1 - current / regular) * 10000
+      ) / 100
+    );
+  })();
+
   return (
     <div style={{ marginBottom: "9px" }}>
       <p style={{ margin: 0, fontWeight: 700 }}>
@@ -1093,6 +1217,24 @@ function ReceiptProductLine({ item }) {
           .filter(Boolean)
           .join(" · ")}
       </p>
+
+      {item.isPromotion && (
+        <p
+          style={{
+            margin: "3px 0 0",
+            fontSize: "0.92em",
+          }}
+        >
+          Precio regular{" "}
+          {formatCurrency(
+            item.regularUnitPrice ??
+              item.unitPrice
+          )}
+          {percentage > 0
+            ? ` · Promo -${percentage}%`
+            : " · Promoción"}
+        </p>
+      )}
 
       <div
         style={{
@@ -1116,6 +1258,21 @@ function ReceiptProductLine({ item }) {
           {formatCurrency(item.subtotal)}
         </strong>
       </div>
+
+      {item.isPromotion &&
+        getPromotionSavingsForItem(item) > 0 && (
+          <p
+            style={{
+              margin: "2px 0 0",
+              fontSize: "0.9em",
+            }}
+          >
+            Ahorro:{" "}
+            {formatCurrency(
+              getPromotionSavingsForItem(item)
+            )}
+          </p>
+        )}
     </div>
   );
 }
