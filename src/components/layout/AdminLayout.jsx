@@ -80,12 +80,7 @@ const navItems = [
     icon: TimerReset,
     roles: ["admin", "seller"],
   },
-  {
-    label: "Gastos",
-    path: "/admin/gastos",
-    icon: ReceiptText,
-    roles: ["admin"],
-  },
+  
 ];
 
 function getNavigationLabel(item, role) {
