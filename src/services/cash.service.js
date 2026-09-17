@@ -168,7 +168,15 @@ function normalizeMovement(movement = {}) {
     fromMethod: cleanText(movement.fromMethod),
     toMethod: cleanText(movement.toMethod),
     note: cleanText(movement.note),
+    sourceType: cleanText(movement.sourceType),
+    sourceId: cleanText(movement.sourceId),
+    reservationGroupId: cleanText(movement.reservationGroupId),
+    reservationPaymentId: cleanText(movement.reservationPaymentId),
   };
+}
+
+function isDeferredReservationMovement(movement = {}) {
+  return cleanText(movement.sourceType) === "reservation_payment";
 }
 
 function getDeferredProvider(sale = {}) {
@@ -487,6 +495,15 @@ export function buildCashSessionSummary(session, sales = [], movements = []) {
 
   (Array.isArray(movements) ? movements : []).forEach((rawMovement) => {
     const movement = normalizeMovement(rawMovement);
+
+    /*
+     * Compatibilidad con apartados antiguos: antes cada abono generaba una
+     * entrada de Caja. Desde ahora esos documentos permanecen solo como
+     * auditoría histórica y NO afectan saldos; el dinero se reconoce cuando
+     * el apartado se convierte en venta.
+     */
+    if (isDeferredReservationMovement(movement)) return;
+
     const amount = movement.amount;
 
     if (amount <= 0) return;
@@ -707,6 +724,7 @@ export function subscribeCashMovements(sessionId, callback, onError) {
           .map((item) =>
             normalizeMovement({ id: item.id, ...item.data() })
           )
+          .filter((movement) => !isDeferredReservationMovement(movement))
           .sort(
             (a, b) => timestampMs(b.createdAt) - timestampMs(a.createdAt)
           )
@@ -732,6 +750,7 @@ export async function getCashMovements(sessionId) {
 
   return snapshot.docs
     .map((item) => normalizeMovement({ id: item.id, ...item.data() }))
+    .filter((movement) => !isDeferredReservationMovement(movement))
     .sort(
       (a, b) => timestampMs(b.createdAt) - timestampMs(a.createdAt)
     );

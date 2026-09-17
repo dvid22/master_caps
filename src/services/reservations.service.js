@@ -807,19 +807,17 @@ export async function createReservationCart({
     const amountPaid = requestedInitialPayment;
     const balanceDue = Math.max(total - amountPaid, 0);
 
-    let initialCash = null;
-    let initialCashMovementRef = null;
     let cleanInitialPaymentMethod = safeString(initialPaymentMethod) || "efectivo";
 
+    /*
+     * Los pagos de un apartado son trazabilidad del apartado, NO movimientos
+     * contables de Caja mientras el apartado siga activo. El dinero se reconoce
+     * una sola vez cuando el apartado se convierte en venta.
+     */
     if (amountPaid > 0) {
       cleanInitialPaymentMethod = validateImmediatePaymentMethod(
         initialPaymentMethod
       );
-      initialCash = await getOpenCashSessionForToday(
-        transaction,
-        cleanStoreId
-      );
-      initialCashMovementRef = doc(collection(db, "cashMovements"));
     }
 
     const paymentHistory =
@@ -831,9 +829,6 @@ export async function createReservationCart({
               notes: notes || "Pago inicial del apartado",
               actor,
               type: "initial",
-              cashSessionId: initialCash?.sessionId || "",
-              businessDate: initialCash?.businessDate || "",
-              cashMovementId: initialCashMovementRef?.id || "",
             }),
           ]
         : [];
@@ -869,34 +864,6 @@ export async function createReservationCart({
         variants: state.variants,
         stock,
         totalStock: stock,
-        updatedAt: serverTimestamp(),
-      });
-    }
-
-    if (amountPaid > 0 && initialCash && initialCashMovementRef) {
-      transaction.set(initialCashMovementRef, {
-        storeId: cleanStoreId,
-        sessionId: initialCash.sessionId,
-        businessDate: initialCash.businessDate,
-        type: "entry",
-        fromMethod: "",
-        toMethod: cleanInitialPaymentMethod,
-        amount: amountPaid,
-        note: safeString(notes) || "Pago inicial de apartado",
-        sourceType: "reservation_payment",
-        sourceId: groupRef.id,
-        reservationGroupId: groupRef.id,
-        reservationPaymentId: paymentHistory[0]?.id || "",
-        createdByUid: actor?.uid || "",
-        createdByName: actor?.name || "",
-        createdByEmail: actor?.email || "",
-        createdAt: serverTimestamp(),
-      });
-
-      transaction.update(initialCash.sessionRef, {
-        lastActivityByUid: actor?.uid || "",
-        lastActivityByName: actor?.name || "",
-        lastActivityByEmail: actor?.email || "",
         updatedAt: serverTimestamp(),
       });
     }
@@ -1070,8 +1037,6 @@ export async function addReservationGroupPayment({
     }
 
     const cleanStoreId = safeString(group.storeId) || STORE_ID;
-    const cash = await getOpenCashSessionForToday(transaction, cleanStoreId);
-    const movementRef = doc(collection(db, "cashMovements"));
 
     const total = Math.max(
       safeNumber(group.total, safeNumber(group.subtotal)),
@@ -1092,28 +1057,6 @@ export async function addReservationGroupPayment({
       notes,
       actor,
       type: "installment",
-      cashSessionId: cash.sessionId,
-      businessDate: cash.businessDate,
-      cashMovementId: movementRef.id,
-    });
-
-    transaction.set(movementRef, {
-      storeId: cleanStoreId,
-      sessionId: cash.sessionId,
-      businessDate: cash.businessDate,
-      type: "entry",
-      fromMethod: "",
-      toMethod: cleanPaymentMethod,
-      amount: cleanAmount,
-      note: safeString(notes) || "Abono de apartado",
-      sourceType: "reservation_payment",
-      sourceId: groupId,
-      reservationGroupId: groupId,
-      reservationPaymentId: payment.id,
-      createdByUid: actor?.uid || "",
-      createdByName: actor?.name || "",
-      createdByEmail: actor?.email || "",
-      createdAt: serverTimestamp(),
     });
 
     transaction.update(groupRef, {
@@ -1123,18 +1066,11 @@ export async function addReservationGroupPayment({
       updatedAt: serverTimestamp(),
     });
 
-    transaction.update(cash.sessionRef, {
-      lastActivityByUid: actor?.uid || "",
-      lastActivityByName: actor?.name || "",
-      lastActivityByEmail: actor?.email || "",
-      updatedAt: serverTimestamp(),
-    });
-
     return {
       amountPaid: nextPaid,
       balanceDue: nextBalance,
       payment,
-      cashSessionId: cash.sessionId,
+      cashSessionId: "",
     };
   });
 }
@@ -2150,10 +2086,14 @@ export async function completeReservationGroupSale({
       const method = safeString(entry?.paymentMethod) || "otro";
       const amount = Math.max(safeNumber(entry?.amount), 0);
 
+      /*
+       * Todos los abonos previos se reconocen AHORA, al finalizar la venta.
+       * Incluso registros legacy con cashSessionId se incluyen porque Caja
+       * ignora los antiguos movimientos sourceType=reservation_payment.
+       */
       if (
         amount > 0 &&
-        !isDeferredPaymentMethod(method) &&
-        !safeString(entry?.cashSessionId)
+        !isDeferredPaymentMethod(method)
       ) {
         cashRecognizedEntries.push({ method, amount });
       }
@@ -2256,10 +2196,9 @@ export async function completeReservationGroupSale({
       paymentMethod: paymentMethodForSale,
       payments,
       cashRecognizedPayments,
-      reservationPaymentsRecordedInCash: previousPaymentHistory.every(
-        (entry) =>
-          safeNumber(entry?.amount) <= 0 || Boolean(safeString(entry?.cashSessionId))
-      ),
+      // Los abonos del apartado se difieren contablemente hasta esta venta.
+      reservationPaymentsRecordedInCash: false,
+      reservationPaymentsRecognizedOnSale: true,
       cashAmount,
       amountReceived: total,
       change: 0,

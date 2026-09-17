@@ -2409,6 +2409,12 @@ function ManualReservationModal({
                         />
                       )}
 
+                      {!isEditing && initialPayment > 0 && (
+                        <div className="rounded-lg border border-amber-100 bg-amber-50 px-2.5 py-2 text-[7.5px] leading-3.5 text-amber-900/70">
+                          El valor entregado se guarda como abono del apartado. No se suma a Caja hasta finalizar la venta.
+                        </div>
+                      )}
+
                       <Input
                         label="Notas"
                         value={form.notes}
@@ -2879,6 +2885,10 @@ function PaymentModal({
           onChange={(value) => onChange("notes", value)}
         />
 
+        <div className="rounded-xl border border-amber-100 bg-amber-50 px-3 py-2.5 text-[9px] leading-4 text-amber-900/75">
+          Este abono queda registrado dentro del apartado, pero no entra a Caja ni a las ventas del día hasta que finalices la venta.
+        </div>
+
         <button
           type="submit"
           disabled={processing}
@@ -2912,7 +2922,7 @@ function SaleModal({
   return (
     <ModalShell
       title={`Finalizar venta · ${group.groupNumber}`}
-      subtitle="El saldo pendiente se registrará como pago final."
+      subtitle="Al finalizar, Caja reconocerá una sola vez los abonos acumulados y el pago final."
       onClose={onClose}
     >
       <div className="space-y-2 rounded-[22px] bg-black/[0.025] p-4">
