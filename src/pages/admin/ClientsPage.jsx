@@ -9,6 +9,7 @@ import {
   ShieldCheck,
   Sparkles,
   Star,
+  Tags,
   UserRound,
   Users,
   X,
@@ -17,8 +18,11 @@ import {
 import { STORE_ID } from "../../services/categories.service";
 import { subscribeSales } from "../../services/sales.service";
 import {
+  DEFAULT_CUSTOMER_CATEGORIES,
   buildCustomerSalesMetrics,
   createCustomer,
+  normalizeCustomerCategory,
+  normalizeCustomerCategoryKey,
   subscribeCustomers,
   updateCustomer,
 } from "../../services/customers.service";
@@ -33,6 +37,8 @@ const emptyCustomerForm = {
   fullName: "",
   phone: "",
   notes: "",
+  customerCategory: "Ocasional",
+  customCategory: "",
   isActive: true,
 };
 
@@ -103,74 +109,70 @@ function formatDocument(value) {
   return clean.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
 }
 
-function getCustomerLevel(customer) {
-  const purchases = Number(customer.purchases || 0);
-  const totalSpent = Number(customer.totalSpent || 0);
+function getCustomerCategory(customer) {
+  const label = normalizeCustomerCategory(
+    customer?.customerCategory
+  );
+  const key = normalizeCustomerCategoryKey(label);
 
-  if (
-    totalSpent >= 2_000_000 ||
-    purchases >= 10
-  ) {
+  if (!label) {
     return {
-      id: "vip",
-      label: "VIP",
+      key: "",
+      label: "Sin categoría",
       className:
-        "border-red-200 bg-red-50 text-red-600",
+        "border-black/[0.08] bg-white text-black/38",
     };
   }
 
-  if (
-    totalSpent >= 800_000 ||
-    purchases >= 4
-  ) {
-    return {
-      id: "frequent",
-      label: "Frecuente",
-      className:
-        "border-orange-200 bg-orange-50 text-orange-600",
-    };
-  }
+  const className =
+    key === "vip"
+      ? "border-red-200 bg-red-50 text-red-600"
+      : key === "frecuente"
+        ? "border-orange-200 bg-orange-50 text-orange-600"
+        : key === "ocasional"
+          ? "border-black/[0.08] bg-black/[0.035] text-black/55"
+          : "border-blue-200 bg-blue-50 text-blue-700";
 
-  return {
-    id: "new",
-    label: "Nuevo",
-    className:
-      "border-black/[0.08] bg-black/[0.035] text-black/55",
-  };
+  return { key, label, className };
 }
 
-function getRelativeCustomerFilter(customer, filter) {
-  if (filter === "all") {
-    return true;
-  }
-
-  return getCustomerLevel(customer).id === filter;
-}
-
-function compareCustomersByRanking(a, b) {
+function compareCustomersByProducts(a, b) {
   const productsDiff =
     Number(b.totalProducts || 0) -
     Number(a.totalProducts || 0);
 
-  if (productsDiff !== 0) {
-    return productsDiff;
-  }
+  if (productsDiff !== 0) return productsDiff;
 
   const purchasesDiff =
     Number(b.purchases || 0) -
     Number(a.purchases || 0);
 
-  if (purchasesDiff !== 0) {
-    return purchasesDiff;
-  }
+  if (purchasesDiff !== 0) return purchasesDiff;
 
   const spentDiff =
     Number(b.totalSpent || 0) -
     Number(a.totalSpent || 0);
 
-  if (spentDiff !== 0) {
-    return spentDiff;
-  }
+  if (spentDiff !== 0) return spentDiff;
+
+  return String(a.fullName || "").localeCompare(
+    String(b.fullName || ""),
+    "es-CO"
+  );
+}
+
+function compareCustomersBySpent(a, b) {
+  const spentDiff =
+    Number(b.totalSpent || 0) -
+    Number(a.totalSpent || 0);
+
+  if (spentDiff !== 0) return spentDiff;
+
+  const productsDiff =
+    Number(b.totalProducts || 0) -
+    Number(a.totalProducts || 0);
+
+  if (productsDiff !== 0) return productsDiff;
 
   return String(a.fullName || "").localeCompare(
     String(b.fullName || ""),
@@ -186,8 +188,9 @@ export default function ClientsPage() {
   const [saving, setSaving] = useState(false);
 
   const [search, setSearch] = useState("");
-  const [levelFilter, setLevelFilter] = useState("all");
+  const [categoryFilter, setCategoryFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
+  const [sortBy, setSortBy] = useState("products");
 
   const [page, setPage] = useState(1);
 
@@ -259,9 +262,11 @@ export default function ClientsPage() {
   const rankedCustomers = useMemo(
     () =>
       [...customerMetrics].sort(
-        compareCustomersByRanking
+        sortBy === "spent"
+          ? compareCustomersBySpent
+          : compareCustomersByProducts
       ),
-    [customerMetrics]
+    [customerMetrics, sortBy]
   );
 
   const rankingByCustomerId = useMemo(
@@ -275,21 +280,65 @@ export default function ClientsPage() {
     [rankedCustomers]
   );
 
+  const availableCustomerCategories = useMemo(() => {
+    const categories = new Map(
+      DEFAULT_CUSTOMER_CATEGORIES.map((category) => [
+        normalizeCustomerCategoryKey(category.label),
+        category.label,
+      ])
+    );
+
+    customerMetrics.forEach((customer) => {
+      const label = normalizeCustomerCategory(
+        customer.customerCategory
+      );
+
+      if (!label) {
+        return;
+      }
+
+      categories.set(
+        normalizeCustomerCategoryKey(label),
+        label
+      );
+    });
+
+    return Array.from(categories.entries())
+      .map(([key, label]) => ({ key, label }))
+      .sort((a, b) => {
+        const defaultOrder = ["vip", "frecuente", "ocasional"];
+        const aIndex = defaultOrder.indexOf(a.key);
+        const bIndex = defaultOrder.indexOf(b.key);
+
+        if (aIndex !== -1 || bIndex !== -1) {
+          if (aIndex === -1) return 1;
+          if (bIndex === -1) return -1;
+          return aIndex - bIndex;
+        }
+
+        return a.label.localeCompare(b.label, "es-CO");
+      });
+  }, [customerMetrics]);
+
   const stats = useMemo(() => {
     const totalCustomers = customerMetrics.length;
 
-    const frequentCustomers = customerMetrics.filter(
-      (customer) => {
-        const level = getCustomerLevel(customer).id;
-
-        return (
-          level === "vip" ||
-          level === "frequent"
-        );
-      }
+    const categorizedCustomers = customerMetrics.filter(
+      (customer) =>
+        Boolean(
+          normalizeCustomerCategoryKey(
+            customer.customerCategory
+          )
+        )
     ).length;
 
-    const bestCustomer = rankedCustomers[0] || null;
+    const bestCustomer = [...customerMetrics].sort(
+      compareCustomersByProducts
+    )[0] || null;
+
+    const highestValueCustomer = [...customerMetrics].sort(
+      compareCustomersBySpent
+    )[0] || null;
 
     const accumulatedSales = customerMetrics.reduce(
       (total, customer) =>
@@ -311,8 +360,9 @@ export default function ClientsPage() {
 
     return {
       totalCustomers,
-      frequentCustomers,
+      categorizedCustomers,
       bestCustomer,
+      highestValueCustomer,
       accumulatedSales,
       accumulatedProducts,
       accumulatedPromotionSavings,
@@ -336,11 +386,16 @@ export default function ClientsPage() {
           !cleanSearch ||
           haystack.includes(cleanSearch);
 
-        const matchesLevel =
-          getRelativeCustomerFilter(
-            customer,
-            levelFilter
+        const customerCategoryKey =
+          normalizeCustomerCategoryKey(
+            customer.customerCategory
           );
+
+        const matchesCategory =
+          categoryFilter === "all" ||
+          (categoryFilter === "__none__" &&
+            !customerCategoryKey) ||
+          customerCategoryKey === categoryFilter;
 
         const matchesStatus =
           statusFilter === "all" ||
@@ -351,24 +406,30 @@ export default function ClientsPage() {
 
         return (
           matchesSearch &&
-          matchesLevel &&
+          matchesCategory &&
           matchesStatus
         );
       })
-      .sort(compareCustomersByRanking);
+      .sort(
+        sortBy === "spent"
+          ? compareCustomersBySpent
+          : compareCustomersByProducts
+      );
   }, [
     customerMetrics,
     search,
-    levelFilter,
+    categoryFilter,
     statusFilter,
+    sortBy,
   ]);
 
   useEffect(() => {
     setPage(1);
   }, [
     search,
-    levelFilter,
+    categoryFilter,
     statusFilter,
+    sortBy,
   ]);
 
   const totalPages = Math.max(
@@ -417,6 +478,9 @@ export default function ClientsPage() {
         customer.phone || "",
       notes:
         customer.notes || "",
+      customerCategory:
+        normalizeCustomerCategory(customer.customerCategory),
+      customCategory: "",
       isActive:
         customer.isActive !== false,
     });
@@ -465,6 +529,21 @@ export default function ClientsPage() {
       setSaving(true);
 
       const actor = getCurrentUserActor();
+      const selectedCategory =
+        customerForm.customerCategory === "__custom__"
+          ? normalizeCustomerCategory(customerForm.customCategory)
+          : normalizeCustomerCategory(customerForm.customerCategory);
+
+      if (
+        customerForm.customerCategory === "__custom__" &&
+        !String(customerForm.customCategory || "").trim()
+      ) {
+        showPremiumAlert("Escribe el nombre de la nueva categoría.", {
+          title: "Categoría requerida",
+          tone: "warning",
+        });
+        return;
+      }
 
       if (editingCustomer) {
         await updateCustomer(
@@ -476,6 +555,8 @@ export default function ClientsPage() {
               customerForm.phone,
             notes:
               customerForm.notes,
+            customerCategory:
+              selectedCategory,
             isActive:
               customerForm.isActive,
           },
@@ -491,6 +572,8 @@ export default function ClientsPage() {
             customerForm.phone,
           notes:
             customerForm.notes,
+          customerCategory:
+            selectedCategory,
           isActive:
             customerForm.isActive,
           storeId: STORE_ID,
@@ -554,15 +637,15 @@ export default function ClientsPage() {
           />
 
           <StatCard
-            icon={Star}
-            label="Clientes frecuentes"
-            value={stats.frequentCustomers}
-            helper="Frecuentes y VIP"
+            icon={Tags}
+            label="Clientes categorizados"
+            value={stats.categorizedCustomers}
+            helper="Clientes con una categoría asignada"
           />
 
           <StatCard
             icon={Sparkles}
-            label="Mayor comprador"
+            label="Más productos comprados"
             value={
               stats.bestCustomer?.fullName ||
               "Sin datos"
@@ -583,7 +666,7 @@ export default function ClientsPage() {
 
           <StatCard
             icon={ShieldCheck}
-            label="Ventas reconocidas"
+            label="Valor total reconocido"
             value={formatCurrency(
               stats.accumulatedSales
             )}
@@ -604,19 +687,19 @@ export default function ClientsPage() {
               <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                 <div>
                   <p className="text-[12px] font-medium text-black/70">
-                    Ranking de clientes
+                    Clientes y segmentación
                   </p>
                   <p className="mt-0.5 text-[10px] text-black/38">
-                    Prioridad: productos reconocidos → compras reconocidas → dinero gastado. Financiaciones pendientes no suman.
+                    Filtra por categoría y ordena por cantidad de productos o por mayor valor comprado. Financiaciones pendientes no suman.
                   </p>
                 </div>
 
                 <span className="rounded-full border border-red-100 bg-red-50 px-3 py-1.5 text-[9px] font-medium text-red-600">
-                  Más productos = mejor posición
+                  Ranking dinámico
                 </span>
               </div>
 
-              <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_180px_180px]">
+              <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_180px_180px_200px]">
                 <label className="relative block">
                   <Search
                     size={16}
@@ -642,26 +725,26 @@ export default function ClientsPage() {
                   />
 
                   <select
-                    value={levelFilter}
+                    value={categoryFilter}
                     onChange={(event) =>
-                      setLevelFilter(
-                        event.target.value
-                      )
+                      setCategoryFilter(event.target.value)
                     }
                     className="h-11 w-full appearance-none rounded-2xl border border-black/[0.08] bg-white pl-9 pr-3 text-[12px] outline-none focus:border-red-600 focus:ring-4 focus:ring-red-600/10"
                   >
                     <option value="all">
-                      Todos los niveles
+                      Todas las categorías
                     </option>
-                    <option value="vip">
-                      VIP
+                    <option value="__none__">
+                      Sin categoría
                     </option>
-                    <option value="frequent">
-                      Frecuentes
-                    </option>
-                    <option value="new">
-                      Nuevos
-                    </option>
+                    {availableCustomerCategories.map((category) => (
+                      <option
+                        key={category.key}
+                        value={category.key}
+                      >
+                        {category.label}
+                      </option>
+                    ))}
                   </select>
                 </label>
 
@@ -682,6 +765,21 @@ export default function ClientsPage() {
                   </option>
                   <option value="inactive">
                     Inactivos
+                  </option>
+                </select>
+
+                <select
+                  value={sortBy}
+                  onChange={(event) =>
+                    setSortBy(event.target.value)
+                  }
+                  className="h-11 rounded-2xl border border-black/[0.08] bg-white px-4 text-[12px] outline-none focus:border-red-600 focus:ring-4 focus:ring-red-600/10"
+                >
+                  <option value="products">
+                    Más productos comprados
+                  </option>
+                  <option value="spent">
+                    Mayor valor comprado
                   </option>
                 </select>
               </div>
@@ -716,7 +814,7 @@ export default function ClientsPage() {
                       Total gastado
                     </TableHead>
                     <TableHead>
-                      Nivel
+                      Categoría
                     </TableHead>
                     <TableHead align="right">
                       Acciones
@@ -854,6 +952,7 @@ export default function ClientsPage() {
             editingCustomer
           }
           form={customerForm}
+          availableCategories={availableCustomerCategories}
           saving={saving}
           onChange={updateCustomerForm}
           onClose={() => {
@@ -936,8 +1035,8 @@ function CustomerRow({
   rankingPosition,
   onEdit,
 }) {
-  const level =
-    getCustomerLevel(customer);
+  const category =
+    getCustomerCategory(customer);
 
   return (
     <tr className="border-b border-black/[0.055] transition last:border-0 hover:bg-black/[0.012]">
@@ -1023,9 +1122,9 @@ function CustomerRow({
 
       <td className="px-4 py-3">
         <span
-          className={`inline-flex rounded-full border px-2.5 py-1 text-[9px] font-medium ${level.className}`}
+          className={`inline-flex rounded-full border px-2.5 py-1 text-[9px] font-medium ${category.className}`}
         >
-          {level.label}
+          {category.label}
         </span>
       </td>
 
@@ -1048,6 +1147,7 @@ function CustomerRow({
 function CustomerFormModal({
   editingCustomer,
   form,
+  availableCategories,
   saving,
   onChange,
   onClose,
@@ -1130,6 +1230,52 @@ function CustomerFormModal({
               }
               placeholder="Ej: María Alejandra Ruiz"
             />
+
+            <label>
+              <span className="text-[10px] font-medium uppercase tracking-[0.1em] text-black/55">
+                Categoría del cliente
+              </span>
+
+              <select
+                value={form.customerCategory}
+                onChange={(event) =>
+                  onChange(
+                    "customerCategory",
+                    event.target.value
+                  )
+                }
+                className="mt-2 h-11 w-full rounded-2xl border border-black/[0.08] bg-white px-4 text-[12px] outline-none transition focus:border-red-600 focus:ring-4 focus:ring-red-600/10"
+              >
+                <option value="">
+                  Sin categoría
+                </option>
+                {availableCategories.map((category) => (
+                  <option
+                    key={category.key}
+                    value={category.label}
+                  >
+                    {category.label}
+                  </option>
+                ))}
+                <option value="__custom__">
+                  + Crear otra categoría
+                </option>
+              </select>
+            </label>
+
+            {form.customerCategory === "__custom__" && (
+              <Field
+                label="Nueva categoría *"
+                value={form.customCategory}
+                onChange={(value) =>
+                  onChange(
+                    "customCategory",
+                    value
+                  )
+                }
+                placeholder="Ej: Mayorista, Corporativo, Preferencial..."
+              />
+            )}
 
             <label>
               <span className="text-[10px] font-medium uppercase tracking-[0.1em] text-black/55">

@@ -2239,6 +2239,9 @@ export async function createMultiItemSale({
         address: "",
         notes: "",
 
+        customerCategory: "Ocasional",
+        customerCategoryKey: "ocasional",
+
         isActive: true,
 
         createdByUid: seller?.uid || "",

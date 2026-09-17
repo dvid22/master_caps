@@ -21,6 +21,31 @@ import { getSaleCommercialTrace } from "./promotionAccounting.service";
 
 const CUSTOMERS_COLLECTION = "customers";
 
+export const DEFAULT_CUSTOMER_CATEGORIES = [
+  { id: "vip", label: "VIP" },
+  { id: "frecuente", label: "Frecuente" },
+  { id: "ocasional", label: "Ocasional" },
+];
+
+export function normalizeCustomerCategory(value) {
+  return cleanText(value);
+}
+
+export function normalizeCustomerCategoryKey(value) {
+  const category = normalizeCustomerCategory(value);
+
+  if (!category) {
+    return "";
+  }
+
+  return category
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "");
+}
+
 /* -------------------------------------------------------------------------- */
 /*                                UTILIDADES                                   */
 /* -------------------------------------------------------------------------- */
@@ -109,6 +134,12 @@ function normalizeCustomerData(customer = {}) {
     email: cleanText(customer.email),
     address: cleanText(customer.address),
     notes: cleanText(customer.notes),
+    customerCategory: normalizeCustomerCategory(
+      customer.customerCategory || customer.category
+    ),
+    customerCategoryKey: normalizeCustomerCategoryKey(
+      customer.customerCategory || customer.category
+    ),
     isActive: customer.isActive !== false,
   };
 }
@@ -331,6 +362,7 @@ export async function createCustomer({
   email = "",
   address = "",
   notes = "",
+  customerCategory = "Ocasional",
   isActive = true,
   storeId = STORE_ID,
   actor = null,
@@ -376,6 +408,9 @@ export async function createCustomer({
       address: cleanText(address),
       notes: cleanText(notes),
 
+      customerCategory: normalizeCustomerCategory(customerCategory),
+      customerCategoryKey: normalizeCustomerCategoryKey(customerCategory),
+
       isActive: isActive !== false,
 
       createdByUid: actor?.uid || "",
@@ -406,6 +441,9 @@ export async function createCustomer({
     email: cleanText(email),
     address: cleanText(address),
     notes: cleanText(notes),
+
+    customerCategory: normalizeCustomerCategory(customerCategory),
+    customerCategoryKey: normalizeCustomerCategoryKey(customerCategory),
 
     isActive: isActive !== false,
   };
@@ -485,6 +523,16 @@ export async function updateCustomer(
       updates.notes !== undefined
         ? cleanText(updates.notes)
         : currentCustomer.notes,
+
+    customerCategory:
+      updates.customerCategory !== undefined
+        ? normalizeCustomerCategory(updates.customerCategory)
+        : normalizeCustomerCategory(currentCustomer.customerCategory),
+
+    customerCategoryKey:
+      updates.customerCategory !== undefined
+        ? normalizeCustomerCategoryKey(updates.customerCategory)
+        : normalizeCustomerCategoryKey(currentCustomer.customerCategory),
 
     isActive:
       updates.isActive !== undefined
