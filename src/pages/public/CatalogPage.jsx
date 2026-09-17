@@ -1,5 +1,5 @@
 import { showPremiumAlert } from "../../utils/premiumDialog";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   Link,
   useLocation,
@@ -1102,7 +1102,7 @@ export default function CatalogPage() {
     [visibleProducts, visibleProductLimit]
   );
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (
       loading ||
       restorationDoneRef.current
@@ -1128,6 +1128,7 @@ export default function CatalogPage() {
       isRestoringCatalogRef.current = false;
       return undefined;
     }
+
 
     const anchorProductId =
       safeText(
@@ -1175,6 +1176,10 @@ export default function CatalogPage() {
     restorationDoneRef.current = true;
     isRestoringCatalogRef.current = true;
 
+    const previousScrollBehavior =
+      document.documentElement.style.scrollBehavior;
+    document.documentElement.style.scrollBehavior = "auto";
+
     const fallbackScrollY =
       Math.max(
         Number(
@@ -1199,94 +1204,62 @@ export default function CatalogPage() {
         : 0;
 
     let cancelled = false;
-    let attempts = 0;
-    let timeoutId = null;
 
-    const finishRestoration = () => {
-      if (cancelled) return;
+    const anchorElement =
+      anchorProductId
+        ? document.getElementById(
+            `catalog-product-${encodeURIComponent(
+              anchorProductId
+            )}`
+          )
+        : null;
 
-      isRestoringCatalogRef.current =
-        false;
+    if (anchorElement) {
+      const rect =
+        anchorElement.getBoundingClientRect();
 
-      sessionStorage.setItem(
-        `catalog-scroll:${storeId}:${location.search}`,
-        String(window.scrollY)
-      );
+      const targetTop =
+        Math.max(
+          window.scrollY +
+            rect.top -
+            desiredViewportTop,
+          0
+        );
 
-      clearCatalogPositionSnapshot(
-        storeId,
-        location.search
-      );
-    };
+      window.scrollTo({
+        top: targetTop,
+        behavior: "auto",
+      });
+    } else if (fallbackScrollY > 0) {
+      window.scrollTo({
+        top: fallbackScrollY,
+        behavior: "auto",
+      });
+    }
 
-    const restoreFrame = () => {
-      if (cancelled) return;
+    isRestoringCatalogRef.current =
+      false;
 
-      attempts += 1;
+    sessionStorage.setItem(
+      `catalog-scroll:${storeId}:${location.search}`,
+      String(window.scrollY)
+    );
 
-      const anchorElement =
-        anchorProductId
-          ? document.getElementById(
-              `catalog-product-${encodeURIComponent(
-                anchorProductId
-              )}`
-            )
-          : null;
+    clearCatalogPositionSnapshot(
+      storeId,
+      location.search
+    );
 
-      if (anchorElement) {
-        const rect =
-          anchorElement.getBoundingClientRect();
-
-        const targetTop =
-          Math.max(
-            window.scrollY +
-              rect.top -
-              desiredViewportTop,
-            0
-          );
-
-        window.scrollTo({
-          top: targetTop,
-          behavior: "auto",
-        });
-      } else if (
-        fallbackScrollY > 0
-      ) {
-        window.scrollTo({
-          top: fallbackScrollY,
-          behavior: "auto",
-        });
-      }
-
-      if (attempts < 16) {
-        timeoutId =
-          window.setTimeout(
-            restoreFrame,
-            attempts < 5
-              ? 70
-              : 110
-          );
-        return;
-      }
-
-      finishRestoration();
-    };
-
-    requestAnimationFrame(() => {
-      requestAnimationFrame(
-        restoreFrame
-      );
-    });
+    document.documentElement.style.scrollBehavior =
+      previousScrollBehavior;
 
     return () => {
       cancelled = true;
-      if (timeoutId) {
-        window.clearTimeout(
-          timeoutId
-        );
-      }
       isRestoringCatalogRef.current =
         false;
+
+      document.documentElement.style.scrollBehavior =
+        previousScrollBehavior;
     };
   }, [
     loading,
