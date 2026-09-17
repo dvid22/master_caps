@@ -137,15 +137,22 @@ export default function ReserveProductPage() {
     useState("");
 
   function returnToCatalog() {
-    navigate(catalogUrl, {
-      state: catalogNavigationState
-        ? {
-            catalogNavigation:
-              catalogNavigationState,
-          }
-        : undefined,
-    });
+    if (catalogNavigationState) {
+      navigate(-1);
+      return;
+    }
+
+    navigate(catalogUrl);
   }
+
+  useEffect(() => {
+    if (
+      typeof window !== "undefined" &&
+      "scrollRestoration" in window.history
+    ) {
+      window.history.scrollRestoration = "manual";
+    }
+  }, []);
 
   useEffect(() => {
     setLoading(true);

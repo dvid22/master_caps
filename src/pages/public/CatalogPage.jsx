@@ -187,6 +187,93 @@ function buildCatalogSearch(navigationState = {}, fallbackSearch = "") {
 }
 
 
+function getCatalogPositionStorageKey(storeId, search = "") {
+  const normalizedSearch = new URLSearchParams(
+    String(search || "").replace(/^\?/, "")
+  ).toString();
+
+  return `catalog-position:${storeId}:${normalizedSearch}`;
+}
+
+function readCatalogPositionSnapshot(storeId, search = "") {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  try {
+    const raw = sessionStorage.getItem(
+      getCatalogPositionStorageKey(storeId, search)
+    );
+
+    if (!raw) {
+      return null;
+    }
+
+    const parsed = JSON.parse(raw);
+
+    if (!parsed || typeof parsed !== "object") {
+      return null;
+    }
+
+    const savedAt = Number(parsed.savedAt || 0);
+
+    if (savedAt > 0 && Date.now() - savedAt > 60 * 60 * 1000) {
+      sessionStorage.removeItem(
+        getCatalogPositionStorageKey(storeId, search)
+      );
+      return null;
+    }
+
+    return parsed;
+  } catch (error) {
+    console.warn(
+      "No se pudo leer la posición guardada del catálogo:",
+      error
+    );
+    return null;
+  }
+}
+
+function saveCatalogPositionSnapshot({
+  storeId,
+  search = "",
+  snapshot,
+}) {
+  if (typeof window === "undefined" || !snapshot) {
+    return;
+  }
+
+  try {
+    sessionStorage.setItem(
+      getCatalogPositionStorageKey(storeId, search),
+      JSON.stringify({
+        ...snapshot,
+        savedAt: Date.now(),
+      })
+    );
+  } catch (error) {
+    console.warn(
+      "No se pudo guardar la posición del catálogo:",
+      error
+    );
+  }
+}
+
+function clearCatalogPositionSnapshot(storeId, search = "") {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  try {
+    sessionStorage.removeItem(
+      getCatalogPositionStorageKey(storeId, search)
+    );
+  } catch {
+    // sessionStorage puede estar deshabilitado; no bloqueamos la navegación.
+  }
+}
+
+
 function GlobalGroupImage({
   src,
   alt,
@@ -490,12 +577,25 @@ export default function CatalogPage() {
 
   const restorationDoneRef =
     useRef(false);
+  const isRestoringCatalogRef =
+    useRef(false);
+  const pendingRestorationRef =
+    useRef(undefined);
   const loadMoreRef = useRef(null);
   const [visibleProductLimit, setVisibleProductLimit] = useState(24);
   const productsReadyRef = useRef(false);
   const categoriesReadyRef = useRef(false);
   const mainCategoriesReadyRef =
     useRef(false);
+
+  useEffect(() => {
+    if (
+      typeof window !== "undefined" &&
+      "scrollRestoration" in window.history
+    ) {
+      window.history.scrollRestoration = "manual";
+    }
+  }, []);
 
   useEffect(() => {
     setLoading(true);
@@ -715,68 +815,6 @@ export default function CatalogPage() {
     search,
     setSearchParams,
   ]);
-
-  useEffect(() => {
-    if (
-      loading ||
-      restorationDoneRef.current
-    ) {
-      return;
-    }
-
-    restorationDoneRef.current = true;
-
-    const savedScrollY = Number(
-      location.state
-        ?.catalogNavigation?.scrollY ||
-        sessionStorage.getItem(
-          `catalog-scroll:${storeId}:${location.search}`
-        ) ||
-        0
-    );
-
-    if (savedScrollY > 0) {
-      requestAnimationFrame(() => {
-        window.scrollTo({
-          top: savedScrollY,
-          behavior: "auto",
-        });
-      });
-    }
-  }, [
-    loading,
-    location.search,
-    location.state,
-    storeId,
-  ]);
-
-  useEffect(() => {
-    const storageKey =
-      `catalog-scroll:${storeId}:${location.search}`;
-
-    const saveScroll = () => {
-      sessionStorage.setItem(
-        storageKey,
-        String(window.scrollY)
-      );
-    };
-
-    window.addEventListener(
-      "scroll",
-      saveScroll,
-      {
-        passive: true,
-      }
-    );
-
-    return () => {
-      window.removeEventListener(
-        "scroll",
-        saveScroll
-      );
-      saveScroll();
-    };
-  }, [location.search, storeId]);
 
   const categoryById = useMemo(
     () =>
@@ -1065,7 +1103,248 @@ export default function CatalogPage() {
   );
 
   useEffect(() => {
-    setVisibleProductLimit(24);
+    if (
+      loading ||
+      restorationDoneRef.current
+    ) {
+      return undefined;
+    }
+
+    if (pendingRestorationRef.current === undefined) {
+      pendingRestorationRef.current =
+        readCatalogPositionSnapshot(
+          storeId,
+          location.search
+        ) ||
+        location.state?.catalogNavigation ||
+        null;
+    }
+
+    const restoration =
+      pendingRestorationRef.current;
+
+    if (!restoration) {
+      restorationDoneRef.current = true;
+      isRestoringCatalogRef.current = false;
+      return undefined;
+    }
+
+    const anchorProductId =
+      safeText(
+        restoration.productId ||
+          restoration.anchorProductId
+      );
+
+    if (anchorProductId) {
+      const productIndex =
+        visibleProducts.findIndex(
+          (product) =>
+            String(product.id) ===
+            anchorProductId
+        );
+
+      if (
+        productIndex >= 0 &&
+        productIndex >=
+          visibleProductLimit
+      ) {
+        const requiredLimit =
+          Math.min(
+            visibleProducts.length,
+            Math.max(
+              24,
+              Math.ceil(
+                (productIndex + 1) /
+                  24
+              ) * 24
+            )
+          );
+
+        if (
+          requiredLimit >
+          visibleProductLimit
+        ) {
+          setVisibleProductLimit(
+            requiredLimit
+          );
+          return undefined;
+        }
+      }
+    }
+
+    restorationDoneRef.current = true;
+    isRestoringCatalogRef.current = true;
+
+    const fallbackScrollY =
+      Math.max(
+        Number(
+          restoration.scrollY ||
+            sessionStorage.getItem(
+              `catalog-scroll:${storeId}:${location.search}`
+            ) ||
+            0
+        ),
+        0
+      );
+
+    const desiredViewportTop =
+      Number.isFinite(
+        Number(
+          restoration.anchorViewportTop
+        )
+      )
+        ? Number(
+            restoration.anchorViewportTop
+          )
+        : 0;
+
+    let cancelled = false;
+    let attempts = 0;
+    let timeoutId = null;
+
+    const finishRestoration = () => {
+      if (cancelled) return;
+
+      isRestoringCatalogRef.current =
+        false;
+
+      sessionStorage.setItem(
+        `catalog-scroll:${storeId}:${location.search}`,
+        String(window.scrollY)
+      );
+
+      clearCatalogPositionSnapshot(
+        storeId,
+        location.search
+      );
+    };
+
+    const restoreFrame = () => {
+      if (cancelled) return;
+
+      attempts += 1;
+
+      const anchorElement =
+        anchorProductId
+          ? document.getElementById(
+              `catalog-product-${encodeURIComponent(
+                anchorProductId
+              )}`
+            )
+          : null;
+
+      if (anchorElement) {
+        const rect =
+          anchorElement.getBoundingClientRect();
+
+        const targetTop =
+          Math.max(
+            window.scrollY +
+              rect.top -
+              desiredViewportTop,
+            0
+          );
+
+        window.scrollTo({
+          top: targetTop,
+          behavior: "auto",
+        });
+      } else if (
+        fallbackScrollY > 0
+      ) {
+        window.scrollTo({
+          top: fallbackScrollY,
+          behavior: "auto",
+        });
+      }
+
+      if (attempts < 16) {
+        timeoutId =
+          window.setTimeout(
+            restoreFrame,
+            attempts < 5
+              ? 70
+              : 110
+          );
+        return;
+      }
+
+      finishRestoration();
+    };
+
+    requestAnimationFrame(() => {
+      requestAnimationFrame(
+        restoreFrame
+      );
+    });
+
+    return () => {
+      cancelled = true;
+      if (timeoutId) {
+        window.clearTimeout(
+          timeoutId
+        );
+      }
+      isRestoringCatalogRef.current =
+        false;
+    };
+  }, [
+    loading,
+    location.search,
+    location.state,
+    storeId,
+    visibleProducts,
+    visibleProductLimit,
+  ]);
+
+  useEffect(() => {
+    const storageKey =
+      `catalog-scroll:${storeId}:${location.search}`;
+
+    const saveScroll = () => {
+      if (
+        isRestoringCatalogRef.current
+      ) {
+        return;
+      }
+
+      sessionStorage.setItem(
+        storageKey,
+        String(window.scrollY)
+      );
+    };
+
+    window.addEventListener(
+      "scroll",
+      saveScroll,
+      {
+        passive: true,
+      }
+    );
+
+    return () => {
+      window.removeEventListener(
+        "scroll",
+        saveScroll
+      );
+
+      if (
+        !isRestoringCatalogRef.current
+      ) {
+        saveScroll();
+      }
+    };
+  }, [
+    location.search,
+    storeId,
+  ]);
+
+  useEffect(() => {
+    if (
+      !isRestoringCatalogRef.current
+    ) {
+      setVisibleProductLimit(24);
+    }
   }, [
     search,
     specialCollectionFilter,
@@ -3169,15 +3448,55 @@ function EditorialProductCard({
     </>
   );
 
+  function rememberCatalogPosition(event) {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const cardElement =
+      event.currentTarget.closest(
+        "[data-catalog-product-id]"
+      ) || event.currentTarget;
+
+    const rect =
+      cardElement.getBoundingClientRect();
+
+    const snapshot = {
+      ...navigationState,
+      catalogSearch: productSearch,
+      productId: product.id,
+      anchorProductId: product.id,
+      anchorViewportTop: rect.top,
+      scrollY: window.scrollY,
+    };
+
+    saveCatalogPositionSnapshot({
+      storeId,
+      search: productSearch,
+      snapshot,
+    });
+
+    sessionStorage.setItem(
+      `catalog-scroll:${storeId}:${productSearch}`,
+      String(window.scrollY)
+    );
+  }
+
   return (
-    <article className="group min-w-0">
+    <article
+      id={`catalog-product-${encodeURIComponent(product.id)}`}
+      className="group min-w-0"
+      data-catalog-product-id={product.id}
+    >
       <Link
         to={`/catalogo/${storeId}/apartar/${product.id}${productSearch}`}
+        onClick={rememberCatalogPosition}
         state={{
           catalogNavigation: {
             ...navigationState,
             catalogSearch: productSearch,
-            scrollY: typeof window !== "undefined" ? window.scrollY : 0,
+            productId: product.id,
+            anchorProductId: product.id,
           },
         }}
         className="block"
