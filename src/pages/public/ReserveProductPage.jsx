@@ -62,8 +62,11 @@ function buildPromotionWhatsAppUrl({
   quantity = 1,
 }) {
   const lines = [
-    "Hola Master Caps  Quiero comprar este producto de promoción.",
+    "Hola Master Caps, quiero comprar este producto de promoción.",
     `Producto: ${safeText(product?.name) || "Producto"}`,
+    safeText(product?.code)
+      ? `Código: ${safeText(product.code)}`
+      : "",
     safeText(selectedVariant?.size)
       ? `Talla: ${safeText(selectedVariant.size)}`
       : "",
