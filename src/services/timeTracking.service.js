@@ -262,6 +262,10 @@ export async function clockIn({
       clockInByName:
         actor?.name || user.displayName || user.email || "Vendedor",
       clockInByEmail: actor?.email || user.email || "",
+      clockInSource:
+        actor?.uid && actor.uid !== cleanUserId
+          ? "admin"
+          : "self",
       clockOutByUid: "",
       clockOutByName: "",
       clockOutByEmail: "",
@@ -275,9 +279,19 @@ export async function clockIn({
     transaction.set(activeRef, {
       storeId: cleanStoreId,
       userId: cleanUserId,
+      userName: user.displayName || user.email || "Vendedor",
+      userEmail: user.email || "",
       timeEntryId: entryRef.id,
       clockIn: nowTimestamp,
+      clockInByUid: actor?.uid || cleanUserId,
+      clockInByName:
+        actor?.name || user.displayName || user.email || "Vendedor",
+      clockInSource:
+        actor?.uid && actor.uid !== cleanUserId
+          ? "admin"
+          : "self",
       createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
     });
 
     return {
@@ -362,6 +376,10 @@ export async function clockOut({
       clockOutByUid: actor?.uid || cleanUserId,
       clockOutByName: actor?.name || entry.userName || "Vendedor",
       clockOutByEmail: actor?.email || entry.userEmail || "",
+      clockOutSource:
+        actor?.uid && actor.uid !== cleanUserId
+          ? "admin"
+          : "self",
     });
 
     transaction.delete(activeRef);

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+  AlertTriangle,
   BadgeDollarSign,
   Banknote,
   CalendarDays,
@@ -12,6 +13,7 @@ import {
   FileClock,
   HandCoins,
   History,
+  Info,
   LogIn,
   LogOut,
   Mail,
@@ -23,6 +25,7 @@ import {
   SlidersHorizontal,
   Store,
   Timer,
+  Trash2,
   User,
   UserPlus,
   UserCheck,
@@ -42,6 +45,7 @@ import {
   getActivePaymentRate,
   getPaymentTypeLabel,
   setUserActiveStatus,
+  deleteStoreWorker,
   subscribeUsers,
   updateStoreUser,
   updateUserPaymentConfiguration,
@@ -345,6 +349,57 @@ export default function UsersPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [clocking, setClocking] = useState(false);
+  const [adminClockingUserId, setAdminClockingUserId] = useState("");
+  const [deletingUserId, setDeletingUserId] = useState("");
+
+  const [toast, setToast] = useState(null);
+  const [confirmDialog, setConfirmDialog] = useState(null);
+
+  function showToast({
+    type = "info",
+    title,
+    message = "",
+    duration = 3600,
+  }) {
+    const id = Date.now();
+
+    setToast({
+      id,
+      type,
+      title,
+      message,
+    });
+
+    window.setTimeout(() => {
+      setToast((current) =>
+        current?.id === id ? null : current
+      );
+    }, duration);
+  }
+
+  function askConfirmation({
+    title,
+    message,
+    confirmLabel = "Confirmar",
+    tone = "danger",
+  }) {
+    return new Promise((resolve) => {
+      setConfirmDialog({
+        title,
+        message,
+        confirmLabel,
+        tone,
+        resolve,
+      });
+    });
+  }
+
+  function closeConfirmation(result) {
+    setConfirmDialog((current) => {
+      current?.resolve?.(result);
+      return null;
+    });
+  }
 
   useEffect(() => {
     if (!isAdmin) return undefined;
@@ -358,7 +413,12 @@ export default function UsersPage() {
       },
       () => {
         setLoading(false);
-        alert("No se pudieron escuchar los usuarios.");
+        showToast({
+          type: "error",
+          title: "No pudimos cargar el equipo",
+          message:
+            "Revisa la conexión e inténtalo nuevamente.",
+        });
       },
       STORE_ID
     );
@@ -367,14 +427,24 @@ export default function UsersPage() {
       storeId: STORE_ID,
       callback: setStoreEntries,
       onError: () =>
-        alert("No se pudieron escuchar las jornadas laborales."),
+        showToast({
+          type: "error",
+          title: "No pudimos cargar las jornadas",
+          message:
+            "Revisa la conexión e inténtalo nuevamente.",
+        }),
     });
 
     const unsubscribePayroll = subscribePayrollPayments({
       storeId: STORE_ID,
       callback: setPayrollPayments,
       onError: () =>
-        alert("No se pudieron escuchar los pagos de nómina."),
+        showToast({
+          type: "error",
+          title: "No pudimos cargar los pagos",
+          message:
+            "Revisa la conexión e inténtalo nuevamente.",
+        }),
     });
 
     return () => {
@@ -398,14 +468,25 @@ export default function UsersPage() {
       },
       onError: () => {
         setLoading(false);
-        alert("No se pudieron escuchar tus jornadas.");
+        showToast({
+          type: "error",
+          title: "No pudimos cargar tus jornadas",
+          message:
+            "Revisa la conexión e inténtalo nuevamente.",
+        });
       },
     });
 
     const unsubscribeActive = subscribeActiveTimeEntry(
       firebaseUser.uid,
       setActiveEntry,
-      () => alert("No se pudo escuchar la jornada activa."),
+      () =>
+        showToast({
+          type: "error",
+          title: "No pudimos actualizar tu jornada",
+          message:
+            "Inténtalo nuevamente en unos segundos.",
+        }),
       STORE_ID
     );
 
@@ -414,7 +495,12 @@ export default function UsersPage() {
       sellerUid: firebaseUser.uid,
       callback: setSellerPayrollPayments,
       onError: () =>
-        alert("No se pudieron escuchar tus pagos recibidos."),
+        showToast({
+          type: "error",
+          title: "No pudimos cargar tus pagos",
+          message:
+            "Revisa la conexión e inténtalo nuevamente.",
+        }),
     });
 
     return () => {
@@ -428,6 +514,21 @@ export default function UsersPage() {
     () => users.filter((userItem) => userItem.role === "seller"),
     [users]
   );
+
+  const activeEntriesByUser = useMemo(() => {
+    const map = new Map();
+
+    storeEntries.forEach((entry) => {
+      if (
+        entry?.userId &&
+        entry.status === TIME_ENTRY_STATUS.OPEN
+      ) {
+        map.set(entry.userId, entry);
+      }
+    });
+
+    return map;
+  }, [storeEntries]);
 
   const filteredUsers = useMemo(() => {
     const cleanSearch = search.trim().toLowerCase();
@@ -475,6 +576,8 @@ export default function UsersPage() {
           summary: calculatePayroll(entries, seller, period),
           paymentState,
           payments: sellerPayments,
+          activeEntry:
+            activeEntriesByUser.get(seller.id) || null,
         };
       })
       .filter(({ seller }) => {
@@ -508,6 +611,7 @@ export default function UsersPage() {
     search,
     payrollPaymentFilter,
     payrollStatusFilter,
+    activeEntriesByUser,
   ]);
 
   const adminTotals = useMemo(() => {
@@ -614,12 +718,20 @@ export default function UsersPage() {
     const password = userForm.password.trim();
 
     if (!displayName) {
-      alert("Escribe el nombre del usuario.");
+      showToast({
+        type: "warning",
+        title: "Nombre requerido",
+        message: "Escribe el nombre completo del usuario.",
+      });
       return;
     }
 
     if (!email) {
-      alert("Escribe el correo.");
+      showToast({
+        type: "warning",
+        title: "Correo requerido",
+        message: "Escribe un correo electrónico válido.",
+      });
       return;
     }
 
@@ -637,7 +749,12 @@ export default function UsersPage() {
         });
       } else {
         if (!password || password.length < 6) {
-          alert("La contraseña debe tener mínimo 6 caracteres.");
+          showToast({
+            type: "warning",
+            title: "Contraseña muy corta",
+            message:
+              "La contraseña temporal debe tener mínimo 6 caracteres.",
+          });
           return;
         }
 
@@ -656,9 +773,20 @@ export default function UsersPage() {
       console.error(error);
 
       if (error.code === "auth/email-already-in-use") {
-        alert("Ya existe un usuario con ese correo.");
+        showToast({
+          type: "warning",
+          title: "Correo ya registrado",
+          message:
+            "Ya existe un usuario con ese correo electrónico.",
+        });
       } else {
-        alert(error.message || "No se pudo guardar el usuario.");
+        showToast({
+          type: "error",
+          title: "No pudimos guardar el usuario",
+          message:
+            error.message ||
+            "Verifica los datos e inténtalo nuevamente.",
+        });
       }
     } finally {
       setSaving(false);
@@ -680,10 +808,21 @@ export default function UsersPage() {
       );
 
       closePaymentModal();
-      alert("Configuración de pago actualizada.");
+      showToast({
+        type: "success",
+        title: "Configuración actualizada",
+        message:
+          "La configuración salarial se guardó correctamente.",
+      });
     } catch (error) {
       console.error(error);
-      alert(error.message || "No se pudo guardar la configuración.");
+      showToast({
+        type: "error",
+        title: "No pudimos guardar la configuración",
+        message:
+          error.message ||
+          "Inténtalo nuevamente en unos segundos.",
+      });
     } finally {
       setSaving(false);
     }
@@ -692,11 +831,18 @@ export default function UsersPage() {
   async function handleToggleActive(userItem) {
     const nextStatus = !userItem.active;
 
-    const confirmed = window.confirm(
-      nextStatus
-        ? `¿Deseas activar a ${userItem.displayName}?`
-        : `¿Deseas desactivar a ${userItem.displayName}?`
-    );
+    const confirmed = await askConfirmation({
+      title: nextStatus
+        ? "Activar trabajador"
+        : "Desactivar trabajador",
+      message: nextStatus
+        ? `¿Deseas activar a ${userItem.displayName}? Podrá volver a iniciar sesión y registrar jornadas.`
+        : `¿Deseas desactivar a ${userItem.displayName}? No podrá iniciar nuevas jornadas mientras esté inactivo.`,
+      confirmLabel: nextStatus
+        ? "Sí, activar"
+        : "Sí, desactivar",
+      tone: nextStatus ? "success" : "danger",
+    });
 
     if (!confirmed) return;
 
@@ -706,9 +852,85 @@ export default function UsersPage() {
         nextStatus,
         getCurrentUserActor()
       );
+
+      showToast({
+        type: "success",
+        title: nextStatus
+          ? "Trabajador activado"
+          : "Trabajador desactivado",
+        message: `${userItem.displayName} fue actualizado correctamente.`,
+      });
     } catch (error) {
       console.error(error);
-      alert("No se pudo cambiar el estado del usuario.");
+      showToast({
+        type: "error",
+        title: "No pudimos cambiar el estado",
+        message:
+          error.message ||
+          "Inténtalo nuevamente en unos segundos.",
+      });
+    }
+  }
+
+  async function handleDeleteWorker(userItem) {
+    if (!userItem?.id) return;
+
+    if (userItem.role !== "seller") {
+      showToast({
+        type: "warning",
+        title: "Acción no disponible",
+        message:
+          "La eliminación completa está disponible únicamente para trabajadores con rol vendedor.",
+      });
+      return;
+    }
+
+    const workerName =
+      userItem.displayName ||
+      userItem.email ||
+      "este trabajador";
+
+    const confirmed = await askConfirmation({
+      title: `Eliminar a ${workerName}`,
+      message:
+        "Se eliminarán su perfil, su jornada activa y todas sus jornadas laborales. Las ventas, pagos de nómina ya realizados y gastos históricos se conservarán por trazabilidad contable. Esta acción no se puede deshacer.",
+      confirmLabel: "Eliminar trabajador",
+      tone: "danger",
+    });
+
+    if (!confirmed) return;
+
+    try {
+      setDeletingUserId(userItem.id);
+
+      const result = await deleteStoreWorker(
+        userItem.id,
+        getCurrentUserActor(),
+        STORE_ID
+      );
+
+      if (detailUser?.id === userItem.id) {
+        setDetailUser(null);
+      }
+
+      showToast({
+        type: "success",
+        title: "Trabajador eliminado",
+        message: `${result.displayName} fue eliminado correctamente. Se eliminaron ${result.deletedTimeEntries} jornada(s).`,
+        duration: 5000,
+      });
+    } catch (error) {
+      console.error(error);
+      showToast({
+        type: "error",
+        title: "No pudimos eliminar el trabajador",
+        message:
+          error.message ||
+          "Inténtalo nuevamente en unos segundos.",
+        duration: 5000,
+      });
+    } finally {
+      setDeletingUserId("");
     }
   }
 
@@ -733,9 +955,97 @@ export default function UsersPage() {
       }
     } catch (error) {
       console.error(error);
-      alert(error.message || "No se pudo registrar la jornada.");
+      showToast({
+        type: "error",
+        title: "No pudimos actualizar la jornada",
+        message:
+          error.message ||
+          "Inténtalo nuevamente en unos segundos.",
+      });
     } finally {
       setClocking(false);
+    }
+  }
+
+  async function handleAdminClockAction(userItem) {
+    if (!isAdmin || !userItem?.id) return;
+
+    if (userItem.role !== "seller") {
+      showToast({
+        type: "warning",
+        title: "Acción no disponible",
+        message:
+          "La jornada laboral solo aplica a usuarios con rol vendedor.",
+      });
+      return;
+    }
+
+    if (!userItem.active) {
+      showToast({
+        type: "warning",
+        title: "Trabajador inactivo",
+        message:
+          "Activa al trabajador antes de iniciar una jornada laboral.",
+      });
+      return;
+    }
+
+    const currentActiveEntry =
+      activeEntriesByUser.get(userItem.id) || null;
+
+    const actionLabel = currentActiveEntry
+      ? "finalizar"
+      : "iniciar";
+
+    const workerName =
+      userItem.displayName ||
+      userItem.email ||
+      "este vendedor";
+
+    const confirmed = await askConfirmation({
+      title: currentActiveEntry
+        ? "Finalizar jornada"
+        : "Iniciar jornada",
+      message: currentActiveEntry
+        ? `¿Deseas finalizar la jornada laboral de ${workerName}? La salida quedará registrada a nombre de administración.`
+        : `¿Deseas iniciar la jornada laboral de ${workerName}? La entrada quedará registrada a nombre de administración.`,
+      confirmLabel: currentActiveEntry
+        ? "Finalizar jornada"
+        : "Iniciar jornada",
+      tone: currentActiveEntry
+        ? "danger"
+        : "success",
+    });
+
+    if (!confirmed) return;
+
+    try {
+      setAdminClockingUserId(userItem.id);
+
+      if (currentActiveEntry) {
+        await clockOut({
+          userId: userItem.id,
+          storeId: STORE_ID,
+          actor: getCurrentUserActor(),
+        });
+      } else {
+        await clockIn({
+          userId: userItem.id,
+          storeId: STORE_ID,
+          actor: getCurrentUserActor(),
+        });
+      }
+    } catch (error) {
+      console.error(error);
+      showToast({
+        type: "error",
+        title: "No pudimos actualizar la jornada",
+        message:
+          error.message ||
+          "Inténtalo nuevamente en unos segundos.",
+      });
+    } finally {
+      setAdminClockingUserId("");
     }
   }
 
@@ -917,13 +1227,32 @@ export default function UsersPage() {
                 ) : (
                   <div className="grid gap-3 md:grid-cols-2 2xl:grid-cols-3">
                     {payrollRows.map(
-                      ({ seller, summary, paymentState, payments }) => (
+                      ({
+                        seller,
+                        summary,
+                        paymentState,
+                        payments,
+                        activeEntry: sellerActiveEntry,
+                      }) => (
                       <PayrollCard
                         key={seller.id}
                         seller={seller}
                         summary={summary}
                         paymentState={paymentState}
                         payments={payments}
+                        activeEntry={sellerActiveEntry}
+                        clocking={
+                          adminClockingUserId === seller.id
+                        }
+                        onClockAction={() =>
+                          handleAdminClockAction(seller)
+                        }
+                        deleting={
+                          deletingUserId === seller.id
+                        }
+                        onDelete={() =>
+                          handleDeleteWorker(seller)
+                        }
                         onPayment={() => openPaymentModal(seller)}
                         onDetails={() => setDetailUser(seller)}
                       />
@@ -944,9 +1273,14 @@ export default function UsersPage() {
             onRoleFilter={setRoleFilter}
             onStatusFilter={setStatusFilter}
             onCreate={openCreateUser}
+            activeEntriesByUser={activeEntriesByUser}
+            adminClockingUserId={adminClockingUserId}
+            deletingUserId={deletingUserId}
             onEdit={openEditUser}
             onToggle={handleToggleActive}
             onPayment={openPaymentModal}
+            onClockAction={handleAdminClockAction}
+            onDelete={handleDeleteWorker}
           />
         )}
       </section>
@@ -1010,14 +1344,40 @@ export default function UsersPage() {
               });
 
               setCorrectionEntry(null);
-              alert("Jornada corregida correctamente.");
+              showToast({
+                type: "success",
+                title: "Jornada corregida",
+                message:
+                  "La corrección se guardó correctamente.",
+              });
             } catch (error) {
               console.error(error);
-              alert(error.message || "No se pudo corregir la jornada.");
+              showToast({
+                type: "error",
+                title: "No pudimos corregir la jornada",
+                message:
+                  error.message ||
+                  "Verifica los datos e inténtalo nuevamente.",
+              });
             } finally {
               setSaving(false);
             }
           }}
+        />
+      )}
+
+      {confirmDialog && (
+        <ProfessionalConfirm
+          dialog={confirmDialog}
+          onCancel={() => closeConfirmation(false)}
+          onConfirm={() => closeConfirmation(true)}
+        />
+      )}
+
+      {toast && (
+        <ProfessionalToast
+          toast={toast}
+          onClose={() => setToast(null)}
         />
       )}
     </main>
@@ -1520,6 +1880,11 @@ function PayrollCard({
   summary,
   paymentState,
   payments,
+  activeEntry,
+  clocking,
+  deleting,
+  onClockAction,
+  onDelete,
   onPayment,
   onDetails,
 }) {
@@ -1597,11 +1962,72 @@ function PayrollCard({
         />
       </div>
 
+      <div
+        className={`mt-3 flex items-center justify-between gap-3 rounded-2xl border px-3 py-2.5 ${
+          activeEntry
+            ? "border-emerald-100 bg-emerald-50/70"
+            : "border-black/[0.055] bg-black/[0.02]"
+        }`}
+      >
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <span
+              className={`h-2 w-2 shrink-0 rounded-full ${
+                activeEntry
+                  ? "bg-emerald-500"
+                  : "bg-black/20"
+              }`}
+            />
+            <p
+              className={`truncate text-[9px] font-medium ${
+                activeEntry
+                  ? "text-emerald-700"
+                  : "text-black/48"
+              }`}
+            >
+              {activeEntry
+                ? "Jornada activa"
+                : "Sin jornada activa"}
+            </p>
+          </div>
+
+          <p className="mt-1 truncate text-[8px] text-black/38">
+            {activeEntry
+              ? `Entrada ${formatTime(activeEntry.clockIn)}`
+              : "Administración puede iniciar la jornada"}
+          </p>
+        </div>
+
+        <button
+          type="button"
+          onClick={onClockAction}
+          disabled={clocking || !seller.active}
+          className={`inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-xl px-3 text-[8.5px] font-medium transition disabled:cursor-not-allowed disabled:opacity-40 ${
+            activeEntry
+              ? "bg-red-600 text-white hover:bg-red-700"
+              : "bg-black text-white hover:bg-black/85"
+          }`}
+        >
+          {activeEntry ? (
+            <LogOut size={11} />
+          ) : (
+            <LogIn size={11} />
+          )}
+
+          {clocking
+            ? "Procesando..."
+            : activeEntry
+              ? "Finalizar"
+              : "Iniciar"}
+        </button>
+      </div>
+
       <div className="mt-3 grid grid-cols-2 gap-2">
         <button
           type="button"
           onClick={onPayment}
-          className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-black/[0.08] bg-white text-[10px] font-medium transition hover:border-red-200 hover:bg-red-50 hover:text-red-600"
+          disabled={deleting}
+          className="inline-flex h-9 items-center justify-center gap-2 rounded-xl border border-black/[0.08] bg-white text-[10px] font-medium transition hover:border-red-200 hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-40"
         >
           <HandCoins size={13} />
           Configurar
@@ -1610,12 +2036,25 @@ function PayrollCard({
         <button
           type="button"
           onClick={onDetails}
-          className="inline-flex h-9 items-center justify-center gap-2 rounded-xl bg-black text-[10px] font-medium text-white transition hover:bg-black/85"
+          disabled={deleting}
+          className="inline-flex h-9 items-center justify-center gap-2 rounded-xl bg-black text-[10px] font-medium text-white transition hover:bg-black/85 disabled:cursor-not-allowed disabled:opacity-40"
         >
           <CalendarDays size={13} />
           Ver jornadas
         </button>
       </div>
+
+      <button
+        type="button"
+        onClick={onDelete}
+        disabled={deleting || clocking}
+        className="mt-2 inline-flex h-9 w-full items-center justify-center gap-2 rounded-xl border border-red-100 bg-white text-[10px] font-medium text-red-600 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-40"
+      >
+        <Trash2 size={13} />
+        {deleting
+          ? "Eliminando trabajador..."
+          : "Eliminar trabajador"}
+      </button>
     </article>
   );
 }
@@ -1657,9 +2096,14 @@ function UsersManagementSection({
   onRoleFilter,
   onStatusFilter,
   onCreate,
+  activeEntriesByUser,
+  adminClockingUserId,
+  deletingUserId,
   onEdit,
   onToggle,
   onPayment,
+  onClockAction,
+  onDelete,
 }) {
   return (
     <section className="mt-5 rounded-[28px] bg-white p-3 shadow-[0_18px_55px_rgba(0,0,0,0.05)] ring-1 ring-black/[0.06]">
@@ -1724,9 +2168,22 @@ function UsersManagementSection({
               <UserCard
                 key={userItem.id}
                 userItem={userItem}
+                activeEntry={
+                  activeEntriesByUser?.get(userItem.id) || null
+                }
+                clocking={
+                  adminClockingUserId === userItem.id
+                }
+                deleting={
+                  deletingUserId === userItem.id
+                }
+                onClockAction={() =>
+                  onClockAction(userItem)
+                }
                 onEdit={() => onEdit(userItem)}
                 onToggle={() => onToggle(userItem)}
                 onPayment={() => onPayment(userItem)}
+                onDelete={() => onDelete(userItem)}
               />
             ))}
           </div>
@@ -1738,9 +2195,14 @@ function UsersManagementSection({
 
 function UserCard({
   userItem,
+  activeEntry,
+  clocking,
+  deleting,
+  onClockAction,
   onEdit,
   onToggle,
   onPayment,
+  onDelete,
 }) {
   return (
     <article className="rounded-[24px] bg-white p-3 shadow-[0_14px_40px_rgba(0,0,0,0.035)] ring-1 ring-black/[0.06] transition hover:-translate-y-0.5 hover:shadow-[0_22px_60px_rgba(0,0,0,0.07)]">
@@ -1838,14 +2300,91 @@ function UserCard({
       </div>
 
       {userItem.role === "seller" && (
-        <button
-          type="button"
-          onClick={onPayment}
-          className="mt-2 inline-flex h-10 w-full items-center justify-center gap-2 rounded-2xl bg-red-600 text-[11px] font-medium text-white shadow-lg shadow-red-600/15"
-        >
-          <DollarSign size={14} />
-          Configurar pago
-        </button>
+        <>
+          <div
+            className={`mt-2 rounded-2xl border p-2.5 ${
+              activeEntry
+                ? "border-emerald-100 bg-emerald-50/65"
+                : "border-black/[0.055] bg-black/[0.02]"
+            }`}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <span
+                    className={`h-2 w-2 shrink-0 rounded-full ${
+                      activeEntry
+                        ? "bg-emerald-500"
+                        : "bg-black/20"
+                    }`}
+                  />
+                  <p
+                    className={`truncate text-[9px] font-medium ${
+                      activeEntry
+                        ? "text-emerald-700"
+                        : "text-black/48"
+                    }`}
+                  >
+                    {activeEntry
+                      ? "Jornada activa"
+                      : "Sin jornada activa"}
+                  </p>
+                </div>
+
+                <p className="mt-1 truncate text-[8px] text-black/38">
+                  {activeEntry
+                    ? `Entrada ${formatTime(activeEntry.clockIn)}`
+                    : "Sin entrada registrada"}
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={onClockAction}
+                disabled={clocking || !userItem.active}
+                className={`inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-xl px-3 text-[8.5px] font-medium text-white transition disabled:cursor-not-allowed disabled:opacity-40 ${
+                  activeEntry
+                    ? "bg-red-600 hover:bg-red-700"
+                    : "bg-black hover:bg-black/85"
+                }`}
+              >
+                {activeEntry ? (
+                  <LogOut size={11} />
+                ) : (
+                  <LogIn size={11} />
+                )}
+
+                {clocking
+                  ? "Procesando..."
+                  : activeEntry
+                    ? "Finalizar"
+                    : "Iniciar"}
+              </button>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={onPayment}
+            disabled={deleting}
+            className="mt-2 inline-flex h-10 w-full items-center justify-center gap-2 rounded-2xl bg-red-600 text-[11px] font-medium text-white shadow-lg shadow-red-600/15 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <DollarSign size={14} />
+            Configurar pago
+          </button>
+
+          <button
+            type="button"
+            onClick={onDelete}
+            disabled={deleting || clocking}
+            className="mt-2 inline-flex h-10 w-full items-center justify-center gap-2 rounded-2xl border border-red-100 bg-white text-[11px] font-medium text-red-600 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <Trash2 size={14} />
+            {deleting
+              ? "Eliminando trabajador..."
+              : "Eliminar trabajador"}
+          </button>
+        </>
       )}
     </article>
   );
@@ -2002,6 +2541,24 @@ function EntryRow({
           Entrada {formatTime(entry.clockIn)} · Salida{" "}
           {formatTime(entry.clockOut)}
         </p>
+
+        {(entry.clockInByName || entry.clockOutByName) && (
+          <p className="mt-1 text-[8px] text-black/35">
+            Entrada por{" "}
+            {entry.clockInSource === "admin"
+              ? `administración · ${entry.clockInByName || "Administrador"}`
+              : entry.clockInByName || "Vendedor"}
+            {entry.clockOut && (
+              <>
+                {" "}
+                · Salida por{" "}
+                {entry.clockOutSource === "admin"
+                  ? `administración · ${entry.clockOutByName || "Administrador"}`
+                  : entry.clockOutByName || "Vendedor"}
+              </>
+            )}
+          </p>
+        )}
       </div>
 
       <div className="flex items-center justify-between gap-4 sm:justify-end">
@@ -2374,6 +2931,133 @@ function CorrectionModal({
         {saving ? "Guardando..." : "Guardar corrección"}
       </button>
     </ModalShell>
+  );
+}
+
+
+function ProfessionalToast({ toast, onClose }) {
+  const config = {
+    success: {
+      icon: CheckCircle2,
+      shell: "border-emerald-100 bg-white",
+      iconShell: "bg-emerald-50 text-emerald-600",
+    },
+    error: {
+      icon: AlertTriangle,
+      shell: "border-red-100 bg-white",
+      iconShell: "bg-red-50 text-red-600",
+    },
+    warning: {
+      icon: AlertTriangle,
+      shell: "border-amber-100 bg-white",
+      iconShell: "bg-amber-50 text-amber-600",
+    },
+    info: {
+      icon: Info,
+      shell: "border-black/[0.07] bg-white",
+      iconShell: "bg-black/[0.04] text-black/60",
+    },
+  }[toast?.type || "info"];
+
+  const Icon = config.icon;
+
+  return (
+    <div className="fixed right-4 top-4 z-[120] w-[min(92vw,390px)]">
+      <div
+        className={`flex items-start gap-3 rounded-[20px] border p-3.5 shadow-[0_22px_65px_rgba(0,0,0,0.16)] ${config.shell}`}
+      >
+        <div
+          className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl ${config.iconShell}`}
+        >
+          <Icon size={18} />
+        </div>
+
+        <div className="min-w-0 flex-1 pt-0.5">
+          <p className="text-[12px] font-medium text-black">
+            {toast.title}
+          </p>
+
+          {toast.message && (
+            <p className="mt-1 text-[10px] leading-4 text-black/48">
+              {toast.message}
+            </p>
+          )}
+        </div>
+
+        <button
+          type="button"
+          onClick={onClose}
+          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl text-black/35 transition hover:bg-black/[0.035] hover:text-black/70"
+        >
+          <X size={15} />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ProfessionalConfirm({
+  dialog,
+  onCancel,
+  onConfirm,
+}) {
+  const destructive = dialog.tone === "danger";
+  const success = dialog.tone === "success";
+
+  return (
+    <div className="fixed inset-0 z-[115] flex items-center justify-center bg-black/40 px-4 py-6 backdrop-blur-[3px]">
+      <section className="w-full max-w-[440px] rounded-[28px] border border-white/70 bg-white p-5 shadow-[0_35px_120px_rgba(0,0,0,0.28)]">
+        <div
+          className={`flex h-12 w-12 items-center justify-center rounded-[18px] ${
+            destructive
+              ? "bg-red-50 text-red-600"
+              : success
+                ? "bg-emerald-50 text-emerald-600"
+                : "bg-black/[0.04] text-black/60"
+          }`}
+        >
+          {destructive ? (
+            <AlertTriangle size={21} />
+          ) : success ? (
+            <CheckCircle2 size={21} />
+          ) : (
+            <Info size={21} />
+          )}
+        </div>
+
+        <h3 className="mt-4 text-[19px] font-medium tracking-[-0.035em]">
+          {dialog.title}
+        </h3>
+
+        <p className="mt-2 text-[11px] leading-5 text-black/48">
+          {dialog.message}
+        </p>
+
+        <div className="mt-5 grid grid-cols-2 gap-2.5">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="h-11 rounded-2xl border border-black/[0.08] bg-white text-[11px] font-medium text-black/60 transition hover:bg-black/[0.025]"
+          >
+            Cancelar
+          </button>
+
+          <button
+            type="button"
+            onClick={onConfirm}
+            className={`h-11 rounded-2xl text-[11px] font-medium text-white shadow-lg transition ${
+              destructive
+                ? "bg-red-600 shadow-red-600/20 hover:bg-red-700"
+                : success
+                  ? "bg-emerald-600 shadow-emerald-600/20 hover:bg-emerald-700"
+                  : "bg-black shadow-black/10 hover:bg-black/85"
+            }`}
+          >
+            {dialog.confirmLabel || "Confirmar"}
+          </button>
+        </div>
+      </section>
+    </div>
   );
 }
 
