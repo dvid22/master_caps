@@ -1,3 +1,4 @@
+import { showPremiumAlert } from "../../utils/premiumDialog";
 import { useEffect, useMemo, useState } from "react";
 import {
   Link,
@@ -113,7 +114,14 @@ export default function ReservationCheckoutPage() {
     event.preventDefault();
 
     if (cart.items.length === 0) {
-      alert("Tu carrito está vacío.");
+      showPremiumAlert("Tu carrito está vacío.");
+      return;
+    }
+
+    if (cart.items.some((item) => item.isPromotion)) {
+      showPremiumAlert(
+        "Las promociones son de venta directa y no pueden apartarse. Regresa al catálogo y consulta ese producto por WhatsApp."
+      );
       return;
     }
 
@@ -127,14 +135,14 @@ export default function ReservationCheckoutPage() {
       form.customerPhone.trim();
 
     if (!customerName) {
-      alert(
+      showPremiumAlert(
         "Escribe tu nombre completo."
       );
       return;
     }
 
     if (!customerDocument) {
-      alert("Escribe tu cédula.");
+      showPremiumAlert("Escribe tu cédula.");
       return;
     }
 
@@ -163,24 +171,12 @@ export default function ReservationCheckoutPage() {
               quantity:
                 item.quantity,
 
-              /*
-               * Snapshot informativo del carrito.
-               * reservations.service.js vuelve a validar el precio
-               * directamente contra Firestore antes de guardar.
-               */
+              // El servicio vuelve a validar stock y precio directamente
+              // contra Firestore. Las promociones no son apartables.
               unitPrice: item.unitPrice,
-              regularUnitPrice:
-                item.regularUnitPrice,
-              isPromotion:
-                item.isPromotion,
-              pricingMode:
-                item.isPromotion
-                  ? "promotion"
-                  : "normal",
-              promotionPrice:
-                item.promotionPrice,
-              promotionNote:
-                item.promotionNote,
+              regularUnitPrice: item.regularUnitPrice,
+              isPromotion: false,
+              pricingMode: "normal",
             })
           ),
         });
@@ -199,7 +195,7 @@ export default function ReservationCheckoutPage() {
         error
       );
 
-      alert(
+      showPremiumAlert(
         error?.message ||
           "No se pudo registrar el apartado. Revisa el stock e inténtalo nuevamente."
       );
@@ -378,11 +374,6 @@ export default function ReservationCheckoutPage() {
                               Promo
                             </span>
 
-                            {item.promotionNote && (
-                              <span className="line-clamp-1 max-w-[240px] text-[8px] normal-case tracking-normal text-amber-800">
-                                {item.promotionNote}
-                              </span>
-                            )}
                           </div>
                         )}
                       </div>
@@ -562,7 +553,7 @@ export default function ReservationCheckoutPage() {
                   </p>
 
                   <p className="mt-1 text-[10px] leading-5 text-black/52">
-                    Antes de confirmar, el sistema valida nuevamente todas las tallas y cantidades. Si alguna no tiene stock, no se registrará ningún apartado parcial.
+                    Antes de confirmar, el sistema valida nuevamente todas las tallas, cantidades y promociones. Si un producto entró en promoción, no podrá apartarse y te indicaremos consultarlo por WhatsApp.
                   </p>
                 </div>
               </div>
@@ -673,11 +664,6 @@ export default function ReservationCheckoutPage() {
                           Promo
                         </span>
 
-                        {item.promotionNote && (
-                          <span className="line-clamp-2 text-[8px] leading-4 text-amber-800">
-                            {item.promotionNote}
-                          </span>
-                        )}
                       </div>
                     )}
 

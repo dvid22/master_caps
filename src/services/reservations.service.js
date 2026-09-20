@@ -16,6 +16,9 @@ import {
 import { db } from "../firebase/firebase";
 import { STORE_ID } from "./categories.service";
 import {
+  getEffectiveProductPromotion,
+} from "./products.service";
+import {
   getCustomerDocumentId,
   normalizeCustomerDocument,
   normalizeCustomerPhone,
@@ -560,7 +563,6 @@ export async function createReservationCart({
   return runTransaction(db, async (transaction) => {
     const settingsRef = doc(db, "reservationSettings", cleanStoreId);
     const settingsSnap = await transaction.get(settingsRef);
-
     const shouldResolveCustomerNow =
       source === "manual" || Boolean(actor?.uid);
 
@@ -651,11 +653,7 @@ export async function createReservationCart({
           productRef: productRefs[index],
           product,
           variants,
-          promotionVariants:
-            normalizePromotionVariants(
-              product,
-              variants
-            ),
+          promotionVariants: [],
         };
         productStates.set(requested.productId, state);
       }
@@ -671,36 +669,26 @@ export async function createReservationCart({
       }
 
       const variant = state.variants[variantIndex];
+      const effectivePromotion = getEffectiveProductPromotion(
+        product
+      );
 
-      const promotionAvailable =
-        getPromotionStockForVariant(
-          state.promotionVariants,
-          variant
-        );
-
-      const normalAvailable =
-        Math.max(
-          variant.stock -
-            promotionAvailable,
-          0
-        );
-
-      const requestedPromotion =
-        Boolean(requested.isPromotion);
-
-      const availableForMode =
-        requestedPromotion
-          ? promotionAvailable
-          : normalAvailable;
-
-      if (
-        requested.quantity >
-        availableForMode
-      ) {
+      if (effectivePromotion.active) {
         throw new Error(
-          requestedPromotion
-            ? `Solo hay ${availableForMode} unidad(es) en promoción de "${product.name}" talla ${variant.size}.`
-            : `Solo hay ${availableForMode} unidad(es) normales de "${product.name}" talla ${variant.size}.`
+          `"${product.name || "Este producto"}" está en promoción. Las promociones son de venta directa y no pueden apartarse. Consulta disponibilidad por WhatsApp o en tienda.`
+        );
+      }
+
+      const availableStock = Math.max(
+        Math.trunc(safeNumber(variant.stock)),
+        0
+      );
+
+      if (requested.quantity > availableStock) {
+        throw new Error(
+          `Solo hay ${availableStock} unidad(es) disponibles de "${
+            product.name || "el producto"
+          }" talla ${variant.size}.`
         );
       }
 
@@ -716,72 +704,16 @@ export async function createReservationCart({
             : currentVariant
       );
 
-      if (requestedPromotion) {
-        state.promotionVariants =
-          state.promotionVariants
-            .map((item) =>
-              item.variantId ===
-                variant.id ||
-              normalizeSize(item.size) ===
-                normalizeSize(
-                  variant.size
-                )
-                ? {
-                    ...item,
-                    quantity:
-                      item.quantity -
-                      requested.quantity,
-                  }
-                : item
-            )
-            .filter(
-              (item) =>
-                item.quantity > 0
-            );
-      }
-
       const reservationRef = doc(collection(db, "reservations"));
 
-      /*
-       * El modo promocional debe venir marcado desde el carrito y además
-       * existir stock promocional real para esa talla. El servidor valida
-       * ambas cosas dentro de la transacción.
-       */
       const regularUnitPrice = Math.max(
         safeNumber(product.salePrice),
         0
       );
-
-      const promotionActive =
-        requestedPromotion;
-
-      const promotionPrice = promotionActive
-        ? Math.max(
-            safeNumber(product.promotionPrice),
-            0
-          )
-        : 0;
-
-      const promotionNote = promotionActive
-        ? safeString(product.promotionNote)
-        : "";
-
-      const unitPrice =
-        promotionActive
-          ? promotionPrice
-          : regularUnitPrice;
-
-      if (
-        promotionActive &&
-        (
-          !Boolean(product.isPromotion) ||
-          promotionPrice <= 0
-        )
-      ) {
-        throw new Error(
-          `La promoción de "${product.name}" ya no está disponible.`
-        );
-      }
+      const promotionActive = false;
+      const promotionPrice = 0;
+      const promotionNote = "";
+      const unitPrice = regularUnitPrice;
 
       const costPrice = Math.max(
         safeNumber(product.costPrice),
@@ -890,20 +822,12 @@ export async function createReservationCart({
     }
 
     for (const state of productStates.values()) {
-      const promotionStock =
-        getPromotionTotalStock(
-          state.promotionVariants
-        );
+      const stock = calculateTotalStock(state.variants);
 
       transaction.update(state.productRef, {
         variants: state.variants,
-        stock: calculateTotalStock(state.variants),
-        totalStock: calculateTotalStock(
-          state.variants
-        ),
-        promotionVariants:
-          state.promotionVariants,
-        promotionStock,
+        stock,
+        totalStock: stock,
         updatedAt: serverTimestamp(),
       });
     }
@@ -1310,6 +1234,9 @@ export async function updateReservationGroup({
             product,
             variants
           ),
+        effectivePromotion: getEffectiveProductPromotion(
+          product
+        ),
       });
     });
 
@@ -1414,13 +1341,10 @@ export async function updateReservationGroup({
     const oldLinesByKey = new Map();
 
     oldLines.forEach((line) => {
-      const key = getReservationLineKey({
-        productId: line.productId,
-        variantId:
-          safeString(line.variantId) ||
-          "legacy-variant",
-        isPromotion: Boolean(line.isPromotion),
-      });
+      const key = [
+        safeString(line.productId),
+        safeString(line.variantId) || "legacy-variant",
+      ].join("__");
 
       if (!oldLinesByKey.has(key)) {
         oldLinesByKey.set(key, []);
@@ -1459,81 +1383,58 @@ export async function updateReservationGroup({
 
       const variant = state.variants[variantIndex];
 
-      const key = getReservationLineKey({
-        productId: requested.productId,
-        variantId: requested.variantId,
-        isPromotion: Boolean(requested.isPromotion),
-      });
+      const key = [
+        safeString(requested.productId),
+        safeString(requested.variantId) || "legacy-variant",
+      ].join("__");
 
-      const oldCandidates =
-        oldLinesByKey.get(key) || [];
-      const previousLine =
-        oldCandidates.shift() || null;
-
-      const promotionAvailable =
-        getPromotionStockForVariant(
-          state.promotionVariants,
-          variant
-        );
-
-      const normalAvailable =
-        Math.max(
-          variant.stock - promotionAvailable,
-          0
-        );
-
-      const isPromotion =
-        Boolean(requested.isPromotion);
-
-      const availableForMode =
-        isPromotion
-          ? promotionAvailable
-          : normalAvailable;
-
-      if (requested.quantity > availableForMode) {
-        throw new Error(
-          isPromotion
-            ? `Solo hay ${availableForMode} unidad(es) promocionales de "${state.product.name}" talla ${variant.size}.`
-            : `Solo hay ${availableForMode} unidad(es) normales de "${state.product.name}" talla ${variant.size}.`
-        );
-      }
-
-      state.variants =
-        state.variants.map(
-          (currentVariant, currentIndex) =>
-            currentIndex === variantIndex
-              ? {
-                  ...currentVariant,
-                  stock:
-                    currentVariant.stock -
-                    requested.quantity,
-                }
-              : currentVariant
-        );
-
-      if (isPromotion) {
-        state.promotionVariants =
-          state.promotionVariants
-            .map((item) =>
-              item.variantId === variant.id ||
-              normalizeSize(item.size) ===
-                normalizeSize(variant.size)
-                ? {
-                    ...item,
-                    quantity:
-                      item.quantity -
-                      requested.quantity,
-                  }
-                : item
-            )
-            .filter((item) => item.quantity > 0);
-      }
+      const oldCandidates = oldLinesByKey.get(key) || [];
+      const previousLine = oldCandidates.shift() || null;
+      const previousQuantity = previousLine
+        ? Math.max(Math.trunc(safeNumber(previousLine.quantity, 1)), 1)
+        : 0;
 
       /*
-       * Si la línea ya existía, mantenemos su precio histórico.
-       * Editar cliente/días/cantidad no debe cambiar silenciosamente
-       * el precio que ya había sido acordado.
+       * Las promociones no admiten nuevos apartados. Si esta línea ya existía
+       * antes de activar la campaña, puede conservarse o reducirse, pero no
+       * aumentarse. Su precio histórico nunca se recalcula.
        */
+      if (
+        state.effectivePromotion?.active &&
+        (!previousLine || requested.quantity > previousQuantity)
+      ) {
+        throw new Error(
+          `"${state.product.name || "Este producto"}" está en promoción. No puedes agregar ni aumentar unidades promocionales dentro de un apartado.`
+        );
+      }
+
+      const availableStock = Math.max(
+        Math.trunc(safeNumber(variant.stock)),
+        0
+      );
+
+      if (requested.quantity > availableStock) {
+        throw new Error(
+          `Solo hay ${availableStock} unidad(es) disponibles de "${
+            state.product.name || "el producto"
+          }" talla ${variant.size}.`
+        );
+      }
+
+      state.variants = state.variants.map(
+        (currentVariant, currentIndex) =>
+          currentIndex === variantIndex
+            ? {
+                ...currentVariant,
+                stock: currentVariant.stock - requested.quantity,
+              }
+            : currentVariant
+      );
+
+      const isPromotion = previousLine
+        ? Boolean(previousLine.isPromotion)
+        : false;
+
       const regularUnitPrice = Math.max(
         safeNumber(
           previousLine?.regularUnitPrice,
@@ -1542,56 +1443,26 @@ export async function updateReservationGroup({
         0
       );
 
-      let promotionPrice = 0;
-      let promotionNote = "";
-      let unitPrice = regularUnitPrice;
-
-      if (isPromotion) {
-        if (previousLine) {
-          promotionPrice = Math.max(
+      const promotionPrice = previousLine && isPromotion
+        ? Math.max(
             safeNumber(
               previousLine.promotionPrice,
               previousLine.unitPrice
             ),
             0
-          );
-          promotionNote =
-            safeString(previousLine.promotionNote);
-          unitPrice = Math.max(
-            safeNumber(
-              previousLine.unitPrice,
-              promotionPrice
-            ),
-            0
-          );
-        } else {
-          promotionPrice = Math.max(
-            safeNumber(state.product.promotionPrice),
-            0
-          );
+          )
+        : 0;
 
-          if (
-            !Boolean(state.product.isPromotion) ||
-            promotionPrice <= 0
-          ) {
-            throw new Error(
-              `La promoción de "${state.product.name}" ya no está disponible.`
-            );
-          }
+      const promotionNote = previousLine && isPromotion
+        ? safeString(previousLine.promotionNote)
+        : "";
 
-          promotionNote =
-            safeString(state.product.promotionNote);
-          unitPrice = promotionPrice;
-        }
-      } else if (previousLine) {
-        unitPrice = Math.max(
-          safeNumber(
-            previousLine.unitPrice,
-            regularUnitPrice
-          ),
-          0
-        );
-      }
+      const unitPrice = previousLine
+        ? Math.max(
+            safeNumber(previousLine.unitPrice, regularUnitPrice),
+            0
+          )
+        : regularUnitPrice;
 
       const costPrice = Math.max(
         safeNumber(
@@ -1728,20 +1599,12 @@ export async function updateReservationGroup({
     }
 
     for (const state of states.values()) {
-      const stock =
-        calculateTotalStock(state.variants);
-      const promotionStock =
-        getPromotionTotalStock(
-          state.promotionVariants
-        );
+      const stock = calculateTotalStock(state.variants);
 
       transaction.update(state.ref, {
         variants: state.variants,
         stock,
         totalStock: stock,
-        promotionVariants:
-          state.promotionVariants,
-        promotionStock,
         updatedAt: serverTimestamp(),
       });
     }

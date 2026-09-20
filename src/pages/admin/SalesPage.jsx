@@ -1,3 +1,4 @@
+import { showPremiumAlert, showPremiumConfirm } from "../../utils/premiumDialog";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
@@ -29,9 +30,8 @@ import {
 } from "../../services/categories.service";
 
 import {
+  getEffectiveProductPromotion,
   getProductCoverImage,
-  getProductPromotionStock,
-  getPromotionStockForVariant,
   normalizeProductVariants,
   subscribeProducts,
 } from "../../services/products.service";
@@ -49,6 +49,7 @@ import {
 
 import { formatCurrency, toNumber } from "../../utils/money";
 import { getCurrentUserActor } from "../../services/auth.service";
+import { useAuth } from "../../context/AuthContext";
 import ThermalReceipt from "../../components/sales/ThermalReceipt";
 import {
   getVariantBarcodeAliases,
@@ -148,55 +149,23 @@ function getTotalStock(product) {
   );
 }
 
-function isPromotionProduct(product) {
-  return (
-    Boolean(product?.isPromotion) &&
-    Number(product?.promotionPrice || 0) > 0 &&
-    getProductPromotionStock(product) > 0
+function getProductPromotion(product, promotionSettings) {
+  return getEffectiveProductPromotion(
+    product,
+    promotionSettings
   );
 }
 
-function getNormalStockForVariant(
-  product,
-  variant
-) {
-  return Math.max(
-    Number(variant?.stock || 0) -
-      getPromotionStockForVariant(
-        product,
-        variant
-      ),
-    0
-  );
+function isPromotionProduct(product, promotionSettings) {
+  return getProductPromotion(product, promotionSettings).active;
 }
 
-function getSaleModeStock(
-  product,
-  variant,
-  isPromotion = false
-) {
-  return isPromotion
-    ? getPromotionStockForVariant(
-        product,
-        variant
-      )
-    : getNormalStockForVariant(
-        product,
-        variant
-      );
+function getSaleModeStock(product, variant) {
+  return Math.max(Number(variant?.stock || 0), 0);
 }
 
-function getLineUnitPrice(
-  product,
-  isPromotion = false
-) {
-  return isPromotion
-    ? Number(
-        product?.promotionPrice || 0
-      )
-    : Number(
-        product?.salePrice || 0
-      );
+function getLineUnitPrice(product, promotionSettings) {
+  return getProductPromotion(product, promotionSettings).price;
 }
 
 function getAvailableVariants(product) {
@@ -238,19 +207,16 @@ function normalizeScannerValue(value) {
   return normalizeScannerBarcode(value);
 }
 
-function makeCartKey(
-  productId,
-  variantId,
-  isPromotion = false
-) {
-  return `${productId}__${variantId}__${
-    isPromotion ? "promo" : "normal"
-  }`;
+function makeCartKey(productId, variantId) {
+  return `${productId}__${variantId}`;
 }
 
 export default function SalesPage() {
   const navigate = useNavigate();
+  const { role } = useAuth();
+  const isAdmin = role === "admin";
   const [products, setProducts] = useState([]);
+  const promotionSettings = null;
   const [categories, setCategories] = useState([]);
   const [sales, setSales] = useState([]);
   const [customers, setCustomers] = useState([]);
@@ -314,43 +280,30 @@ export default function SalesPage() {
               if (!variant) return null;
 
               const availableStock =
-                getSaleModeStock(
-                  product,
-                  variant,
-                  item.isPromotion
-                );
+                getSaleModeStock(product, variant);
 
               if (availableStock <= 0) {
                 return null;
               }
 
+              const promotion = getProductPromotion(
+                product,
+                promotionSettings
+              );
+
               return {
                 ...item,
                 product,
                 variant,
-                unitPrice:
-                  getLineUnitPrice(
-                    product,
-                    item.isPromotion
-                  ),
-                regularUnitPrice:
-                  Number(
-                    product.salePrice || 0
-                  ),
-                promotionPrice:
-                  item.isPromotion
-                    ? Number(
-                        product.promotionPrice ||
-                          0
-                      )
-                    : 0,
-                promotionNote:
-                  item.isPromotion
-                    ? String(
-                        product.promotionNote ||
-                          ""
-                      ).trim()
-                    : "",
+                unitPrice: promotion.price,
+                regularUnitPrice: promotion.regularPrice,
+                isPromotion: promotion.active,
+                promotionPrice: promotion.active ? promotion.price : 0,
+                promotionPercentage: promotion.active
+                  ? promotion.percentage
+                  : 0,
+                promotionSource: promotion.active ? promotion.source : "",
+                promotionNote: promotion.active ? promotion.note : "",
                 quantity: Math.min(
                   Number(
                     item.quantity || 1
@@ -364,20 +317,20 @@ export default function SalesPage() {
       },
       () => {
         setLoading(false);
-        alert("No se pudieron escuchar los productos en tiempo real.");
+        showPremiumAlert("No se pudieron escuchar los productos en tiempo real.");
       },
       STORE_ID
     );
 
     const unsubscribeCategories = subscribeCategories(
       (categoriesData) => setCategories(categoriesData),
-      () => alert("No se pudieron escuchar las categorías en tiempo real."),
+      () => showPremiumAlert("No se pudieron escuchar las categorías en tiempo real."),
       STORE_ID
     );
 
     const unsubscribeSales = subscribeSales(
       (salesData) => setSales(salesData),
-      () => alert("No se pudieron escuchar las ventas en tiempo real."),
+      () => showPremiumAlert("No se pudieron escuchar las ventas en tiempo real."),
       STORE_ID
     );
 
@@ -406,6 +359,38 @@ export default function SalesPage() {
       unsubscribeCustomers();
     };
   }, []);
+
+  useEffect(() => {
+    setCart((currentCart) =>
+      currentCart.map((item) => {
+        if (item.isManual) return item;
+
+        const product = products.find(
+          (candidate) => candidate.id === item.productId
+        );
+        if (!product) return item;
+
+        const promotion = getProductPromotion(
+          product,
+          promotionSettings
+        );
+
+        return {
+          ...item,
+          product,
+          unitPrice: promotion.price,
+          regularUnitPrice: promotion.regularPrice,
+          isPromotion: promotion.active,
+          promotionPrice: promotion.active ? promotion.price : 0,
+          promotionPercentage: promotion.active
+            ? promotion.percentage
+            : 0,
+          promotionSource: promotion.active ? promotion.source : "",
+          promotionNote: promotion.active ? promotion.note : "",
+        };
+      })
+    );
+  }, [promotionSettings, products]);
 
   useEffect(() => {
     const documentNumber =
@@ -866,29 +851,29 @@ export default function SalesPage() {
     const unitPrice = parseMoneyInput(
       form.unitPrice
     );
-    const costPrice = parseMoneyInput(
-      form.costPrice
-    );
+    const costPrice = isAdmin
+      ? parseMoneyInput(form.costPrice)
+      : 0;
     const size =
       String(form.size || "").trim() ||
       "Talla única";
 
     if (!productName) {
-      alert(
+      showPremiumAlert(
         "Escribe el nombre del producto."
       );
       return false;
     }
 
     if (quantity <= 0) {
-      alert(
+      showPremiumAlert(
         "La cantidad debe ser mayor a cero."
       );
       return false;
     }
 
     if (unitPrice <= 0) {
-      alert(
+      showPremiumAlert(
         "El precio de venta debe ser mayor a cero."
       );
       return false;
@@ -955,57 +940,40 @@ export default function SalesPage() {
     const variants = getAvailableVariants(product);
 
     if (variants.length === 0) {
-      alert("Este producto no tiene stock disponible.");
+      showPremiumAlert("Este producto no tiene stock disponible.");
       return;
     }
 
-    if (
-      variants.length === 1 &&
-      !isPromotionProduct(product)
-    ) {
-      addToCart(
-        product,
-        variants[0],
-        false
-      );
+    if (variants.length === 1) {
+      addToCart(product, variants[0]);
       return;
     }
 
     setVariantProduct(product);
   }
 
-  function addToCart(
-    product,
-    variant,
-    isPromotion = false
-  ) {
-    const stock = getSaleModeStock(
-      product,
-      variant,
-      isPromotion
-    );
+  function addToCart(product, variant) {
+    const stock = getSaleModeStock(product, variant);
 
     if (stock <= 0) {
-      alert(
-        isPromotion
-          ? `La talla ${variant.size} no tiene unidades en promoción.`
-          : `La talla ${variant.size} no tiene unidades normales disponibles.`
-      );
+      showPremiumAlert(`La talla ${variant.size} no tiene unidades disponibles.`);
       return;
     }
 
-    const cartKey = makeCartKey(
-      product.id,
-      variant.id,
-      isPromotion
+    const promotion = getProductPromotion(
+      product,
+      promotionSettings
     );
+    const cartKey = makeCartKey(product.id, variant.id);
 
     setCart((currentCart) => {
-      const existing = currentCart.find((item) => item.cartKey === cartKey);
+      const existing = currentCart.find(
+        (item) => item.cartKey === cartKey
+      );
 
       if (existing) {
         if (existing.quantity >= stock) {
-          alert(
+          showPremiumAlert(
             `Solo hay ${stock} unidad(es) disponibles de ${product.name} talla ${variant.size}.`
           );
           return currentCart;
@@ -1013,7 +981,19 @@ export default function SalesPage() {
 
         return currentCart.map((item) =>
           item.cartKey === cartKey
-            ? { ...item, quantity: item.quantity + 1 }
+            ? {
+                ...item,
+                quantity: item.quantity + 1,
+                unitPrice: promotion.price,
+                regularUnitPrice: promotion.regularPrice,
+                isPromotion: promotion.active,
+                promotionPrice: promotion.active ? promotion.price : 0,
+                promotionPercentage: promotion.active
+                  ? promotion.percentage
+                  : 0,
+                promotionSource: promotion.active ? promotion.source : "",
+                promotionNote: promotion.active ? promotion.note : "",
+              }
             : item
         );
       }
@@ -1026,29 +1006,15 @@ export default function SalesPage() {
           variantId: variant.id,
           product,
           variant,
-          isPromotion,
-          unitPrice:
-            getLineUnitPrice(
-              product,
-              isPromotion
-            ),
-          regularUnitPrice: Number(
-            product.salePrice || 0
-          ),
-          promotionPrice:
-            isPromotion
-              ? Number(
-                  product.promotionPrice ||
-                    0
-                )
-              : 0,
-          promotionNote:
-            isPromotion
-              ? String(
-                  product.promotionNote ||
-                    ""
-                ).trim()
-              : "",
+          isPromotion: promotion.active,
+          unitPrice: promotion.price,
+          regularUnitPrice: promotion.regularPrice,
+          promotionPrice: promotion.active ? promotion.price : 0,
+          promotionPercentage: promotion.active
+            ? promotion.percentage
+            : 0,
+          promotionSource: promotion.active ? promotion.source : "",
+          promotionNote: promotion.active ? promotion.note : "",
           quantity: 1,
         },
       ];
@@ -1057,7 +1023,9 @@ export default function SalesPage() {
     setVariantProduct(null);
     setScannerStatus({
       type: "success",
-      message: `${product.name} · ${variant.size} agregado`,
+      message: promotion.active
+        ? `${product.name} · ${variant.size} agregado con ${promotion.percentage}% de descuento`
+        : `${product.name} · ${variant.size} agregado`,
     });
   }
 
@@ -1076,12 +1044,10 @@ export default function SalesPage() {
           };
         }
 
-        const stock =
-          getSaleModeStock(
-            item.product,
-            item.variant,
-            item.isPromotion
-          );
+        const stock = getSaleModeStock(
+          item.product,
+          item.variant
+        );
 
         const safeQuantity = Math.min(
           Math.max(
@@ -1102,10 +1068,19 @@ export default function SalesPage() {
     );
   }
 
-  function clearCart() {
+  async function clearCart() {
     if (cart.length === 0) return;
 
-    if (!window.confirm("¿Seguro que deseas vaciar la venta actual?")) return;
+    const confirmed = await showPremiumConfirm({
+      title: "Vaciar venta actual",
+      message:
+        "Se eliminarán todos los productos agregados a esta venta. Esta acción no modifica el inventario.",
+      confirmText: "Sí, vaciar venta",
+      cancelText: "Conservar productos",
+      tone: "warning",
+    });
+
+    if (!confirmed) return;
 
     setCart([]);
     setCheckout(emptyCheckout);
@@ -1216,11 +1191,7 @@ export default function SalesPage() {
     }
 
     if (match.variant) {
-      addToCart(
-        match.product,
-        match.variant,
-        false
-      );
+      addToCart(match.product, match.variant);
       return;
     }
 
@@ -1239,7 +1210,7 @@ export default function SalesPage() {
     event.preventDefault();
 
     if (cart.length === 0) {
-      alert("Agrega al menos un producto a la venta.");
+      showPremiumAlert("Agrega al menos un producto a la venta.");
       return;
     }
 
@@ -1263,7 +1234,7 @@ export default function SalesPage() {
       hasCustomerIdentifier &&
       customerLookup.status === "searching"
     ) {
-      alert(
+      showPremiumAlert(
         "Espera un momento mientras validamos los datos del cliente."
       );
       return;
@@ -1276,7 +1247,7 @@ export default function SalesPage() {
         checkout.customerName || ""
       ).trim()
     ) {
-      alert(
+      showPremiumAlert(
         "No encontramos este cliente. Escribe su nombre para registrar la venta con estos datos."
       );
       return;
@@ -1286,13 +1257,13 @@ export default function SalesPage() {
       checkout.paymentMethod === "efectivo" &&
       cartSummary.amountReceived < cartSummary.total
     ) {
-      alert("El dinero recibido no puede ser menor al total de la venta.");
+      showPremiumAlert("El dinero recibido no puede ser menor al total de la venta.");
       return;
     }
 
     if (checkout.paymentMethod === "mixto") {
       if (cartSummary.mixedPayments.length < 2) {
-        alert(
+        showPremiumAlert(
           "El pago mixto debe tener al menos dos métodos con valor."
         );
         return;
@@ -1303,7 +1274,7 @@ export default function SalesPage() {
       );
 
       if (new Set(methods).size !== methods.length) {
-        alert(
+        showPremiumAlert(
           "No repitas el mismo método en el pago mixto."
         );
         return;
@@ -1315,7 +1286,7 @@ export default function SalesPage() {
             cartSummary.total
         ) > 0.5
       ) {
-        alert(
+        showPremiumAlert(
           `El pago mixto debe sumar exactamente ${formatCurrency(
             cartSummary.total
           )}.`
@@ -1360,14 +1331,6 @@ export default function SalesPage() {
                 variantId: item.variantId,
                 size: item.variant.size,
                 quantity: item.quantity,
-                isPromotion:
-                  Boolean(
-                    item.isPromotion
-                  ),
-                pricingMode:
-                  item.isPromotion
-                    ? "promotion"
-                    : "normal",
               }
         ),
 
@@ -1404,7 +1367,7 @@ export default function SalesPage() {
       setScannerStatus(null);
     } catch (error) {
       console.error(error);
-      alert(error.message || "No se pudo registrar la venta.");
+      showPremiumAlert(error.message || "No se pudo registrar la venta.");
     } finally {
       setSelling(false);
     }
@@ -1617,6 +1580,7 @@ export default function SalesPage() {
                     <ProductSaleCard
                       key={product.id}
                       product={product}
+                      promotionSettings={promotionSettings}
                       onAdd={() => openProduct(product)}
                     />
                   ))}
@@ -1631,6 +1595,7 @@ export default function SalesPage() {
               checkout={checkout}
               summary={cartSummary}
               selling={selling}
+              isAdmin={isAdmin}
               customerLookup={customerLookup}
               onUpdateCheckout={updateCheckout}
               onCustomerDocumentChange={handleCustomerDocumentChange}
@@ -1659,6 +1624,7 @@ export default function SalesPage() {
           checkout={checkout}
           summary={cartSummary}
           selling={selling}
+          isAdmin={isAdmin}
           customerLookup={customerLookup}
           onClose={() => setMobileCartOpen(false)}
           onUpdateCheckout={updateCheckout}
@@ -1677,6 +1643,7 @@ export default function SalesPage() {
 
       {quickProductOpen && (
         <QuickProductModal
+          isAdmin={isAdmin}
           onClose={() =>
             setQuickProductOpen(false)
           }
@@ -1687,16 +1654,10 @@ export default function SalesPage() {
       {variantProduct && (
         <VariantSelectorModal
           product={variantProduct}
+          promotionSettings={promotionSettings}
           onClose={() => setVariantProduct(null)}
-          onSelect={(
-            variant,
-            isPromotion
-          ) =>
-            addToCart(
-              variantProduct,
-              variant,
-              isPromotion
-            )
+          onSelect={(variant) =>
+            addToCart(variantProduct, variant)
           }
         />
       )}
@@ -1744,17 +1705,17 @@ export default function SalesPage() {
   );
 }
 
-function ProductSaleCard({ product, onAdd }) {
+function ProductSaleCard({ product, promotionSettings, onAdd }) {
   const stock = getTotalStock(product);
   const variants = getAvailableVariants(product);
   const coverImage = getProductCoverImage(product);
   const stockStatus = getStockStatus(stock);
-  const promotionActive =
-    isPromotionProduct(product);
-  const promotionStock =
-    getProductPromotionStock(product);
-  const regularPrice =
-    Number(product.salePrice || 0);
+  const promotion = getProductPromotion(
+    product,
+    promotionSettings
+  );
+  const promotionActive = promotion.active;
+  const regularPrice = promotion.regularPrice;
 
   return (
     <article className="group min-w-0 overflow-hidden rounded-[clamp(13px,0.95vw,18px)] bg-white shadow-[0_10px_28px_rgba(0,0,0,0.03)] ring-1 ring-black/[0.055] transition hover:-translate-y-0.5 hover:shadow-[0_16px_38px_rgba(0,0,0,0.065)]">
@@ -1827,19 +1788,21 @@ function ProductSaleCard({ product, onAdd }) {
 
           <div className="mt-2 flex items-end justify-between gap-2">
             <div className="min-w-0">
-              <p className="truncate text-[clamp(11px,0.85vw,15px)] font-medium tracking-[-0.035em]">
-                {formatCurrency(
-                  regularPrice
-                )}
-              </p>
-
-              {promotionActive && (
-                <p className="mt-0.5 truncate text-[7.5px] font-medium text-amber-700">
-                  Promo{" "}
-                  {formatCurrency(
-                    product.promotionPrice
-                  )}{" "}
-                  · {promotionStock} u.
+              {promotionActive ? (
+                <>
+                  <p className="truncate text-[clamp(11px,0.85vw,15px)] font-medium tracking-[-0.035em] text-red-600">
+                    {formatCurrency(promotion.price)}
+                  </p>
+                  <p className="mt-0.5 truncate text-[7.5px] text-black/35 line-through">
+                    {formatCurrency(regularPrice)}
+                  </p>
+                  <p className="mt-0.5 truncate text-[7.5px] font-medium text-amber-700">
+                    -{promotion.percentage}%{promotion.note ? ` · ${promotion.note}` : ""}
+                  </p>
+                </>
+              ) : (
+                <p className="truncate text-[clamp(11px,0.85vw,15px)] font-medium tracking-[-0.035em]">
+                  {formatCurrency(regularPrice)}
                 </p>
               )}
 
@@ -1864,6 +1827,7 @@ function CartPanel(props) {
     checkout,
     summary,
     selling,
+    isAdmin,
     customerLookup,
     onUpdateCheckout,
     onCustomerDocumentChange,
@@ -1941,6 +1905,7 @@ function CartPanel(props) {
           selling={selling}
           disabled={cart.length === 0}
           paymentMethod={checkout.paymentMethod}
+          isAdmin={isAdmin}
         />
       </form>
     </section>
@@ -2504,7 +2469,7 @@ function CheckoutFields({
   );
 }
 
-function CartTotals({ summary, selling, disabled, paymentMethod }) {
+function CartTotals({ summary, selling, disabled, paymentMethod, isAdmin }) {
   return (
     <div className="border-t border-black/[0.06] bg-white px-[clamp(12px,1vw,20px)] py-[clamp(10px,0.85vw,16px)]">
       <div className="space-y-2 text-[12px]">
@@ -2544,9 +2509,11 @@ function CartTotals({ summary, selling, disabled, paymentMethod }) {
             </p>
           </div>
 
-          <span className="rounded-full bg-emerald-50 px-3 py-1.5 text-[10px] text-emerald-600">
-            Ganancia {formatCurrency(summary.profit)}
-          </span>
+          {isAdmin && (
+            <span className="rounded-full bg-emerald-50 px-3 py-1.5 text-[10px] text-emerald-600">
+              Ganancia {formatCurrency(summary.profit)}
+            </span>
+          )}
         </div>
       </div>
 
@@ -2628,6 +2595,7 @@ function MobileCartDrawer(props) {
             checkout={props.checkout}
             summary={props.summary}
             selling={props.selling}
+            isAdmin={props.isAdmin}
             customerLookup={props.customerLookup}
             onUpdateCheckout={props.onUpdateCheckout}
             onCustomerDocumentChange={props.onCustomerDocumentChange}
@@ -2649,6 +2617,7 @@ function MobileCartDrawer(props) {
 
 
 function QuickProductModal({
+  isAdmin,
   onClose,
   onAdd,
 }) {
@@ -2760,7 +2729,7 @@ function QuickProductModal({
               </label>
             </div>
 
-            <div className="grid grid-cols-3 gap-2">
+            <div className={`grid gap-2 ${isAdmin ? "grid-cols-3" : "grid-cols-2"}`}>
               <label>
                 <span className="text-[10px] font-medium text-black/55">
                   Cantidad *
@@ -2801,24 +2770,26 @@ function QuickProductModal({
                 />
               </label>
 
-              <label>
-                <span className="text-[10px] font-medium text-black/55">
-                  Costo
-                </span>
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  value={form.costPrice}
-                  onChange={(event) =>
-                    update(
-                      "costPrice",
-                      event.target.value
-                    )
-                  }
-                  className="mt-1 h-10 w-full rounded-xl border border-black/[0.08] px-3 text-[11px] outline-none focus:border-red-600"
-                  placeholder="$ 0"
-                />
-              </label>
+              {isAdmin && (
+                <label>
+                  <span className="text-[10px] font-medium text-black/55">
+                    Costo
+                  </span>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    value={form.costPrice}
+                    onChange={(event) =>
+                      update(
+                        "costPrice",
+                        event.target.value
+                      )
+                    }
+                    className="mt-1 h-10 w-full rounded-xl border border-black/[0.08] px-3 text-[11px] outline-none focus:border-red-600"
+                    placeholder="$ 0"
+                  />
+                </label>
+              )}
             </div>
 
             <label>
@@ -2858,36 +2829,26 @@ function QuickProductModal({
 
 function VariantSelectorModal({
   product,
+  promotionSettings,
   onClose,
   onSelect,
 }) {
-  const variants =
-    getAvailableVariants(product);
-  const coverImage =
-    getProductCoverImage(product);
-  const promotionActive =
-    isPromotionProduct(product);
-  const promotionStock =
-    getProductPromotionStock(product);
+  const variants = getAvailableVariants(product);
+  const coverImage = getProductCoverImage(product);
+  const promotion = getProductPromotion(
+    product,
+    promotionSettings
+  );
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/45 px-4 py-6 backdrop-blur-sm">
       <section className="w-full max-w-[520px] overflow-hidden rounded-[28px] bg-white shadow-2xl">
         <div className="flex items-start justify-between border-b border-black/[0.06] px-5 py-4">
           <div>
-            <p className="text-[12px] text-red-600">
-              Seleccionar talla y tipo de venta
-            </p>
-            <h2 className="mt-1 text-[19px] font-medium">
-              {product.name}
-            </h2>
+            <p className="text-[12px] text-red-600">Seleccionar talla</p>
+            <h2 className="mt-1 text-[19px] font-medium">{product.name}</h2>
           </div>
-
-          <button
-            type="button"
-            onClick={onClose}
-            className="flex h-9 w-9 items-center justify-center rounded-xl bg-black/[0.035]"
-          >
+          <button type="button" onClick={onClose} className="flex h-9 w-9 items-center justify-center rounded-xl bg-black/[0.035]">
             <X size={18} />
           </button>
         </div>
@@ -2896,148 +2857,57 @@ function VariantSelectorModal({
           <div className="flex items-center gap-3 rounded-[20px] bg-black/[0.025] p-3">
             <div className="flex h-16 w-16 items-center justify-center overflow-hidden rounded-2xl bg-white">
               {coverImage.url ? (
-                <img
-                  src={coverImage.url}
-                  alt={product.name}
-                  className="h-full w-full object-cover"
-                />
+                <img src={coverImage.url} alt={product.name} className="h-full w-full object-cover" />
               ) : (
-                <Camera
-                  size={22}
-                  className="text-black/25"
-                />
+                <Camera size={22} className="text-black/25" />
               )}
             </div>
 
             <div className="min-w-0 flex-1">
-              <p className="truncate text-[12px] text-black/45">
-                {product.code || "Sin código"}
-              </p>
-
-              <p className="mt-1 text-[17px] font-medium">
-                {formatCurrency(
-                  product.salePrice
-                )}
-              </p>
-
-              {promotionActive && (
-                <div className="mt-1 flex flex-wrap items-center gap-1.5">
-                  <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[7.5px] font-medium text-amber-700 ring-1 ring-amber-100">
-                    <BadgePercent size={8} />
-                    PROMO
-                  </span>
-                  <span className="text-[9px] font-medium text-red-600">
-                    {formatCurrency(
-                      product.promotionPrice
-                    )}
-                  </span>
-                  <span className="text-[8px] text-black/38">
-                    {promotionStock} u. seleccionada(s)
-                  </span>
-                </div>
+              <p className="truncate text-[12px] text-black/45">{product.code || "Sin código"}</p>
+              {promotion.active ? (
+                <>
+                  <p className="mt-1 text-[17px] font-medium text-red-600">{formatCurrency(promotion.price)}</p>
+                  <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                    <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[7.5px] font-medium text-amber-700 ring-1 ring-amber-100">
+                      <BadgePercent size={8} /> -{promotion.percentage}%
+                    </span>
+                    <span className="text-[8px] text-black/35 line-through">{formatCurrency(promotion.regularPrice)}</span>
+                  </div>
+                </>
+              ) : (
+                <p className="mt-1 text-[17px] font-medium">{formatCurrency(product.salePrice)}</p>
               )}
             </div>
           </div>
 
-          {promotionActive &&
-            product.promotionNote && (
-              <div className="mt-3 rounded-[14px] border border-amber-100 bg-amber-50/70 px-3 py-2.5">
-                <p className="text-[8px] font-medium uppercase tracking-[0.08em] text-amber-700">
-                  Observación de promoción
-                </p>
-                <p className="mt-1 text-[9px] leading-4 text-black/55">
-                  {product.promotionNote}
-                </p>
-              </div>
-            )}
+          {promotion.active && promotion.note && (
+            <div className="mt-3 rounded-[14px] border border-amber-100 bg-amber-50/70 px-3 py-2.5">
+              <p className="text-[8px] font-medium uppercase tracking-[0.08em] text-amber-700">Promoción aplicada automáticamente</p>
+              <p className="mt-1 text-[9px] leading-4 text-black/55">{promotion.note}</p>
+            </div>
+          )}
 
-          <p className="mt-5 text-[13px] font-medium">
-            Elige la talla y si sale del stock normal o promocional
-          </p>
-
+          <p className="mt-5 text-[13px] font-medium">Elige la talla</p>
           <div className="mt-3 space-y-2">
             {variants.map((variant) => {
-              const normalStock =
-                getNormalStockForVariant(
-                  product,
-                  variant
-                );
-              const promoStock =
-                getPromotionStockForVariant(
-                  product,
-                  variant
-                );
-
+              const stock = getSaleModeStock(product, variant);
               return (
-                <div
+                <button
                   key={variant.id}
-                  className="rounded-[18px] border border-black/[0.07] bg-white p-3"
+                  type="button"
+                  disabled={stock <= 0}
+                  onClick={() => onSelect(variant)}
+                  className="flex min-h-14 w-full items-center justify-between rounded-[18px] border border-black/[0.07] bg-white px-4 text-left transition hover:border-red-300 hover:bg-red-50/30 disabled:cursor-not-allowed disabled:opacity-35"
                 >
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <p className="text-[13px] font-medium">
-                        Talla {variant.size}
-                      </p>
-                      <p className="mt-0.5 text-[8.5px] text-black/38">
-                        Stock físico: {variant.stock} u.
-                      </p>
-                    </div>
-
-                    <span className="rounded-full bg-black/[0.035] px-2.5 py-1 text-[8px] text-black/50">
-                      {variant.stock} total
-                    </span>
+                  <div>
+                    <p className="text-[13px] font-medium">Talla {variant.size}</p>
+                    <p className="mt-0.5 text-[8.5px] text-black/38">{stock} unidad(es) disponibles</p>
                   </div>
-
-                  <div className="mt-3 grid grid-cols-2 gap-2">
-                    <button
-                      type="button"
-                      disabled={normalStock <= 0}
-                      onClick={() =>
-                        onSelect(
-                          variant,
-                          false
-                        )
-                      }
-                      className="min-h-12 rounded-xl border border-black/[0.08] bg-white px-3 text-left transition hover:border-black disabled:cursor-not-allowed disabled:bg-black/[0.025] disabled:text-black/25"
-                    >
-                      <p className="text-[9px] font-medium uppercase tracking-[0.08em]">
-                        Normal
-                      </p>
-                      <p className="mt-0.5 text-[8px] text-black/42">
-                        {normalStock} u. ·{" "}
-                        {formatCurrency(
-                          product.salePrice
-                        )}
-                      </p>
-                    </button>
-
-                    <button
-                      type="button"
-                      disabled={promoStock <= 0}
-                      onClick={() =>
-                        onSelect(
-                          variant,
-                          true
-                        )
-                      }
-                      className={`min-h-12 rounded-xl border px-3 text-left transition disabled:cursor-not-allowed disabled:bg-black/[0.025] disabled:text-black/25 ${
-                        promoStock > 0
-                          ? "border-amber-200 bg-amber-50/60 hover:border-amber-400"
-                          : "border-black/[0.06]"
-                      }`}
-                    >
-                      <p className="text-[9px] font-medium uppercase tracking-[0.08em] text-amber-700">
-                        Promoción
-                      </p>
-                      <p className="mt-0.5 text-[8px] text-black/48">
-                        {promoStock} u. ·{" "}
-                        {formatCurrency(
-                          product.promotionPrice
-                        )}
-                      </p>
-                    </button>
-                  </div>
-                </div>
+                  <span className="text-[10px] font-medium">
+                    {formatCurrency(promotion.active ? promotion.price : product.salePrice)}
+                  </span>
+                </button>
               );
             })}
           </div>

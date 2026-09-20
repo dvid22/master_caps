@@ -7,6 +7,7 @@ import {
   query,
   runTransaction,
   serverTimestamp,
+  writeBatch,
   where,
 } from "firebase/firestore";
 
@@ -42,6 +43,252 @@ const ALLOWED_IMAGE_TYPES = [
   "image/webp",
   "image/avif",
 ];
+
+export const DEFAULT_PROMOTION_SETTINGS = {
+  enabled: false,
+  percentage: 20,
+  note: "",
+};
+
+export function normalizePromotionPercentage(value) {
+  const number = Number(value);
+
+  if (!Number.isFinite(number)) return 0;
+
+  return Math.min(Math.max(number, 0), 99);
+}
+
+export function calculatePromotionPrice(salePrice, percentage) {
+  const price = Math.max(Number(salePrice || 0), 0);
+  const discount = normalizePromotionPercentage(percentage);
+
+  if (price <= 0 || discount <= 0) return price;
+
+  return Math.max(Math.round(price * (1 - discount / 100)), 0);
+}
+
+function derivePromotionPercentageFromPrice(salePrice, promotionPrice) {
+  const regular = Math.max(Number(salePrice || 0), 0);
+  const promo = Math.max(Number(promotionPrice || 0), 0);
+
+  if (regular <= 0 || promo <= 0 || promo >= regular) return 0;
+
+  return Math.round((1 - promo / regular) * 10000) / 100;
+}
+
+export function normalizePromotionSettings(settings = {}) {
+  return {
+    enabled: Boolean(settings?.enabled),
+    percentage: normalizePromotionPercentage(
+      settings?.percentage ?? DEFAULT_PROMOTION_SETTINGS.percentage
+    ),
+    note: String(settings?.note || "").trim(),
+  };
+}
+
+export function getPromotionSettingsRef(storeId = STORE_ID) {
+  const cleanStoreId = String(storeId || STORE_ID).trim() || STORE_ID;
+  return doc(db, "promotionSettings", cleanStoreId);
+}
+
+export function subscribePromotionSettings(
+  callback,
+  onError,
+  storeId = STORE_ID
+) {
+  const settingsRef = getPromotionSettingsRef(storeId);
+
+  return onSnapshot(
+    settingsRef,
+    (snapshot) => {
+      callback({
+        id: snapshot.id,
+        storeId: String(storeId || STORE_ID).trim() || STORE_ID,
+        ...DEFAULT_PROMOTION_SETTINGS,
+        ...(snapshot.exists() ? snapshot.data() : {}),
+        ...normalizePromotionSettings(
+          snapshot.exists() ? snapshot.data() : DEFAULT_PROMOTION_SETTINGS
+        ),
+      });
+    },
+    (error) => {
+      console.error("Error escuchando la promoción global:", error);
+      onError?.(error);
+    }
+  );
+}
+
+export async function updatePromotionSettings({
+  storeId = STORE_ID,
+  enabled = false,
+  percentage = DEFAULT_PROMOTION_SETTINGS.percentage,
+  note = "",
+  actor = null,
+} = {}) {
+  const cleanStoreId = String(storeId || STORE_ID).trim() || STORE_ID;
+  const normalized = normalizePromotionSettings({
+    enabled,
+    percentage,
+    note,
+  });
+
+  if (normalized.enabled && normalized.percentage <= 0) {
+    throw new Error("El porcentaje de la promoción global debe ser mayor a 0%.");
+  }
+
+  const settingsRef = getPromotionSettingsRef(cleanStoreId);
+
+  await runTransaction(db, async (transaction) => {
+    transaction.set(
+      settingsRef,
+      {
+        storeId: cleanStoreId,
+        ...normalized,
+        updatedByUid: actor?.uid || "",
+        updatedByName: actor?.name || "",
+        updatedByEmail: actor?.email || "",
+        updatedAt: serverTimestamp(),
+      },
+      { merge: true }
+    );
+  });
+
+  return normalized;
+}
+
+export function getEffectiveProductPromotion(
+  product = {},
+  _legacyGlobalSettings = null
+) {
+  const regularPrice = Math.max(Number(product?.salePrice || 0), 0);
+
+  const explicitPercentage = normalizePromotionPercentage(
+    product?.promotionPercentage
+  );
+
+  const legacyPercentage = derivePromotionPercentageFromPrice(
+    regularPrice,
+    product?.promotionPrice
+  );
+
+  const percentage =
+    explicitPercentage > 0
+      ? explicitPercentage
+      : legacyPercentage;
+
+  const active =
+    Boolean(product?.isPromotion) &&
+    regularPrice > 0 &&
+    percentage > 0;
+
+  return {
+    active,
+    source: active ? "product" : "none",
+    percentage: active ? percentage : 0,
+    regularPrice,
+    price: active
+      ? calculatePromotionPrice(regularPrice, percentage)
+      : regularPrice,
+    note: active
+      ? String(product?.promotionNote || "").trim()
+      : "",
+  };
+}
+
+/**
+ * Aplica o retira una promoción a varios productos en una sola operación lógica.
+ * La promoción pertenece directamente a cada producto; no existe herencia global.
+ * Se escriben lotes de máximo 400 operaciones para permanecer por debajo del límite
+ * de Firestore y permitir seleccionar inventarios grandes.
+ */
+export async function updateProductsPromotionBatch({
+  products = [],
+  percentage = 0,
+  note = "",
+  enabled = true,
+  storeId = STORE_ID,
+  actor = null,
+} = {}) {
+  const cleanStoreId = String(storeId || STORE_ID).trim() || STORE_ID;
+  const uniqueProducts = Array.from(
+    new Map(
+      (Array.isArray(products) ? products : [])
+        .filter((product) => product?.id)
+        .map((product) => [String(product.id), product])
+    ).values()
+  );
+
+  if (uniqueProducts.length === 0) {
+    throw new Error("Selecciona al menos un producto.");
+  }
+
+  const cleanPercentage = normalizePromotionPercentage(percentage);
+  const shouldEnable = Boolean(enabled);
+
+  if (shouldEnable && cleanPercentage <= 0) {
+    throw new Error("El porcentaje de la promoción debe ser mayor a 0%.");
+  }
+
+  if (shouldEnable && cleanPercentage >= 100) {
+    throw new Error("El porcentaje de la promoción debe ser menor a 100%.");
+  }
+
+  const cleanNote = shouldEnable ? String(note || "").trim() : "";
+  const invalidStoreProduct = uniqueProducts.find(
+    (product) =>
+      String(product?.storeId || cleanStoreId).trim() !== cleanStoreId
+  );
+
+  if (invalidStoreProduct) {
+    throw new Error("Uno de los productos seleccionados pertenece a otra tienda.");
+  }
+
+  const chunkSize = 400;
+
+  for (let startIndex = 0; startIndex < uniqueProducts.length; startIndex += chunkSize) {
+    const chunk = uniqueProducts.slice(startIndex, startIndex + chunkSize);
+    const batch = writeBatch(db);
+
+    chunk.forEach((product) => {
+      const productRef = doc(db, "products", product.id);
+      const salePrice = Math.max(Number(product?.salePrice || 0), 0);
+      const variants = normalizeProductVariants(
+        product?.variants,
+        product?.size,
+        product?.stock
+      );
+      const totalStock = variants.reduce(
+        (total, variant) => total + normalizeStock(variant.stock),
+        0
+      );
+      const promotionPrice = shouldEnable
+        ? calculatePromotionPrice(salePrice, cleanPercentage)
+        : 0;
+
+      batch.update(productRef, {
+        isPromotion: shouldEnable,
+        promotionPercentage: shouldEnable ? cleanPercentage : 0,
+        promotionPrice,
+        promotionNote: cleanNote,
+        promotionVariants: [],
+        promotionStock: shouldEnable ? totalStock : 0,
+        updatedByUid: actor?.uid || "",
+        updatedByName: actor?.name || "",
+        updatedByEmail: actor?.email || "",
+        updatedAt: serverTimestamp(),
+      });
+    });
+
+    await batch.commit();
+  }
+
+  return {
+    count: uniqueProducts.length,
+    enabled: shouldEnable,
+    percentage: shouldEnable ? cleanPercentage : 0,
+    note: cleanNote,
+  };
+}
 
 /* -------------------------------------------------------------------------- */
 /*                              UTILIDADES GENERALES                           */
@@ -300,17 +547,13 @@ export function getPromotionStockForVariant(
   product,
   variantOrSize
 ) {
+  if (!Boolean(product?.isPromotion)) return 0;
+
   const variants = normalizeProductVariants(
     product?.variants,
     product?.size,
     product?.stock
   );
-
-  const promotionVariants =
-    normalizePromotionVariants(
-      product?.promotionVariants,
-      variants
-    );
 
   const requestedId =
     typeof variantOrSize === "object"
@@ -323,136 +566,86 @@ export function getPromotionStockForVariant(
       : variantOrSize
   );
 
-  const match = promotionVariants.find(
-    (item) =>
-      (requestedId &&
-        item.variantId === requestedId) ||
-      item.size === requestedSize
+  const match = variants.find(
+    (variant) =>
+      (requestedId && String(variant.id || "") === requestedId) ||
+      normalizeProductSize(variant.size) === requestedSize
   );
 
-  return normalizeStock(match?.quantity);
+  return normalizeStock(match?.stock);
 }
 
 export function getProductPromotionStock(product) {
-  return normalizePromotionVariants(
-    product?.promotionVariants,
-    product?.variants
+  if (!Boolean(product?.isPromotion)) return 0;
+
+  return normalizeProductVariants(
+    product?.variants,
+    product?.size,
+    product?.stock
   ).reduce(
-    (total, item) =>
-      total + normalizeStock(item.quantity),
+    (total, variant) => total + normalizeStock(variant.stock),
     0
   );
 }
 
 export function normalizePromotionFields(product = {}) {
-  const salePrice = Number(product?.salePrice || 0);
-  const promotionPrice = Number(product?.promotionPrice || 0);
+  const salePrice = Math.max(Number(product?.salePrice || 0), 0);
   const requestedPromotion = Boolean(product?.isPromotion);
 
-  const validPromotionPrice =
-    Number.isFinite(promotionPrice) && promotionPrice > 0
-      ? promotionPrice
-      : 0;
+  const requestedPercentage = normalizePromotionPercentage(
+    product?.promotionPercentage
+  );
 
-  const promotionVariants =
-    normalizePromotionVariants(
-      product?.promotionVariants,
-      product?.variants
-    );
+  const legacyPercentage = derivePromotionPercentageFromPrice(
+    salePrice,
+    product?.promotionPrice
+  );
 
-  const promotionStock =
-    promotionVariants.reduce(
-      (total, item) =>
-        total + normalizeStock(item.quantity),
-      0
-    );
+  const promotionPercentage =
+    requestedPercentage > 0
+      ? requestedPercentage
+      : legacyPercentage;
 
   const isPromotion =
     requestedPromotion &&
-    validPromotionPrice > 0 &&
-    promotionStock > 0;
+    salePrice > 0 &&
+    promotionPercentage > 0;
+
+  const promotionPrice = isPromotion
+    ? calculatePromotionPrice(salePrice, promotionPercentage)
+    : 0;
+
+  const promotionStock = isPromotion
+    ? normalizeProductVariants(
+        product?.variants,
+        product?.size,
+        product?.stock
+      ).reduce(
+        (total, variant) => total + normalizeStock(variant.stock),
+        0
+      )
+    : 0;
 
   return {
     isPromotion,
-    promotionPrice: isPromotion ? validPromotionPrice : 0,
+    promotionPercentage: isPromotion ? promotionPercentage : 0,
+    promotionPrice,
     promotionNote: isPromotion
       ? String(product?.promotionNote || "").trim()
       : "",
-    promotionVariants: isPromotion
-      ? promotionVariants
-      : [],
-    promotionStock: isPromotion
-      ? promotionStock
-      : 0,
-    effectiveSalePrice: salePrice,
+    // Ya no se separa stock promocional del stock normal.
+    promotionVariants: [],
+    promotionStock,
+    effectiveSalePrice: promotionPrice || salePrice,
   };
 }
 
-function getProductDateMilliseconds(value) {
-  if (!value) return 0;
-
-  if (typeof value?.toMillis === "function") {
-    return value.toMillis();
-  }
-
-  if (typeof value?.toDate === "function") {
-    return value.toDate().getTime();
-  }
-
-  if (typeof value?.seconds === "number") {
-    return value.seconds * 1000;
-  }
-
-  const parsed = new Date(value);
-
-  return Number.isNaN(parsed.getTime())
-    ? 0
-    : parsed.getTime();
+export function getProductNewUntil() {
+  return null;
 }
 
-export function getProductNewUntil(product) {
-  const createdAtMs = getProductDateMilliseconds(
-    product?.createdAt
-  );
-
-  if (!createdAtMs) {
-    return null;
-  }
-
-  return new Date(
-    createdAtMs +
-      NEW_PRODUCT_WINDOW_DAYS * 24 * 60 * 60 * 1000
-  );
-}
-
-export function isProductNew(
-  product,
-  now = Date.now()
-) {
-  const createdAtMs = getProductDateMilliseconds(
-    product?.createdAt
-  );
-
-  if (!createdAtMs) {
-    return false;
-  }
-
-  const nowMs =
-    now instanceof Date
-      ? now.getTime()
-      : Number(now);
-
-  if (!Number.isFinite(nowMs)) {
-    return false;
-  }
-
-  const windowMs =
-    NEW_PRODUCT_WINDOW_DAYS * 24 * 60 * 60 * 1000;
-
-  return (
-    nowMs >= createdAtMs &&
-    nowMs < createdAtMs + windowMs
-  );
+export function isProductNew(product) {
+  return Boolean(product?.isNew);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -837,6 +1030,12 @@ function normalizeImageRecord(image, index = 0) {
     id: String(image.id || "").trim() || createImageId(),
     url,
     path,
+    thumbnailUrl: String(
+      image.thumbnailUrl || image.thumbUrl || ""
+    ).trim(),
+    thumbnailPath: String(
+      image.thumbnailPath || image.thumbPath || ""
+    ).trim(),
     name: String(image.name || "").trim(),
     type: image.type === "cover" ? "cover" : "gallery",
     sortOrder: Number.isFinite(Number(image.sortOrder))
@@ -899,6 +1098,8 @@ export function getProductImages(product) {
       id: createImageId(),
       url: legacyUrl,
       path: legacyPath,
+      thumbnailUrl: String(product?.coverThumbnailUrl || "").trim(),
+      thumbnailPath: String(product?.coverThumbnailPath || "").trim(),
       name: "",
       type: "cover",
       sortOrder: 0,
@@ -915,6 +1116,8 @@ export function getProductCoverImage(product) {
       id: "",
       url: "",
       path: "",
+      thumbnailUrl: "",
+      thumbnailPath: "",
       name: "",
       type: "cover",
       sortOrder: 0,
@@ -999,6 +1202,7 @@ async function uploadSingleProductImage(
 
   await uploadBytes(imageRef, imageFile, {
     contentType: imageFile.type,
+    cacheControl: "public,max-age=31536000,immutable",
     customMetadata: {
       storeId,
       productId,
@@ -1008,10 +1212,48 @@ async function uploadSingleProductImage(
 
   const imageUrl = await getDownloadURL(imageRef);
 
+  let thumbnailUrl = "";
+  let thumbnailPath = "";
+
+  try {
+    // Importación dinámica: evita que el catálogo público descargue el
+    // procesador pesado de imágenes / modelo IA solo por leer productos.
+    const { createProductThumbnail } = await import(
+      "./productImageProcessing.service"
+    );
+    const thumbnailFile = await createProductThumbnail(imageFile);
+    thumbnailPath = `products/${storeId}/${productId}/thumbs/${Date.now()}-${imageId}-${safeFileName(
+      thumbnailFile.name
+    )}`;
+    const thumbnailRef = ref(storage, thumbnailPath);
+
+    await uploadBytes(thumbnailRef, thumbnailFile, {
+      contentType: thumbnailFile.type,
+      cacheControl: "public,max-age=31536000,immutable",
+      customMetadata: {
+        storeId,
+        productId,
+        imageType,
+        variant: "catalog-thumbnail",
+      },
+    });
+
+    thumbnailUrl = await getDownloadURL(thumbnailRef);
+  } catch (error) {
+    console.warn(
+      "No se pudo crear la miniatura optimizada; se usará la imagen principal:",
+      error
+    );
+    thumbnailUrl = "";
+    thumbnailPath = "";
+  }
+
   return {
     id: imageId,
     url: imageUrl,
     path: imagePath,
+    thumbnailUrl,
+    thumbnailPath,
     name: imageFile.name || fileName,
     type: imageType,
     sortOrder,
@@ -1071,7 +1313,10 @@ async function uploadProductImages({
     return uploadedImages;
   } catch (error) {
     await deleteProductImages(
-      uploadedImages.map((image) => image.path),
+      uploadedImages.flatMap((image) => [
+        image.path,
+        image.thumbnailPath,
+      ]),
       false
     );
 
@@ -1117,6 +1362,8 @@ function buildImagesPayload(images) {
       galleryImages: [],
       coverImageUrl: "",
       coverImagePath: "",
+      coverThumbnailUrl: "",
+      coverThumbnailPath: "",
 
       /**
        * Campos antiguos conservados para que Inventario,
@@ -1154,6 +1401,8 @@ function buildImagesPayload(images) {
     galleryImages,
     coverImageUrl: coverImage?.url || "",
     coverImagePath: coverImage?.path || "",
+    coverThumbnailUrl: coverImage?.thumbnailUrl || "",
+    coverThumbnailPath: coverImage?.thumbnailPath || "",
 
     /**
      * Compatibilidad con el código anterior.
@@ -1569,15 +1818,6 @@ export async function createProduct(
         });
 
       if (
-        Boolean(productData?.isPromotion) &&
-        promotionPayload.promotionStock <= 0
-      ) {
-        throw new Error(
-          "Selecciona al menos una unidad de una talla para la promoción."
-        );
-      }
-
-      if (
         promotionPayload.isPromotion &&
         Number(productData?.salePrice || 0) > 0 &&
         promotionPayload.promotionPrice >=
@@ -1598,6 +1838,7 @@ export async function createProduct(
         ...imagesPayload,
 
         isPromotion: promotionPayload.isPromotion,
+        promotionPercentage: promotionPayload.promotionPercentage,
         promotionPrice: promotionPayload.promotionPrice,
         promotionNote: promotionPayload.promotionNote,
         promotionVariants: promotionPayload.promotionVariants,
@@ -1624,7 +1865,10 @@ export async function createProduct(
     return productRef.id;
   } catch (error) {
     await deleteProductImages(
-      uploadedImages.map((image) => image.path),
+      uploadedImages.flatMap((image) => [
+        image.path,
+        image.thumbnailPath,
+      ]),
       false
     );
 
@@ -1702,6 +1946,12 @@ export async function updateProduct(
 
   const pathsToDelete = new Set(normalizedMedia.removedImagePaths);
 
+  currentImages.forEach((image) => {
+    if (pathsToDelete.has(image.path) && image.thumbnailPath) {
+      pathsToDelete.add(image.thumbnailPath);
+    }
+  });
+
   /**
    * Compatibilidad con la firma antigua:
    * oldMedia era oldImagePath.
@@ -1728,13 +1978,19 @@ export async function updateProduct(
       pathsToDelete.add(previousCover.path);
     }
 
+    if (previousCover?.thumbnailPath) {
+      pathsToDelete.add(previousCover.thumbnailPath);
+    }
+
     retainedImages = retainedImages.filter(
       (image) => image.id !== previousCover?.id
     );
   }
 
   retainedImages = retainedImages.filter(
-    (image) => !pathsToDelete.has(image.path)
+    (image) =>
+      !pathsToDelete.has(image.path) &&
+      !pathsToDelete.has(image.thumbnailPath)
   );
 
   const newImagesCount =
@@ -1863,15 +2119,6 @@ export async function updateProduct(
         });
 
       if (
-        Boolean(productData?.isPromotion) &&
-        promotionPayload.promotionStock <= 0
-      ) {
-        throw new Error(
-          "Selecciona al menos una unidad de una talla para la promoción."
-        );
-      }
-
-      if (
         promotionPayload.isPromotion &&
         Number(
           productData?.salePrice ??
@@ -1900,6 +2147,7 @@ export async function updateProduct(
         ...imagesPayload,
 
         isPromotion: promotionPayload.isPromotion,
+        promotionPercentage: promotionPayload.promotionPercentage,
         promotionPrice: promotionPayload.promotionPrice,
         promotionNote: promotionPayload.promotionNote,
         promotionVariants: promotionPayload.promotionVariants,
@@ -1921,7 +2169,10 @@ export async function updateProduct(
     await deleteProductImages([...pathsToDelete], true);
   } catch (error) {
     await deleteProductImages(
-      uploadedImages.map((image) => image.path),
+      uploadedImages.flatMap((image) => [
+        image.path,
+        image.thumbnailPath,
+      ]),
       false
     );
 
@@ -2152,7 +2403,7 @@ export async function deleteProduct(productId, legacyImagePath = "") {
   };
 
   const imagePaths = getProductImages(currentProduct)
-    .map((image) => image.path)
+    .flatMap((image) => [image.path, image.thumbnailPath])
     .filter(Boolean);
 
   if (legacyImagePath) {

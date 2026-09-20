@@ -11,6 +11,14 @@ export const PRODUCT_IMAGE_OUTPUT = {
   extension: "webp",
 };
 
+export const PRODUCT_THUMBNAIL_OUTPUT = {
+  width: 480,
+  height: 480,
+  quality: 0.8,
+  mimeType: "image/webp",
+  extension: "webp",
+};
+
 export const BACKGROUND_PROCESSING_MODES = {
   REMOVE: "remove",
   KEEP: "keep",
@@ -1123,6 +1131,36 @@ export function preloadProductImageProcessor() {
   return preloadPromise;
 }
 
+export async function createProductThumbnail(
+  file,
+  {
+    width = PRODUCT_THUMBNAIL_OUTPUT.width,
+    height = PRODUCT_THUMBNAIL_OUTPUT.height,
+    quality = PRODUCT_THUMBNAIL_OUTPUT.quality,
+    mimeType = PRODUCT_THUMBNAIL_OUTPUT.mimeType,
+    keepPaddingRatio = 0.02,
+  } = {}
+) {
+  validateSourceImage(file);
+
+  const blob = await composeOriginalCatalogImage(file, {
+    width,
+    height,
+    quality,
+    mimeType,
+    keepPaddingRatio,
+  });
+
+  return new File(
+    [blob],
+    `${cleanFileName(file.name)}-thumb.${PRODUCT_THUMBNAIL_OUTPUT.extension}`,
+    {
+      type: mimeType,
+      lastModified: Date.now(),
+    }
+  );
+}
+
 export async function standardizeProductImage(
   file,
   {
@@ -1350,21 +1388,7 @@ export async function standardizeProductImages(
   return results;
 }
 
-function scheduleAutomaticPreload() {
-  if (typeof window === "undefined") return;
+// El modelo de eliminación de fondo ya no se precarga al importar este módulo.
+// Se carga únicamente cuando el usuario solicita quitar el fondo de una imagen.
+// Esto evita consumo de red/CPU en el catálogo público y en equipos modestos.
 
-  const start = () => {
-    preloadProductImageProcessor().catch(() => {});
-  };
-
-  if ("requestIdleCallback" in window) {
-    window.requestIdleCallback(start, {
-      timeout: 2500,
-    });
-    return;
-  }
-
-  window.setTimeout(start, 1200);
-}
-
-scheduleAutomaticPreload();

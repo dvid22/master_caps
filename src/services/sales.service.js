@@ -14,6 +14,9 @@ import {
 import { db } from "../firebase/firebase";
 import { STORE_ID } from "./categories.service";
 import {
+  getEffectiveProductPromotion,
+} from "./products.service";
+import {
   getCustomerDocumentId,
   normalizeCustomerDocument,
   normalizeCustomerPhone,
@@ -658,9 +661,9 @@ function normalizeRequestedItems(items) {
     const variantId = normalizeText(item?.variantId);
     const size = normalizeText(item?.size || item?.productSize);
     const quantity = normalizeQuantity(item?.quantity);
-    const isPromotion =
-      Boolean(item?.isPromotion) ||
-      normalizeText(item?.pricingMode) === "promotion";
+    // El precio promocional nunca se confía al cliente.
+    // Se resuelve dentro de la transacción con la configuración vigente.
+    const isPromotion = false;
 
     if (!productId) {
       throw new Error("Uno de los productos seleccionados no es válido.");
@@ -671,8 +674,7 @@ function normalizeRequestedItems(items) {
     }
 
     const variantKey = variantId || normalizeSize(size || "Talla única");
-    const modeKey = isPromotion ? "promo" : "normal";
-    const groupKey = `${productId}__${variantKey}__${modeKey}`;
+    const groupKey = `${productId}__${variantKey}`;
     const existingItem = groupedItems.get(groupKey);
 
     if (existingItem) {
@@ -742,6 +744,8 @@ function normalizeLegacySaleItem(sale) {
         : normalizeMoney(sale.unitPrice),
     isPromotion: Boolean(sale.isPromotion),
     promotionPrice: normalizeMoney(sale.promotionPrice),
+    promotionPercentage: normalizeMoney(sale.promotionPercentage),
+    promotionSource: normalizeText(sale.promotionSource),
     promotionNote: normalizeText(sale.promotionNote),
 
     costPrice: normalizeMoney(sale.costPrice),
@@ -802,6 +806,8 @@ function normalizeSaleItem(item, index = 0) {
         : unitPrice,
     isPromotion: Boolean(item?.isPromotion),
     promotionPrice: normalizeMoney(item?.promotionPrice),
+    promotionPercentage: normalizeMoney(item?.promotionPercentage),
+    promotionSource: normalizeText(item?.promotionSource),
     promotionNote: normalizeText(item?.promotionNote),
 
     costPrice,
@@ -1798,6 +1804,8 @@ export async function createMultiItemSale({
         regularUnitPrice: item.unitPrice,
         isPromotion: false,
         promotionPrice: 0,
+        promotionPercentage: 0,
+        promotionSource: "",
         promotionNote: "",
 
         costPrice: item.costPrice,
@@ -1828,9 +1836,8 @@ export async function createMultiItemSale({
       }
 
       const workingVariants = normalizeProductVariants(productId, product);
-      let workingPromotionVariants = normalizePromotionVariants(
-        product,
-        workingVariants
+      const effectivePromotion = getEffectiveProductPromotion(
+        product
       );
 
       for (const requestedItem of productSaleItems) {
@@ -1848,69 +1855,35 @@ export async function createMultiItemSale({
         const requestedQuantity = normalizeQuantity(requestedItem.quantity);
         const currentVariantStock = normalizeQuantity(selectedVariant.stock);
 
-        const promotionAvailable = getPromotionStockForVariant(
-          workingPromotionVariants,
-          selectedVariant
-        );
-
-        const normalAvailable = Math.max(
-          currentVariantStock - promotionAvailable,
-          0
-        );
-
-        const promotionActive = Boolean(requestedItem.isPromotion);
-        const availableForMode = promotionActive
-          ? promotionAvailable
-          : normalAvailable;
-
-        if (requestedQuantity > availableForMode) {
+        if (requestedQuantity > currentVariantStock) {
           throw new Error(
-            promotionActive
-              ? `Solo hay ${availableForMode} unidad(es) en promoción de "${product.name}" talla ${selectedVariant.size}.`
-              : `Solo hay ${availableForMode} unidad(es) normales de "${product.name}" talla ${selectedVariant.size}.`
+            `Solo hay ${currentVariantStock} unidad(es) disponibles de "${
+              product.name || "el producto"
+            }" talla ${selectedVariant.size}.`
           );
-        }
-
-        if (
-          promotionActive &&
-          (!Boolean(product.isPromotion) ||
-            normalizeMoney(product.promotionPrice) <= 0)
-        ) {
-          throw new Error(`La promoción de "${product.name}" ya no está disponible.`);
         }
 
         selectedVariant.stock = currentVariantStock - requestedQuantity;
 
-        if (promotionActive) {
-          workingPromotionVariants = workingPromotionVariants
-            .map((item) =>
-              item.variantId === selectedVariant.id ||
-              normalizeSize(item.size) === normalizeSize(selectedVariant.size)
-                ? {
-                    ...item,
-                    quantity: item.quantity - requestedQuantity,
-                  }
-                : item
-            )
-            .filter((item) => item.quantity > 0);
-        }
-
         const regularUnitPrice = normalizeMoney(product.salePrice);
-
+        const promotionActive = Boolean(effectivePromotion.active);
         const promotionPrice = promotionActive
-          ? normalizeMoney(product.promotionPrice)
+          ? normalizeMoney(effectivePromotion.price)
           : 0;
-
-        const promotionNote = promotionActive
-          ? normalizeText(product.promotionNote)
+        const promotionPercentage = promotionActive
+          ? normalizeMoney(effectivePromotion.percentage)
+          : 0;
+        const promotionSource = promotionActive
+          ? normalizeText(effectivePromotion.source)
           : "";
-
+        const promotionNote = promotionActive
+          ? normalizeText(effectivePromotion.note)
+          : "";
         const unitPrice = promotionActive
           ? promotionPrice
           : regularUnitPrice;
 
         const costPrice = normalizeMoney(product.costPrice);
-
         const lineSubtotal = unitPrice * requestedQuantity;
         const lineTotalCost = costPrice * requestedQuantity;
         const lineProfit = lineSubtotal - lineTotalCost;
@@ -1945,6 +1918,8 @@ export async function createMultiItemSale({
           regularUnitPrice,
           isPromotion: promotionActive,
           promotionPrice,
+          promotionPercentage,
+          promotionSource,
           promotionNote,
 
           costPrice,
@@ -1956,13 +1931,17 @@ export async function createMultiItemSale({
       }
 
       const productVariantPayload = buildProductVariantPayload(workingVariants);
-      const promotionStock = getPromotionTotalStock(workingPromotionVariants);
+      const productSpecificPromotion = getEffectiveProductPromotion(
+        { ...product, isPromotion: Boolean(product.isPromotion) }
+      );
 
       transaction.update(productRef, {
         ...productVariantPayload,
-
-        promotionVariants: workingPromotionVariants,
-        promotionStock,
+        // Compatibilidad: el stock promocional ya no es una bolsa separada.
+        promotionVariants: [],
+        promotionStock: productSpecificPromotion.active
+          ? productVariantPayload.totalStock
+          : 0,
 
         updatedByUid: seller?.uid || "",
         updatedByName: seller?.name || "",

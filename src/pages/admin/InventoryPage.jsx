@@ -1,3 +1,4 @@
+import { showPremiumConfirm } from "../../utils/premiumDialog";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   BadgePercent,
@@ -39,18 +40,19 @@ import {
 } from "../../services/mainCategories.service";
 
 import {
+  calculatePromotionPrice,
   createProduct,
   deleteProduct,
+  getEffectiveProductPromotion,
   getNextProductCodePreview,
   getProductCoverImage,
   getProductImages,
   getProductLabelPrintSummary,
-  getProductPromotionStock,
-  getPromotionStockForVariant,
   isProductNew,
   normalizeProductVariants,
   subscribeProducts,
   updateProduct,
+  updateProductsPromotionBatch,
   MAX_PRODUCT_IMAGES,
 } from "../../services/products.service";
 
@@ -60,6 +62,7 @@ import {
 } from "../../utils/money";
 
 import { getCurrentUserActor } from "../../services/auth.service";
+import { useAuth } from "../../context/AuthContext";
 import BarcodeLabel from "../../components/products/BarcodeLabel";
 import BatchBarcodeLabel from "../../components/products/BatchBarcodeLabel";
 import ReactCrop, {
@@ -101,7 +104,9 @@ const createEmptyForm = () => ({
   newSubcategoryName: "",
   costPrice: "",
   salePrice: "",
+  isNew: false,
   isPromotion: false,
+  promotionPercentage: "",
   promotionPrice: "",
   promotionNote: "",
   variants: createInitialVariants(),
@@ -242,6 +247,22 @@ function normalizeMoneyInputValue(value) {
   if (value === null || value === undefined || value === "") return "";
 
   return formatThousands(value);
+}
+
+function parsePercentInput(value) {
+  const normalized = String(value ?? "")
+    .replace(",", ".")
+    .replace(/[^0-9.]/g, "");
+  const number = Number(normalized);
+
+  if (!Number.isFinite(number)) return 0;
+  return Math.min(Math.max(number, 0), 99);
+}
+
+function formatPercentInput(value) {
+  if (value === null || value === undefined || value === "") return "";
+  const number = parsePercentInput(value);
+  return number ? String(number) : "";
 }
 
 
@@ -536,10 +557,13 @@ async function createCroppedImageFile({
 }
 
 export default function InventoryPage() {
+  const { role } = useAuth();
+  const isAdmin = role === "admin";
+  const promotionSettings = { enabled: false, percentage: 0, note: "" };
+
   const [products, setProducts] = useState([]);
   const [mainCategories, setMainCategories] = useState([]);
   const [categories, setCategories] = useState([]);
-
   const [form, setForm] = useState(createEmptyForm());
 
   const [coverFile, setCoverFile] = useState(null);
@@ -558,6 +582,10 @@ export default function InventoryPage() {
   const [labelProduct, setLabelProduct] = useState(null);
   const [batchSelectedProductIds, setBatchSelectedProductIds] = useState([]);
   const [batchPrintOpen, setBatchPrintOpen] = useState(false);
+  const [batchPromotionOpen, setBatchPromotionOpen] = useState(false);
+  const [batchPromotionPercentage, setBatchPromotionPercentage] = useState("20");
+  const [batchPromotionNote, setBatchPromotionNote] = useState("");
+  const [savingBatchPromotion, setSavingBatchPromotion] = useState(false);
   const [showForm, setShowForm] = useState(false);
 
   const [suggestedCode, setSuggestedCode] = useState("");
@@ -687,6 +715,7 @@ export default function InventoryPage() {
       unsubscribeCategories();
     };
   }, []);
+
 
   useEffect(() => {
     return () => {
@@ -848,6 +877,23 @@ export default function InventoryPage() {
         )
         .filter(Boolean),
     [batchSelectedProductIds, products]
+  );
+
+  const batchPrintableProducts = useMemo(
+    () =>
+      batchSelectedProducts.filter(
+        (product) => getTotalStock(product) > 0
+      ),
+    [batchSelectedProducts]
+  );
+
+  const allFilteredSelected = useMemo(
+    () =>
+      filteredProducts.length > 0 &&
+      filteredProducts.every((product) =>
+        batchSelectedProductIds.includes(product.id)
+      ),
+    [filteredProducts, batchSelectedProductIds]
   );
 
   useEffect(() => {
@@ -1590,19 +1636,21 @@ export default function InventoryPage() {
       newSubcategoryName: "",
       costPrice: normalizeMoneyInputValue(product.costPrice),
       salePrice: normalizeMoneyInputValue(product.salePrice),
+      isNew: Boolean(product.isNew),
       isPromotion: Boolean(product.isPromotion),
+      promotionPercentage: formatPercentInput(
+        product.promotionPercentage ||
+          (Number(product.salePrice || 0) > 0 && Number(product.promotionPrice || 0) > 0
+            ? ((1 - Number(product.promotionPrice) / Number(product.salePrice)) * 100).toFixed(2)
+            : "")
+      ),
       promotionPrice: normalizeMoneyInputValue(product.promotionPrice),
       promotionNote: String(product.promotionNote || ""),
       variants: normalizedVariants.map((variant) => ({
         id: variant.id || createVariantId(),
         size: variant.size || "Talla única",
         stock: String(variant.stock || 0),
-        promotionStock: String(
-          getPromotionStockForVariant(
-            product,
-            variant
-          ) || 0
-        ),
+        promotionStock: "0",
         barcode: String(variant.barcode || ""),
       })),
     });
@@ -1672,10 +1720,22 @@ export default function InventoryPage() {
         ? ""
         : form.code.trim();
 
-    const costPrice = parseMoneyInput(form.costPrice);
+    const previousCostPrice = Math.max(
+      Number(editingProduct?.costPrice || 0),
+      0
+    );
+    const costPrice = isAdmin
+      ? parseMoneyInput(form.costPrice)
+      : previousCostPrice;
     const salePrice = parseMoneyInput(form.salePrice);
+    const promotionPercentage = form.isPromotion
+      ? parsePercentInput(form.promotionPercentage)
+      : 0;
     const promotionPrice = form.isPromotion
-      ? parseMoneyInput(form.promotionPrice)
+      ? calculatePromotionPrice(
+          salePrice,
+          promotionPercentage
+        )
       : 0;
     const promotionNote = form.isPromotion
       ? String(form.promotionNote || "").trim()
@@ -1712,7 +1772,7 @@ export default function InventoryPage() {
       return;
     }
 
-    if (costPrice <= 0) {
+    if (isAdmin && costPrice <= 0) {
       notify("El precio de llegada debe ser mayor a cero.", "warning");
       return;
     }
@@ -1722,55 +1782,17 @@ export default function InventoryPage() {
       return;
     }
 
-    if (form.isPromotion && promotionPrice <= 0) {
-      notify("Escribe un precio válido para la promoción.", "warning");
-      return;
-    }
-
-    if (
-      form.isPromotion &&
-      promotionPrice >= salePrice
-    ) {
+    if (form.isPromotion && promotionPercentage <= 0) {
       notify(
-        "El precio de promoción debe ser menor al precio normal de venta.",
+        "Escribe un porcentaje válido para la promoción.",
         "warning"
       );
       return;
     }
 
-    const promotionVariants = form.isPromotion
-      ? form.variants
-          .map((variant) => ({
-            variantId: variant.id,
-            size: normalizeSize(variant.size),
-            quantity: Number(variant.promotionStock || 0),
-            stock: Number(variant.stock || 0),
-          }))
-          .filter((variant) => variant.quantity > 0)
-      : [];
-
-    if (
-      form.isPromotion &&
-      promotionVariants.length === 0
-    ) {
+    if (form.isPromotion && promotionPercentage >= 100) {
       notify(
-        "Selecciona al menos una talla y una cantidad para la promoción.",
-        "warning"
-      );
-      return;
-    }
-
-    const invalidPromotionStock =
-      promotionVariants.some(
-        (variant) =>
-          !Number.isInteger(variant.quantity) ||
-          variant.quantity <= 0 ||
-          variant.quantity > variant.stock
-      );
-
-    if (invalidPromotionStock) {
-      notify(
-        "La cantidad en promoción no puede superar el stock disponible de la talla.",
+        "El porcentaje de promoción debe ser menor a 100%.",
         "warning"
       );
       return;
@@ -1833,18 +1855,18 @@ export default function InventoryPage() {
         categoryName: normalizeCategoryName(selectedCategory.name),
         costPrice,
         salePrice,
+        isNew: Boolean(form.isNew),
         isPromotion: Boolean(form.isPromotion),
+        promotionPercentage,
         promotionPrice,
         promotionNote,
-        promotionVariants: promotionVariants.map(
-          ({ variantId, size, quantity }) => ({
-            variantId,
-            size,
-            quantity,
-          })
-        ),
-        profitMargin: profit.profitMargin,
-        profitPercent: profit.profitPercent,
+        promotionVariants: [],
+        profitMargin: isAdmin
+          ? profit.profitMargin
+          : Number(editingProduct?.profitMargin || 0),
+        profitPercent: isAdmin
+          ? profit.profitPercent
+          : Number(editingProduct?.profitPercent || 0),
         variants: normalizedVariants,
       };
 
@@ -1894,21 +1916,49 @@ export default function InventoryPage() {
   }
 
   function toggleBatchProduct(product) {
-    if (getTotalStock(product) <= 0) return;
-
     setBatchSelectedProductIds((current) =>
       current.includes(product.id)
-        ? current.filter(
-            (productId) => productId !== product.id
-          )
+        ? current.filter((productId) => productId !== product.id)
         : [...current, product.id]
     );
   }
 
+  function toggleAllFilteredProducts() {
+    setBatchSelectedProductIds((current) => {
+      const filteredIds = filteredProducts.map((product) => product.id);
+
+      if (allFilteredSelected) {
+        return current.filter((productId) => !filteredIds.includes(productId));
+      }
+
+      return [...new Set([...current, ...filteredIds])];
+    });
+  }
+
+  function clearBatchSelection() {
+    setBatchSelectedProductIds([]);
+  }
+
+  function selectFilteredPromotionProducts() {
+    const promotionIds = filteredProducts
+      .filter((product) => getEffectiveProductPromotion(product).active)
+      .map((product) => product.id);
+
+    if (promotionIds.length === 0) {
+      notify("No hay productos en promoción dentro de los resultados actuales.", "info");
+      return;
+    }
+
+    setBatchSelectedProductIds((current) => [
+      ...new Set([...current, ...promotionIds]),
+    ]);
+  }
+
   function openBatchPrint() {
-    if (batchSelectedProducts.length === 0) {
+    if (batchPrintableProducts.length === 0) {
       notify(
-        "Selecciona al menos un producto con stock para imprimir por lote."
+        "Selecciona al menos un producto con stock para imprimir etiquetas por lote.",
+        "warning"
       );
       return;
     }
@@ -1921,8 +1971,107 @@ export default function InventoryPage() {
   }
 
   function handleBatchPrinted() {
-    setBatchSelectedProductIds([]);
     setBatchPrintOpen(false);
+  }
+
+  function openBatchPromotion() {
+    if (!isAdmin) {
+      notify("Solo un administrador puede modificar promociones.", "warning");
+      return;
+    }
+
+    if (batchSelectedProducts.length === 0) {
+      notify("Selecciona al menos un producto para aplicar una promoción.", "warning");
+      return;
+    }
+
+    setBatchPromotionOpen(true);
+  }
+
+  async function applyBatchPromotion() {
+    if (!isAdmin || savingBatchPromotion) return;
+
+    const percentage = parsePercentInput(batchPromotionPercentage);
+
+    if (percentage <= 0 || percentage >= 100) {
+      notify("El porcentaje debe ser mayor a 0% y menor a 100%.", "warning");
+      return;
+    }
+
+    try {
+      setSavingBatchPromotion(true);
+
+      const result = await updateProductsPromotionBatch({
+        products: batchSelectedProducts,
+        percentage,
+        note: batchPromotionNote,
+        enabled: true,
+        storeId: STORE_ID,
+        actor: getCurrentUserActor(),
+      });
+
+      setBatchPromotionOpen(false);
+      clearBatchSelection();
+      notify(
+        `Promoción del ${percentage}% aplicada a ${result.count} producto(s).`,
+        "success"
+      );
+    } catch (error) {
+      console.error(error);
+      notify(error.message || "No se pudo aplicar la promoción por lote.", "error");
+    } finally {
+      setSavingBatchPromotion(false);
+    }
+  }
+
+  async function removeBatchPromotion() {
+    if (!isAdmin || savingBatchPromotion) return;
+
+    if (batchSelectedProducts.length === 0) {
+      notify("Selecciona al menos un producto para quitar la promoción.", "warning");
+      return;
+    }
+
+    const productsWithPromotion = batchSelectedProducts.filter(
+      (product) => getEffectiveProductPromotion(product).active
+    );
+
+    if (productsWithPromotion.length === 0) {
+      notify("Los productos seleccionados no tienen una promoción activa.", "info");
+      return;
+    }
+
+    const confirmed = await showPremiumConfirm({
+      title: "Quitar promoción",
+      message: `Se quitará la promoción de ${productsWithPromotion.length} producto(s). Volverán a venderse a su precio normal.`,
+      confirmText: "Quitar promoción",
+      cancelText: "Mantener promoción",
+      tone: "warning",
+    });
+
+    if (!confirmed) return;
+
+    try {
+      setSavingBatchPromotion(true);
+
+      const result = await updateProductsPromotionBatch({
+        products: productsWithPromotion,
+        enabled: false,
+        storeId: STORE_ID,
+        actor: getCurrentUserActor(),
+      });
+
+      clearBatchSelection();
+      notify(
+        `Promoción retirada de ${result.count} producto(s).`,
+        "success"
+      );
+    } catch (error) {
+      console.error(error);
+      notify(error.message || "No se pudo quitar la promoción por lote.", "error");
+    } finally {
+      setSavingBatchPromotion(false);
+    }
   }
 
   function handleDelete(product) {
@@ -1960,30 +2109,54 @@ export default function InventoryPage() {
             </p>
           </div>
 
-          <div className="flex flex-col gap-2 sm:flex-row">
+          <div className="flex flex-wrap gap-2">
             <button
               type="button"
               onClick={openPublicCatalog}
-              className="inline-flex h-11 items-center justify-center gap-2 rounded-2xl border border-black/[0.08] bg-white px-5 text-[13px] font-medium text-black shadow-[0_12px_35px_rgba(0,0,0,0.04)] transition hover:border-red-500/25 hover:bg-red-50 hover:text-red-600"
+              className="inline-flex h-11 items-center justify-center gap-2 rounded-2xl border border-black/[0.08] bg-white px-4 text-[12px] font-medium text-black shadow-[0_12px_35px_rgba(0,0,0,0.04)] transition hover:border-red-500/25 hover:bg-red-50 hover:text-red-600"
             >
               <ExternalLink size={16} strokeWidth={1.9} />
-              Publicar catálogo
+              Catálogo
             </button>
 
             <button
               type="button"
               onClick={openBatchPrint}
-              disabled={batchSelectedProducts.length === 0}
-              className="inline-flex h-11 items-center justify-center gap-2 rounded-2xl border border-red-100 bg-red-50 px-5 text-[13px] font-medium text-red-600 transition hover:border-red-200 hover:bg-red-100 disabled:cursor-not-allowed disabled:border-black/[0.06] disabled:bg-black/[0.025] disabled:text-black/30"
+              disabled={batchPrintableProducts.length === 0}
+              className="inline-flex h-11 items-center justify-center gap-2 rounded-2xl border border-black/[0.08] bg-white px-4 text-[12px] font-medium text-black transition hover:border-red-200 hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:bg-black/[0.025] disabled:text-black/30"
             >
               <Barcode size={16} strokeWidth={1.9} />
-              Imprimir lote
-              {batchSelectedProducts.length > 0 && (
-                <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-red-600 px-1.5 text-[9px] text-white">
-                  {batchSelectedProducts.length}
+              Etiquetas
+              {batchPrintableProducts.length > 0 && (
+                <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-black px-1.5 text-[9px] text-white">
+                  {batchPrintableProducts.length}
                 </span>
               )}
             </button>
+
+            {isAdmin && (
+              <>
+                <button
+                  type="button"
+                  onClick={openBatchPromotion}
+                  disabled={batchSelectedProducts.length === 0 || savingBatchPromotion}
+                  className="inline-flex h-11 items-center justify-center gap-2 rounded-2xl bg-amber-400 px-4 text-[12px] font-semibold text-black transition hover:bg-amber-300 disabled:cursor-not-allowed disabled:bg-black/[0.06] disabled:text-black/30"
+                >
+                  <BadgePercent size={16} strokeWidth={2} />
+                  Aplicar promoción
+                </button>
+
+                <button
+                  type="button"
+                  onClick={removeBatchPromotion}
+                  disabled={batchSelectedProducts.length === 0 || savingBatchPromotion}
+                  className="inline-flex h-11 items-center justify-center gap-2 rounded-2xl border border-amber-200 bg-white px-4 text-[12px] font-medium text-amber-800 transition hover:bg-amber-50 disabled:cursor-not-allowed disabled:border-black/[0.06] disabled:text-black/30"
+                >
+                  <X size={15} />
+                  Quitar promoción
+                </button>
+              </>
+            )}
 
             <button
               type="button"
@@ -2087,6 +2260,54 @@ export default function InventoryPage() {
             </select>
           </div>
 
+          <div className="mt-3 flex flex-col gap-2 rounded-[18px] bg-black/[0.025] px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={toggleAllFilteredProducts}
+                disabled={filteredProducts.length === 0}
+                className="inline-flex h-9 items-center gap-2 rounded-xl border border-black/[0.08] bg-white px-3 text-[10px] font-medium text-black/65 transition hover:border-red-200 hover:text-red-600 disabled:opacity-35"
+              >
+                <span className={`flex h-4 w-4 items-center justify-center rounded border ${
+                  allFilteredSelected
+                    ? "border-red-600 bg-red-600 text-white"
+                    : "border-black/15 text-transparent"
+                }`}>
+                  <Check size={11} />
+                </span>
+                {allFilteredSelected ? "Quitar resultados" : "Seleccionar resultados"}
+              </button>
+
+              {isAdmin && (
+                <button
+                  type="button"
+                  onClick={selectFilteredPromotionProducts}
+                  disabled={filteredProducts.length === 0}
+                  className="inline-flex h-9 items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 text-[10px] font-medium text-amber-800 transition hover:bg-amber-100 disabled:opacity-35"
+                >
+                  <BadgePercent size={13} />
+                  Seleccionar promociones
+                </button>
+              )}
+
+              {batchSelectedProducts.length > 0 && (
+                <button
+                  type="button"
+                  onClick={clearBatchSelection}
+                  className="h-9 rounded-xl px-3 text-[10px] font-medium text-red-600 transition hover:bg-red-50"
+                >
+                  Limpiar selección
+                </button>
+              )}
+            </div>
+
+            <p className="text-[10px] text-black/45">
+              {batchSelectedProducts.length > 0
+                ? `${batchSelectedProducts.length} producto(s) seleccionado(s) · usa la misma selección para promociones o etiquetas`
+                : "Selecciona productos para aplicar o retirar promociones por lote."}
+            </p>
+          </div>
+
           <section className="mt-4">
             {loading ? (
               <div className="rounded-[22px] bg-black/[0.025] p-8 text-center text-[13px] text-black/45">
@@ -2101,6 +2322,8 @@ export default function InventoryPage() {
                     <ProductCard
                       key={product.id}
                       product={product}
+                      promotionSettings={promotionSettings}
+                      isAdmin={isAdmin}
                       categoriesById={categoriesById}
                       mainCategoriesById={mainCategoriesById}
                       batchSelected={batchSelectedProductIds.includes(
@@ -2133,6 +2356,8 @@ export default function InventoryPage() {
       {detailProduct && (
         <ProductDetailModal
           product={detailProduct}
+          promotionSettings={promotionSettings}
+          isAdmin={isAdmin}
           categoriesById={categoriesById}
           mainCategoriesById={mainCategoriesById}
           onClose={() => setDetailProduct(null)}
@@ -2159,9 +2384,9 @@ export default function InventoryPage() {
         />
       )}
 
-      {batchPrintOpen && batchSelectedProducts.length > 0 && (
+      {batchPrintOpen && batchPrintableProducts.length > 0 && (
         <BatchBarcodeLabel
-          products={batchSelectedProducts}
+          products={batchPrintableProducts}
           open={batchPrintOpen}
           onClose={closeBatchPrint}
           onPrinted={handleBatchPrinted}
@@ -2172,9 +2397,24 @@ export default function InventoryPage() {
         />
       )}
 
+      {batchPromotionOpen && (
+        <BatchPromotionModal
+          count={batchSelectedProducts.length}
+          percentage={batchPromotionPercentage}
+          note={batchPromotionNote}
+          saving={savingBatchPromotion}
+          onPercentageChange={setBatchPromotionPercentage}
+          onNoteChange={setBatchPromotionNote}
+          onClose={() => setBatchPromotionOpen(false)}
+          onApply={applyBatchPromotion}
+        />
+      )}
+
       {showForm && (
         <ProductFormModal
           editingProduct={editingProduct}
+          isAdmin={isAdmin}
+          promotionSettings={promotionSettings}
           closeForm={closeForm}
           handleSubmit={handleSubmit}
           handleCoverChange={handleCoverChange}
@@ -2278,8 +2518,163 @@ function EmptyInventory({ onCreate }) {
   );
 }
 
+function BatchPromotionModal({
+  count,
+  percentage,
+  note,
+  saving,
+  onPercentageChange,
+  onNoteChange,
+  onClose,
+  onApply,
+}) {
+  const cleanPercentage = parsePercentInput(percentage);
+
+  return (
+    <div className="fixed inset-0 z-[80] flex items-end justify-center bg-black/45 p-0 backdrop-blur-sm sm:items-center sm:p-4">
+      <section className="max-h-[92svh] w-full overflow-hidden rounded-t-[28px] bg-white shadow-2xl sm:max-w-[560px] sm:rounded-[28px]">
+        <header className="flex items-start justify-between gap-4 border-b border-black/[0.06] px-5 py-4">
+          <div className="flex min-w-0 items-start gap-3">
+            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-amber-400 text-black">
+              <BadgePercent size={20} />
+            </div>
+
+            <div className="min-w-0">
+              <p className="text-[9px] font-semibold uppercase tracking-[0.14em] text-amber-700">
+                Promoción por lote
+              </p>
+              <h2 className="mt-1 text-[20px] font-medium tracking-[-0.035em] text-black">
+                {count} producto(s) seleccionado(s)
+              </h2>
+              <p className="mt-1 text-[10px] leading-5 text-black/45">
+                El porcentaje se aplicará a todas las tallas y unidades de cada producto seleccionado.
+              </p>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={saving}
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-black/[0.08] text-black/50 transition hover:bg-black/[0.035] disabled:opacity-40"
+            aria-label="Cerrar"
+          >
+            <X size={17} />
+          </button>
+        </header>
+
+        <div className="max-h-[calc(92svh-86px)] overflow-y-auto p-5">
+          <div>
+            <p className="text-[10px] font-medium uppercase tracking-[0.1em] text-black/45">
+              Descuento rápido
+            </p>
+
+            <div className="mt-2 grid grid-cols-3 gap-2">
+              {[20, 30, 40].map((value) => {
+                const active = cleanPercentage === value;
+
+                return (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => onPercentageChange(String(value))}
+                    className={`h-12 rounded-2xl border text-[13px] font-semibold transition ${
+                      active
+                        ? "border-amber-400 bg-amber-400 text-black"
+                        : "border-black/[0.08] bg-white text-black/60 hover:border-amber-300 hover:bg-amber-50"
+                    }`}
+                  >
+                    {value}%
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <label className="mt-4 block">
+            <span className="text-[10px] font-medium text-black/55">
+              Otro porcentaje
+            </span>
+
+            <div className="relative mt-2">
+              <input
+                type="text"
+                inputMode="decimal"
+                value={percentage}
+                onChange={(event) =>
+                  onPercentageChange(
+                    event.target.value
+                      .replace(",", ".")
+                      .replace(/[^0-9.]/g, "")
+                      .slice(0, 5)
+                  )
+                }
+                className="h-12 w-full rounded-2xl border border-black/[0.08] bg-white px-4 pr-10 text-[14px] outline-none transition focus:border-amber-500 focus:ring-4 focus:ring-amber-500/10"
+                placeholder="20"
+              />
+              <span className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-[12px] text-black/40">
+                %
+              </span>
+            </div>
+          </label>
+
+          <label className="mt-4 block">
+            <span className="text-[10px] font-medium text-black/55">
+              Motivo / nota interna
+            </span>
+            <textarea
+              value={note}
+              onChange={(event) => onNoteChange(event.target.value)}
+              rows={3}
+              className="mt-2 w-full resize-none rounded-2xl border border-black/[0.08] bg-white px-4 py-3 text-[12px] leading-5 outline-none transition placeholder:text-black/30 focus:border-amber-500 focus:ring-4 focus:ring-amber-500/10"
+              placeholder="Ej: Campaña especial"
+            />
+            <p className="mt-1.5 text-[9px] leading-4 text-black/40">
+              La nota queda guardada únicamente para control interno. No se mostrará en el catálogo ni se enviará por WhatsApp.
+            </p>
+          </label>
+
+          <div className="mt-5 rounded-[20px] border border-amber-100 bg-amber-50/65 p-4">
+            <p className="text-[9px] font-semibold uppercase tracking-[0.1em] text-amber-700">
+              Resultado
+            </p>
+            <p className="mt-1 text-[12px] leading-5 text-black/55">
+              {cleanPercentage > 0
+                ? `Los ${count} producto(s) quedarán con ${cleanPercentage}% de descuento. Ventas y catálogo tomarán ese precio automáticamente.`
+                : "Escribe un porcentaje para continuar."}
+            </p>
+          </div>
+
+          <div className="mt-5 grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={saving}
+              className="h-12 rounded-2xl border border-black/[0.08] bg-white text-[11px] font-medium text-black/60 transition hover:bg-black/[0.025] disabled:opacity-40"
+            >
+              Cancelar
+            </button>
+
+            <button
+              type="button"
+              onClick={onApply}
+              disabled={saving || cleanPercentage <= 0 || cleanPercentage >= 100}
+              className="inline-flex h-12 items-center justify-center gap-2 rounded-2xl bg-black px-4 text-[11px] font-medium text-white transition hover:bg-red-600 disabled:cursor-not-allowed disabled:bg-black/15"
+            >
+              <BadgePercent size={15} />
+              {saving ? "Aplicando..." : "Aplicar promoción"}
+            </button>
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function ProductCard({
   product,
+  promotionSettings,
+  isAdmin,
   categoriesById,
   mainCategoriesById,
   batchSelected,
@@ -2297,12 +2692,11 @@ function ProductCard({
   const labelPrintSummary =
     getProductLabelPrintSummary(product);
   const newProduct = isProductNew(product);
-  const promotionStock =
-    getProductPromotionStock(product);
-  const promotionActive =
-    Boolean(product.isPromotion) &&
-    Number(product.promotionPrice || 0) > 0 &&
-    promotionStock > 0;
+  const promotion = getEffectiveProductPromotion(
+    product,
+    promotionSettings
+  );
+  const promotionActive = promotion.active;
   const currentCategory = categoriesById.get(
     product.categoryId
   );
@@ -2357,12 +2751,11 @@ function ProductCard({
         <button
           type="button"
           onClick={onToggleBatch}
-          disabled={stock <= 0}
           className={`inline-flex h-8 items-center gap-2 rounded-xl border px-3 text-[10px] font-medium transition ${
             batchSelected
               ? "border-red-600 bg-red-600 text-white"
               : "border-black/[0.08] bg-white text-black/55 hover:border-red-200 hover:bg-red-50 hover:text-red-600"
-          } disabled:cursor-not-allowed disabled:opacity-35`}
+          }`}
         >
           <span
             className={`flex h-4 w-4 items-center justify-center rounded border ${
@@ -2373,7 +2766,7 @@ function ProductCard({
           >
             <Check size={11} />
           </span>
-          Lote
+          Seleccionar
         </button>
 
         <div className="flex flex-wrap items-center justify-end gap-1">
@@ -2403,7 +2796,7 @@ function ProductCard({
         <div className="relative flex h-[86px] w-[86px] shrink-0 items-center justify-center overflow-hidden rounded-[20px] bg-black/[0.025]">
           {coverImage.url ? (
             <img
-              src={coverImage.url}
+              src={coverImage.thumbnailUrl || coverImage.url}
               alt={product.name}
               className="h-full w-full bg-white object-contain p-2"
             />
@@ -2474,7 +2867,7 @@ function ProductCard({
               <div>
                 <div className="flex flex-wrap items-baseline gap-2">
                   <p className="text-[16px] font-medium tracking-[-0.03em] text-red-600">
-                    {formatCurrency(product.promotionPrice)}
+                    {formatCurrency(promotion.price)}
                   </p>
 
                   <p className="text-[10px] text-black/35 line-through">
@@ -2483,15 +2876,15 @@ function ProductCard({
                 </div>
 
                 <p className="mt-1 text-[8px] font-medium text-amber-700">
-                  {promotionStock} unidad(es) seleccionada(s)
+                  -{promotion.percentage}% de descuento
                 </p>
 
-                {product.promotionNote && (
+                {promotion.note && (
                   <p
                     className="mt-1 max-w-[240px] truncate text-[9px] text-amber-700"
-                    title={product.promotionNote}
+                    title={promotion.note}
                   >
-                    {product.promotionNote}
+                    {promotion.note}
                   </p>
                 )}
               </div>
@@ -2501,16 +2894,20 @@ function ProductCard({
               </p>
             )}
 
-            <p className="mt-1 text-[12px] text-black/45">
-              Costo: {formatCurrency(product.costPrice)}
-            </p>
+            {isAdmin && (
+              <>
+                <p className="mt-1 text-[12px] text-black/45">
+                  Costo: {formatCurrency(product.costPrice)}
+                </p>
 
-            <p className="mt-1 text-[12px] text-black/45">
-              Ganancia:{" "}
-              <span className="text-emerald-600">
-                {formatCurrency(product.profitMargin)}
-              </span>
-            </p>
+                <p className="mt-1 text-[12px] text-black/45">
+                  Ganancia:{" "}
+                  <span className="text-emerald-600">
+                    {formatCurrency(product.profitMargin)}
+                  </span>
+                </p>
+              </>
+            )}
           </div>
 
           <span
@@ -2573,6 +2970,8 @@ function ProductCard({
 
 function ProductDetailModal({
   product,
+  promotionSettings,
+  isAdmin,
   categoriesById,
   mainCategoriesById,
   onClose,
@@ -2588,12 +2987,11 @@ function ProductDetailModal({
   const totalStock = getTotalStock(product);
   const stockStatus = getStockStatus(totalStock);
   const newProduct = isProductNew(product);
-  const promotionStock =
-    getProductPromotionStock(product);
-  const promotionActive =
-    Boolean(product.isPromotion) &&
-    Number(product.promotionPrice || 0) > 0 &&
-    promotionStock > 0;
+  const promotion = getEffectiveProductPromotion(
+    product,
+    promotionSettings
+  );
+  const promotionActive = promotion.active;
 
   const currentCategory = categoriesById.get(
     product.categoryId
@@ -2755,10 +3153,12 @@ function ProductDetailModal({
                 label="Stock total"
                 value={`${totalStock} unidad(es)`}
               />
-              <DetailItem
-                label="Precio llegada"
-                value={formatCurrency(product.costPrice)}
-              />
+              {isAdmin && (
+                <DetailItem
+                  label="Precio llegada"
+                  value={formatCurrency(product.costPrice)}
+                />
+              )}
               <DetailItem
                 label="Precio venta"
                 value={formatCurrency(product.salePrice)}
@@ -2767,22 +3167,24 @@ function ProductDetailModal({
                 <>
                   <DetailItem
                     label="Precio promoción"
-                    value={formatCurrency(product.promotionPrice)}
+                    value={formatCurrency(promotion.price)}
                     highlight
                   />
                   <DetailItem
-                    label="Stock en promoción"
-                    value={`${promotionStock} unidad(es)`}
+                    label="Descuento"
+                    value={`${promotion.percentage}%`}
                   />
                 </>
               )}
-              <DetailItem
-                label="Ganancia"
-                value={`${formatCurrency(product.profitMargin)} · ${Number(
-                  product.profitPercent || 0
-                ).toFixed(1)}%`}
-                highlight
-              />
+              {isAdmin && (
+                <DetailItem
+                  label="Ganancia"
+                  value={`${formatCurrency(product.profitMargin)} · ${Number(
+                    product.profitPercent || 0
+                  ).toFixed(1)}%`}
+                  highlight
+                />
+              )}
               <DetailItem
                 label="Imágenes"
                 value={`${images.length} archivo(s)`}
@@ -2800,7 +3202,7 @@ function ProductDetailModal({
 
                 <div className="mt-2 flex flex-wrap items-baseline gap-2">
                   <span className="text-[18px] font-medium text-red-600">
-                    {formatCurrency(product.promotionPrice)}
+                    {formatCurrency(promotion.price)}
                   </span>
 
                   <span className="text-[11px] text-black/35 line-through">
@@ -2808,23 +3210,13 @@ function ProductDetailModal({
                   </span>
                 </div>
 
-                {Array.isArray(product.promotionVariants) &&
-                  product.promotionVariants.length > 0 && (
-                    <div className="mt-3 flex flex-wrap gap-1.5">
-                      {product.promotionVariants.map((item) => (
-                        <span
-                          key={`${item.variantId}-${item.size}`}
-                          className="rounded-full bg-white px-2.5 py-1 text-[8.5px] font-medium text-amber-800 ring-1 ring-amber-100"
-                        >
-                          {item.size}: {item.quantity} u.
-                        </span>
-                      ))}
-                    </div>
-                  )}
+                <p className="mt-2 text-[9px] font-medium uppercase tracking-[0.08em] text-amber-800">
+                  {promotion.percentage}% de descuento · {promotion.source === "product" ? "PROMOCIÓN ESPECIAL" : "PROMOCIÓN GLOBAL"}
+                </p>
 
-                {product.promotionNote && (
+                {promotion.note && (
                   <p className="mt-2 text-[10px] leading-5 text-black/60">
-                    {product.promotionNote}
+                    {promotion.note}
                   </p>
                 )}
               </div>
@@ -2927,6 +3319,8 @@ function DetailItem({ label, value, highlight = false }) {
 
 function ProductFormModal({
   editingProduct,
+  isAdmin,
+  promotionSettings,
   closeForm,
   handleSubmit,
   handleCoverChange,
@@ -3136,7 +3530,7 @@ function ProductFormModal({
     }
 
     if (step === 4) {
-      if (parseMoneyInput(form.costPrice) <= 0) {
+      if (isAdmin && parseMoneyInput(form.costPrice) <= 0) {
         notify("El precio de llegada debe ser mayor a cero.", "warning");
         return false;
       }
@@ -3148,57 +3542,9 @@ function ProductFormModal({
 
       if (
         form.isPromotion &&
-        parseMoneyInput(form.promotionPrice) <= 0
+        parsePercentInput(form.promotionPercentage) <= 0
       ) {
-        notify("Escribe el precio de promoción.", "warning");
-        return false;
-      }
-
-      if (
-        form.isPromotion &&
-        parseMoneyInput(form.promotionPrice) >=
-          parseMoneyInput(form.salePrice)
-      ) {
-        notify(
-          "El precio de promoción debe ser menor al precio normal.",
-          "warning"
-        );
-        return false;
-      }
-
-      if (
-        form.isPromotion &&
-        formPromotionStock <= 0
-      ) {
-        notify(
-          "Selecciona al menos una unidad de una talla para la promoción.",
-          "warning"
-        );
-        return false;
-      }
-
-      const invalidPromotionStock =
-        form.variants.some((variant) => {
-          const promotionStock = Number(
-            variant.promotionStock || 0
-          );
-          const stock = Number(variant.stock || 0);
-
-          return (
-            promotionStock < 0 ||
-            !Number.isInteger(promotionStock) ||
-            promotionStock > stock
-          );
-        });
-
-      if (
-        form.isPromotion &&
-        invalidPromotionStock
-      ) {
-        notify(
-          "El stock promocional no puede superar el stock de cada talla.",
-          "warning"
-        );
+        notify("Escribe un porcentaje de promoción mayor a 0%.", "warning");
         return false;
       }
     }
@@ -3878,32 +4224,58 @@ function ProductFormModal({
                   description="Completa los valores y revisa el producto antes de guardarlo."
                 />
 
-                {!editingProduct && (
-                  <div className="mt-3 flex items-start gap-2.5 rounded-[18px] border border-red-100 bg-red-50/55 px-3.5 py-3">
-                    <Sparkles
-                      size={14}
-                      className="mt-0.5 shrink-0 text-red-600"
-                    />
+                <div className="mt-4 overflow-hidden rounded-[22px] border border-black/[0.06] bg-white">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      updateForm("isNew", !form.isNew)
+                    }
+                    className="flex w-full items-center justify-between gap-4 px-4 py-3.5 text-left transition hover:bg-black/[0.015]"
+                  >
+                    <div className="flex min-w-0 items-center gap-3">
+                      <div
+                        className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${
+                          form.isNew
+                            ? "bg-red-50 text-red-600"
+                            : "bg-black/[0.035] text-black/40"
+                        }`}
+                      >
+                        <Sparkles size={16} />
+                      </div>
 
-                    <div>
-                      <p className="text-[10px] font-medium text-red-700">
-                        Se mostrará como NUEVO durante 7 días
-                      </p>
-
-                      <p className="mt-0.5 text-[8.5px] leading-4 text-black/45">
-                        La etiqueta desaparecerá sola al cumplir una semana. El producto seguirá normal en su categoría.
-                      </p>
+                      <div className="min-w-0">
+                        <p className="text-[12px] font-medium text-black">
+                          Mostrar como nuevo
+                        </p>
+                        <p className="mt-0.5 text-[9px] text-black/40">
+                          Tú decides si esta referencia aparece con la etiqueta NUEVO en el catálogo.
+                        </p>
+                      </div>
                     </div>
-                  </div>
-                )}
 
-                <div className="mt-5 grid gap-4 sm:grid-cols-2">
-                  <MoneyInputField
-                    label="Precio llegada"
-                    value={form.costPrice}
-                    onChange={(value) => updateForm("costPrice", value)}
-                    placeholder="45.000"
-                  />
+                    <span
+                      className={`relative h-6 w-11 shrink-0 rounded-full transition ${
+                        form.isNew ? "bg-red-600" : "bg-black/15"
+                      }`}
+                    >
+                      <span
+                        className={`absolute top-1 h-4 w-4 rounded-full bg-white shadow-sm transition ${
+                          form.isNew ? "left-6" : "left-1"
+                        }`}
+                      />
+                    </span>
+                  </button>
+                </div>
+
+                <div className={`mt-5 grid gap-4 ${isAdmin ? "sm:grid-cols-2" : "grid-cols-1"}`}>
+                  {isAdmin && (
+                    <MoneyInputField
+                      label="Precio llegada"
+                      value={form.costPrice}
+                      onChange={(value) => updateForm("costPrice", value)}
+                      placeholder="45.000"
+                    />
+                  )}
 
                   <MoneyInputField
                     label="Precio venta"
@@ -3913,25 +4285,27 @@ function ProductFormModal({
                   />
                 </div>
 
-                <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                  <div className="rounded-[22px] bg-black/[0.025] p-4">
-                    <p className="text-[11px] text-black/45">
-                      Ganancia por unidad
-                    </p>
-                    <p className="mt-1 text-[20px] font-medium text-black">
-                      {formatCurrency(profit.profitMargin)}
-                    </p>
-                  </div>
+                {isAdmin && (
+                  <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                    <div className="rounded-[22px] bg-black/[0.025] p-4">
+                      <p className="text-[11px] text-black/45">
+                        Ganancia por unidad
+                      </p>
+                      <p className="mt-1 text-[20px] font-medium text-black">
+                        {formatCurrency(profit.profitMargin)}
+                      </p>
+                    </div>
 
-                  <div className="rounded-[22px] bg-red-600 p-4 text-white">
-                    <p className="text-[11px] text-white/65">
-                      Porcentaje de ganancia
-                    </p>
-                    <p className="mt-1 text-[20px] font-medium">
-                      {profit.profitPercent.toFixed(1)}%
-                    </p>
+                    <div className="rounded-[22px] bg-red-600 p-4 text-white">
+                      <p className="text-[11px] text-white/65">
+                        Porcentaje de ganancia
+                      </p>
+                      <p className="mt-1 text-[20px] font-medium">
+                        {profit.profitPercent.toFixed(1)}%
+                      </p>
+                    </div>
                   </div>
-                </div>
+                )}
 
                 <div className="mt-4 overflow-hidden rounded-[22px] border border-black/[0.06] bg-white">
                   <button
@@ -3941,16 +4315,9 @@ function ProductFormModal({
                       updateForm("isPromotion", nextValue);
 
                       if (!nextValue) {
+                        updateForm("promotionPercentage", "");
                         updateForm("promotionPrice", "");
                         updateForm("promotionNote", "");
-
-                        form.variants.forEach((variant) => {
-                          updateVariant(
-                            variant.id,
-                            "promotionStock",
-                            "0"
-                          );
-                        });
                       }
                     }}
                     className="flex w-full items-center justify-between gap-4 px-4 py-3.5 text-left transition hover:bg-black/[0.015]"
@@ -3959,7 +4326,7 @@ function ProductFormModal({
                       <div
                         className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${
                           form.isPromotion
-                            ? "bg-red-50 text-red-600"
+                            ? "bg-amber-50 text-amber-700"
                             : "bg-black/[0.035] text-black/40"
                         }`}
                       >
@@ -3971,7 +4338,7 @@ function ProductFormModal({
                           Producto en promoción
                         </p>
                         <p className="mt-0.5 text-[9px] text-black/40">
-                          Aparecerá directamente en Promociones, sin subcategorías.
+                          Define el porcentaje y el sistema calculará automáticamente el nuevo precio.
                         </p>
                       </div>
                     </div>
@@ -3979,7 +4346,7 @@ function ProductFormModal({
                     <span
                       className={`relative h-6 w-11 shrink-0 rounded-full transition ${
                         form.isPromotion
-                          ? "bg-red-600"
+                          ? "bg-amber-400"
                           : "bg-black/15"
                       }`}
                     >
@@ -3993,18 +4360,35 @@ function ProductFormModal({
 
                   {form.isPromotion && (
                     <div className="grid gap-3 border-t border-black/[0.06] bg-amber-50/35 p-4 sm:grid-cols-2">
-                      <MoneyInputField
-                        label="Precio promoción"
-                        value={form.promotionPrice}
-                        onChange={(value) =>
-                          updateForm("promotionPrice", value)
-                        }
-                        placeholder="59.900"
-                      />
+                      <label>
+                        <span className="text-[13px] font-normal text-black/65">
+                          Porcentaje de descuento
+                        </span>
+
+                        <div className="relative mt-2">
+                          <input
+                            type="text"
+                            inputMode="decimal"
+                            value={form.promotionPercentage}
+                            onChange={(event) =>
+                              updateForm(
+                                "promotionPercentage",
+                                event.target.value
+                                  .replace(",", ".")
+                                  .replace(/[^0-9.]/g, "")
+                                  .slice(0, 5)
+                              )
+                            }
+                            placeholder="20"
+                            className="h-11 w-full rounded-2xl border border-amber-200 bg-white px-4 pr-10 text-[12px] outline-none transition focus:border-red-600 focus:ring-4 focus:ring-red-600/10"
+                          />
+                          <span className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-[12px] text-black/45">%</span>
+                        </div>
+                      </label>
 
                       <label>
                         <span className="text-[13px] font-normal text-black/65">
-                          Observación
+                          Motivo / observación
                         </span>
 
                         <textarea
@@ -4016,122 +4400,25 @@ function ProductFormModal({
                             )
                           }
                           rows={2}
-                          placeholder="Ej: Tiene una pequeña mancha en la manga"
-                          className="mt-2 min-h-11 w-full resize-none rounded-2xl border border-black/[0.08] bg-white px-4 py-3 text-[12px] leading-5 text-black outline-none transition placeholder:text-black/30 focus:border-red-600 focus:ring-4 focus:ring-red-600/10"
+                          placeholder="Ej: Descuento temporal"
+                          className="mt-2 min-h-11 w-full resize-none rounded-2xl border border-amber-200 bg-white px-4 py-3 text-[12px] leading-5 text-black outline-none transition placeholder:text-black/30 focus:border-red-600 focus:ring-4 focus:ring-red-600/10"
                         />
                       </label>
 
-                      <div className="sm:col-span-2 rounded-[18px] border border-amber-100 bg-white p-3.5">
-                        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                          <div>
-                            <p className="text-[11px] font-medium text-black">
-                              Tallas y cantidades en promoción
-                            </p>
-                            <p className="mt-0.5 text-[8.5px] text-black/42">
-                              Elige exactamente cuántas unidades de cada talla entran a promoción.
-                            </p>
-                          </div>
-
-                          <span className="inline-flex self-start rounded-full bg-amber-50 px-2.5 py-1 text-[8px] font-medium text-amber-700 ring-1 ring-amber-100 sm:self-auto">
-                            {formPromotionStock} unidad(es) promo
-                          </span>
-                        </div>
-
-                        <div className="mt-3 space-y-2">
-                          {form.variants.map((variant) => {
-                            const stock = Number(variant.stock || 0);
-                            const promoStock = Number(
-                              variant.promotionStock || 0
-                            );
-                            const normalStock = Math.max(
-                              stock - promoStock,
-                              0
-                            );
-
-                            return (
-                              <div
-                                key={variant.id}
-                                className={`grid items-center gap-2 rounded-2xl border p-2.5 sm:grid-cols-[1fr_110px_130px] ${
-                                  promoStock > 0
-                                    ? "border-amber-200 bg-amber-50/55"
-                                    : "border-black/[0.06] bg-black/[0.015]"
-                                }`}
-                              >
-                                <div className="min-w-0">
-                                  <p className="truncate text-[11px] font-medium text-black">
-                                    Talla {normalizeSize(variant.size)}
-                                  </p>
-                                  <p className="mt-0.5 text-[8px] text-black/40">
-                                    Stock físico: {stock} · Normal: {normalStock}
-                                  </p>
-                                </div>
-
-                                <div className="rounded-xl bg-white px-2.5 py-2 text-center ring-1 ring-black/[0.06]">
-                                  <p className="text-[7px] uppercase tracking-[0.08em] text-black/35">
-                                    Disponible
-                                  </p>
-                                  <p className="mt-0.5 text-[10px] font-medium">
-                                    {stock} u.
-                                  </p>
-                                </div>
-
-                                <label>
-                                  <span className="text-[8px] font-medium text-amber-700">
-                                    En promoción
-                                  </span>
-                                  <input
-                                    type="text"
-                                    inputMode="numeric"
-                                    value={variant.promotionStock ?? "0"}
-                                    onChange={(event) =>
-                                      updateVariant(
-                                        variant.id,
-                                        "promotionStock",
-                                        event.target.value
-                                      )
-                                    }
-                                    disabled={stock <= 0}
-                                    placeholder="0"
-                                    className="mt-1 h-9 w-full rounded-xl border border-amber-200 bg-white px-3 text-[11px] font-medium outline-none transition focus:border-red-600 focus:ring-4 focus:ring-red-600/10 disabled:bg-black/[0.03] disabled:text-black/30"
-                                  />
-                                </label>
-                              </div>
-                            );
-                          })}
-                        </div>
-
-                        <div className="mt-3 grid grid-cols-2 gap-2">
-                          <div className="rounded-xl bg-black/[0.025] px-3 py-2.5">
-                            <p className="text-[7.5px] text-black/35">
-                              Stock total
-                            </p>
-                            <p className="mt-0.5 text-[12px] font-medium">
-                              {formTotalStock} u.
-                            </p>
-                          </div>
-
-                          <div className="rounded-xl bg-amber-50 px-3 py-2.5">
-                            <p className="text-[7.5px] text-amber-700/70">
-                              Stock promoción
-                            </p>
-                            <p className="mt-0.5 text-[12px] font-medium text-amber-700">
-                              {formPromotionStock} u.
-                            </p>
-                          </div>
-                        </div>
-                      </div>
-
                       <div className="sm:col-span-2 rounded-2xl bg-white px-3.5 py-3 ring-1 ring-amber-100">
-                        <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex flex-wrap items-center justify-between gap-3">
                           <div>
                             <p className="text-[8px] uppercase tracking-[0.1em] text-black/35">
-                              Vista de precio
+                              Cálculo automático
                             </p>
 
                             <div className="mt-1 flex items-baseline gap-2">
-                              <span className="text-[17px] font-medium text-red-600">
+                              <span className="text-[20px] font-medium text-red-600">
                                 {formatCurrency(
-                                  parseMoneyInput(form.promotionPrice)
+                                  calculatePromotionPrice(
+                                    parseMoneyInput(form.salePrice),
+                                    parsePercentInput(form.promotionPercentage)
+                                  )
                                 )}
                               </span>
 
@@ -4143,9 +4430,9 @@ function ProductFormModal({
                             </div>
                           </div>
 
-                          <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2.5 py-1 text-[8px] font-medium text-amber-700 ring-1 ring-amber-100">
-                            <BadgePercent size={9} />
-                            PROMO
+                          <span className="inline-flex items-center gap-1 rounded-full bg-amber-400 px-3 py-1.5 text-[9px] font-semibold text-black">
+                            <BadgePercent size={10} />
+                            -{parsePercentInput(form.promotionPercentage) || 0}%
                           </span>
                         </div>
                       </div>
@@ -4184,12 +4471,19 @@ function ProductFormModal({
                       value={`${formTotalStock} unidad(es)`}
                     />
                     <SummaryBox
-                      label="Promoción"
+                      label="Mostrar como nuevo"
+                      value={form.isNew ? "Sí" : "No"}
+                    />
+                    <SummaryBox
+                      label="Promoción individual"
                       value={
                         form.isPromotion
-                          ? `${formatCurrency(
-                              parseMoneyInput(form.promotionPrice)
-                            )} · ${formPromotionStock} u.`
+                          ? `-${parsePercentInput(form.promotionPercentage)}% · ${formatCurrency(
+                              calculatePromotionPrice(
+                                parseMoneyInput(form.salePrice),
+                                parsePercentInput(form.promotionPercentage)
+                              )
+                            )}`
                           : "No"
                       }
                     />

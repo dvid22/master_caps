@@ -1,3 +1,4 @@
+import { showPremiumAlert, showPremiumConfirm } from "../../utils/premiumDialog";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Barcode,
@@ -35,8 +36,8 @@ import {
 } from "../../services/reservations.service";
 
 import {
+  getEffectiveProductPromotion,
   getProductCoverImage,
-  getPromotionStockForVariant,
   normalizeProductVariants,
   subscribeProducts,
 } from "../../services/products.service";
@@ -342,6 +343,7 @@ export default function ReservationsPage() {
   const [reservations, setReservations] = useState([]);
   const [reservationGroups, setReservationGroups] = useState([]);
   const [products, setProducts] = useState([]);
+  const promotionSettings = null;
   const [categories, setCategories] = useState([]);
   const [settings, setSettings] = useState({
     defaultReservationDays: 7,
@@ -375,7 +377,7 @@ export default function ReservationsPage() {
       setReservations,
       () => {
         setLoading(false);
-        alert("No se pudieron escuchar los apartados.");
+        showPremiumAlert("No se pudieron escuchar los apartados.");
       },
       STORE_ID
     );
@@ -391,13 +393,13 @@ export default function ReservationsPage() {
 
     const unsubscribeProducts = subscribeProducts(
       setProducts,
-      () => alert("No se pudieron cargar los productos."),
+      () => showPremiumAlert("No se pudieron cargar los productos."),
       STORE_ID
     );
 
     const unsubscribeCategories = subscribeCategories(
       setCategories,
-      () => alert("No se pudieron cargar las categorías."),
+      () => showPremiumAlert("No se pudieron cargar las categorías."),
       STORE_ID
     );
 
@@ -542,7 +544,7 @@ export default function ReservationsPage() {
         actor: getCurrentUserActor(),
       });
     } catch (error) {
-      alert(error.message || "No se pudieron marcar como leídos.");
+      showPremiumAlert(error.message || "No se pudieron marcar como leídos.");
     } finally {
       setProcessing(false);
     }
@@ -553,13 +555,13 @@ export default function ReservationsPage() {
       setProcessing(true);
       const count = await expireOverdueReservations(STORE_ID);
 
-      alert(
+      showPremiumAlert(
         count === 0
           ? "No hay apartados vencidos."
           : `${count} apartado(s) vencido(s) fueron liberados.`
       );
     } catch {
-      alert("No se pudieron revisar los apartados vencidos.");
+      showPremiumAlert("No se pudieron revisar los apartados vencidos.");
     } finally {
       setProcessing(false);
     }
@@ -567,22 +569,26 @@ export default function ReservationsPage() {
 
   async function handleCancel(group) {
     if (group.legacy) {
-      alert("Este apartado antiguo debe migrarse antes de liberarlo.");
+      showPremiumAlert("Este apartado antiguo debe migrarse antes de liberarlo.");
       return;
     }
 
-    const confirmed = window.confirm(
-      `¿Deseas liberar y eliminar ${group.groupNumber}? Los productos volverán al inventario y el apartado dejará de aparecer en el historial.`
-    );
+    const confirmed = await showPremiumConfirm({
+      title: "Liberar apartado",
+      message: `Se liberará ${group.groupNumber}. Los productos volverán al inventario y el apartado dejará de aparecer en el historial.`,
+      confirmText: "Liberar apartado",
+      cancelText: "Conservar apartado",
+      tone: "warning",
+    });
 
     if (!confirmed) return;
 
     try {
       setProcessing(true);
       await cancelReservationGroup(group.id, getCurrentUserActor());
-      alert("Apartado liberado y eliminado correctamente.");
+      showPremiumAlert("Apartado liberado y eliminado correctamente.");
     } catch (error) {
-      alert(error.message || "No se pudo liberar el apartado.");
+      showPremiumAlert(error.message || "No se pudo liberar el apartado.");
     } finally {
       setProcessing(false);
     }
@@ -708,7 +714,7 @@ export default function ReservationsPage() {
                       processing={processing}
                       onSell={() => {
                         if (group.legacy) {
-                          alert(
+                          showPremiumAlert(
                             "Este apartado antiguo debe migrarse antes de finalizarlo."
                           );
                           return;
@@ -720,7 +726,7 @@ export default function ReservationsPage() {
                       }}
                       onPayment={() => {
                         if (group.legacy) {
-                          alert(
+                          showPremiumAlert(
                             "Este apartado antiguo debe migrarse antes de registrar abonos."
                           );
                           return;
@@ -734,14 +740,14 @@ export default function ReservationsPage() {
                       onView={() => setDetailGroup(group)}
                       onEdit={() => {
                         if (group.legacy) {
-                          alert(
+                          showPremiumAlert(
                             "Este apartado antiguo debe migrarse antes de editarlo."
                           );
                           return;
                         }
 
                         if (group.status !== "active") {
-                          alert(
+                          showPremiumAlert(
                             "Solo puedes editar apartados activos."
                           );
                           return;
@@ -793,6 +799,7 @@ export default function ReservationsPage() {
         <ManualReservationModal
           products={products}
           categories={categories}
+          promotionSettings={promotionSettings}
           defaultDays={settings.defaultReservationDays}
           initialGroup={editingGroup}
           processing={processing}
@@ -811,7 +818,7 @@ export default function ReservationsPage() {
                   actor: getCurrentUserActor(),
                 });
 
-                alert(
+                showPremiumAlert(
                   "Apartado actualizado correctamente."
                 );
               } else {
@@ -821,7 +828,7 @@ export default function ReservationsPage() {
                   actor: getCurrentUserActor(),
                 });
 
-                alert(
+                showPremiumAlert(
                   "Apartado manual creado correctamente."
                 );
               }
@@ -829,7 +836,7 @@ export default function ReservationsPage() {
               setManualOpen(false);
               setEditingGroup(null);
             } catch (error) {
-              alert(
+              showPremiumAlert(
                 error.message ||
                   (editingGroup?.id
                     ? "No se pudo actualizar el apartado."
@@ -859,7 +866,7 @@ export default function ReservationsPage() {
 
               setSettingsOpen(false);
             } catch (error) {
-              alert(error.message || "No se pudo guardar la configuración.");
+              showPremiumAlert(error.message || "No se pudo guardar la configuración.");
             } finally {
               setProcessing(false);
             }
@@ -894,9 +901,9 @@ export default function ReservationsPage() {
               });
 
               closeActionModals();
-              alert("Abono registrado correctamente.");
+              showPremiumAlert("Abono registrado correctamente.");
             } catch (error) {
-              alert(error.message || "No se pudo registrar el abono.");
+              showPremiumAlert(error.message || "No se pudo registrar el abono.");
             } finally {
               setProcessing(false);
             }
@@ -943,11 +950,16 @@ export default function ReservationsPage() {
               0
             );
 
-            const confirmed = window.confirm(
-              `¿Confirmas la venta de ${selectedGroup.groupNumber}? Se cobrarán ${formatCurrency(
+            const confirmed = await showPremiumConfirm({
+              title: "Confirmar venta",
+              message: `Se finalizará ${selectedGroup.groupNumber} y se cobrarán ${formatCurrency(
                 balance
-              )} restantes.`
-            );
+              )} restantes.`,
+              confirmText: "Confirmar venta",
+              cancelText: "Volver",
+              tone: "info",
+              primaryStyle: "dark",
+            });
 
             if (!confirmed) return;
 
@@ -962,9 +974,9 @@ export default function ReservationsPage() {
               });
 
               closeActionModals();
-              alert("Venta finalizada correctamente.");
+              showPremiumAlert("Venta finalizada correctamente.");
             } catch (error) {
-              alert(error.message || "No se pudo finalizar la venta.");
+              showPremiumAlert(error.message || "No se pudo finalizar la venta.");
             } finally {
               setProcessing(false);
             }
@@ -1186,6 +1198,7 @@ function getManualStockStatus(stock) {
 function ManualReservationModal({
   products,
   categories,
+  promotionSettings,
   defaultDays,
   initialGroup = null,
   processing,
@@ -1193,6 +1206,17 @@ function ManualReservationModal({
   onSubmit,
 }) {
   const isEditing = Boolean(initialGroup?.id);
+
+  function getCurrentPromotion(product) {
+    return getEffectiveProductPromotion(
+      product,
+      promotionSettings
+    );
+  }
+
+  function isCurrentPromotion(product) {
+    return getCurrentPromotion(product).active;
+  }
 
   const [form, setForm] = useState(() => ({
     customerId: initialGroup?.customerId || "",
@@ -1262,29 +1286,28 @@ function ManualReservationModal({
     variant,
     promotionMode = false
   ) {
-    const reserved = getReservedByVariant(
+    const reservedNormal = getReservedByVariant(
       product.id,
       variant.id,
-      promotionMode
+      false
     );
+    const reservedPromotion = getReservedByVariant(
+      product.id,
+      variant.id,
+      true
+    );
+    const reservedTotal = reservedNormal + reservedPromotion;
 
-    const currentPromotionStock =
-      getPromotionStockForVariant(
-        product,
-        variant
-      );
-
-    if (promotionMode) {
-      return currentPromotionStock + reserved;
+    if (isCurrentPromotion(product)) {
+      // Una promoción actual no puede recibir nuevas unidades en apartado.
+      // Si estamos editando un apartado histórico, solo dejamos conservar
+      // como máximo lo que ya estaba separado.
+      return promotionMode
+        ? reservedPromotion
+        : reservedNormal;
     }
 
-    return (
-      Math.max(
-        Number(variant.stock || 0) -
-          currentPromotionStock,
-        0
-      ) + reserved
-    );
+    return Math.max(Number(variant.stock || 0), 0) + reservedTotal;
   }
 
   const [items, setItems] = useState(() =>
@@ -1633,6 +1656,15 @@ function ManualReservationModal({
   }
 
   function addScannedVariant(product, variant) {
+    if (isCurrentPromotion(product)) {
+      const promo = getCurrentPromotion(product);
+      setScannerStatus({
+        type: "error",
+        message: `${product.name} está en promoción (-${promo.percentage}%) y no puede apartarse.`,
+      });
+      return;
+    }
+
     const stock = getEditAvailableStock(
       product,
       variant,
@@ -1766,6 +1798,14 @@ function ManualReservationModal({
   }
 
   function openProduct(product) {
+    if (isCurrentPromotion(product)) {
+      const promo = getCurrentPromotion(product);
+      showPremiumAlert(
+        `${product.name} está en promoción (-${promo.percentage}%). Las promociones son de venta directa y no pueden apartarse.`
+      );
+      return;
+    }
+
     const variants = normalizeManualVariants(
       product
     ).filter(
@@ -1778,7 +1818,7 @@ function ManualReservationModal({
     );
 
     if (variants.length === 0) {
-      alert("Este producto no tiene stock disponible.");
+      showPremiumAlert("Este producto no tiene stock disponible.");
       return;
     }
 
@@ -1795,6 +1835,13 @@ function ManualReservationModal({
     variant,
     isPromotion = false
   ) {
+    if (isCurrentPromotion(product)) {
+      showPremiumAlert(
+        `${product.name} está en promoción y no puede agregarse a un apartado.`
+      );
+      return;
+    }
+
     const stock = getEditAvailableStock(
       product,
       variant,
@@ -1802,7 +1849,7 @@ function ManualReservationModal({
     );
 
     if (stock <= 0) {
-      alert(`La talla ${variant.size} está agotada.`);
+      showPremiumAlert(`La talla ${variant.size} está agotada.`);
       return;
     }
 
@@ -1815,7 +1862,7 @@ function ManualReservationModal({
 
       if (existing) {
         if (existing.quantity >= stock) {
-          alert(
+          showPremiumAlert(
             `Solo hay ${stock} unidad(es) disponibles de ${product.name} talla ${variant.size}.`
           );
           return current;
@@ -1881,39 +1928,39 @@ function ManualReservationModal({
     event.preventDefault();
 
     if (!form.customerDocument.trim()) {
-      alert("Escribe la cédula del cliente.");
+      showPremiumAlert("Escribe la cédula del cliente.");
       return;
     }
 
     if (customerLookup.status === "searching") {
-      alert("Espera un momento mientras verificamos la cédula.");
+      showPremiumAlert("Espera un momento mientras verificamos la cédula.");
       return;
     }
 
     if (customerLookup.status === "error") {
-      alert("No pudimos verificar el cliente. Intenta nuevamente.");
+      showPremiumAlert("No pudimos verificar el cliente. Intenta nuevamente.");
       return;
     }
 
     if (!form.customerName.trim()) {
-      alert("Escribe el nombre del cliente.");
+      showPremiumAlert("Escribe el nombre del cliente.");
       return;
     }
 
     if (items.length === 0) {
-      alert("Agrega al menos un producto.");
+      showPremiumAlert("Agrega al menos un producto.");
       return;
     }
 
     if (discount > subtotal) {
-      alert(
+      showPremiumAlert(
         "El descuento no puede superar el subtotal."
       );
       return;
     }
 
     if (initialPayment > total) {
-      alert(
+      showPremiumAlert(
         isEditing
           ? "El total del apartado no puede quedar por debajo de lo que el cliente ya ha pagado."
           : "El valor entregado no puede superar el total después del descuento."
@@ -2130,6 +2177,7 @@ function ManualReservationModal({
                     <ManualProductCard
                       key={product.id}
                       product={product}
+                      promotionSettings={promotionSettings}
                       onAdd={() => openProduct(product)}
                     />
                   ))}
@@ -2477,18 +2525,22 @@ function ManualReservationModal({
   );
 }
 
-function ManualProductCard({ product, onAdd }) {
+function ManualProductCard({ product, promotionSettings, onAdd }) {
   const stock = getManualTotalStock(product);
   const variants = getManualAvailableVariants(product);
   const coverImage = getProductCoverImage(product);
   const stockStatus = getManualStockStatus(stock);
+  const promotion = getEffectiveProductPromotion(
+    product,
+    promotionSettings
+  );
 
   return (
     <article className="group min-w-0 w-full overflow-hidden rounded-[clamp(13px,0.9vw,18px)] bg-white shadow-[0_8px_22px_rgba(0,0,0,0.028)] ring-1 ring-black/[0.06] transition hover:-translate-y-0.5 hover:shadow-[0_16px_38px_rgba(0,0,0,0.055)]">
       <button
         type="button"
         onClick={onAdd}
-        disabled={stock <= 0}
+        disabled={stock <= 0 || promotion.active}
         className="block w-full text-left disabled:cursor-not-allowed"
       >
         <div className="relative aspect-[1.12/1] overflow-hidden bg-black/[0.025]">
@@ -2504,11 +2556,18 @@ function ManualProductCard({ product, onAdd }) {
             </div>
           )}
 
-          <span
-            className={`absolute left-1.5 top-1.5 rounded-full px-1.5 py-0.5 text-[6.5px] font-medium sm:text-[7px] ${stockStatus.badgeClass}`}
-          >
-            {stockStatus.label}
-          </span>
+          <div className="absolute left-1.5 top-1.5 flex flex-wrap gap-1">
+            {promotion.active && (
+              <span className="rounded-full bg-amber-400 px-1.5 py-0.5 text-[6.5px] font-medium text-black sm:text-[7px]">
+                PROMO -{promotion.percentage}% · NO APARTABLE
+              </span>
+            )}
+            <span
+              className={`rounded-full px-1.5 py-0.5 text-[6.5px] font-medium sm:text-[7px] ${stockStatus.badgeClass}`}
+            >
+              {stockStatus.label}
+            </span>
+          </div>
 
           <span className="absolute bottom-1.5 right-1.5 rounded-full bg-black/75 px-1.5 py-0.5 text-[6.5px] text-white backdrop-blur sm:text-[7px]">
             {variants.length} talla(s)
@@ -2545,7 +2604,11 @@ function ManualProductCard({ product, onAdd }) {
           <div className="mt-2 flex items-end justify-between gap-1.5">
             <div>
               <p className="text-[clamp(11px,0.8vw,15px)] font-medium tracking-[-0.035em]">
-                {formatCurrency(product.salePrice)}
+                {formatCurrency(
+                  promotion.active
+                    ? promotion.price
+                    : product.salePrice
+                )}
               </p>
 
               <p className={`mt-0.5 text-[clamp(7.5px,0.52vw,10px)] ${stockStatus.stockClass}`}>

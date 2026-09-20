@@ -1,5 +1,6 @@
 import { Link } from "react-router-dom";
 import {
+  BadgePercent,
   Minus,
   Plus,
   ShoppingBag,
@@ -56,6 +57,15 @@ export default function ReservationCartDrawer({
           </button>
         </header>
 
+        <div className="border-b border-amber-100 bg-amber-50/70 px-5 py-3 sm:px-6">
+          <div className="flex items-start gap-2.5">
+            <BadgePercent size={15} className="mt-0.5 shrink-0 text-amber-700" />
+            <p className="text-[9px] leading-4 text-black/55">
+              Los productos en promoción son de venta directa y no se agregan a este carrito. Consúltalos por WhatsApp o en la tienda física.
+            </p>
+          </div>
+        </div>
+
         <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-5 [scrollbar-width:thin] [scrollbar-color:rgba(0,0,0,0.18)_transparent]">
           {cart.items.length === 0 ? (
             <div className="flex min-h-[420px] flex-col items-center justify-center border border-black/[0.08] bg-white px-6 text-center">
@@ -68,16 +78,13 @@ export default function ReservationCartDrawer({
               </p>
 
               <p className="mt-3 max-w-[280px] text-[11px] leading-5 text-black/45">
-                Selecciona una talla y agrega productos para apartarlos juntos.
+                Selecciona una talla y agrega productos sin promoción para apartarlos juntos.
               </p>
             </div>
           ) : (
             <div className="divide-y divide-black/[0.08]">
               {cart.items.map((item) => (
-                <article
-                  key={item.cartKey}
-                  className="py-4 first:pt-0 last:pb-0"
-                >
+                <article key={item.cartKey} className="py-4 first:pt-0 last:pb-0">
                   <div className="flex gap-4">
                     <div className="flex h-[116px] w-[92px] shrink-0 items-center justify-center overflow-hidden bg-white ring-1 ring-black/[0.08]">
                       {item.coverUrl ? (
@@ -121,10 +128,7 @@ export default function ReservationCartDrawer({
                             type="button"
                             disabled={item.quantity <= 1}
                             onClick={() =>
-                              cart.updateQuantity(
-                                item.cartKey,
-                                item.quantity - 1
-                              )
+                              cart.updateQuantity(item.cartKey, item.quantity - 1)
                             }
                             className="flex h-9 items-center justify-center border-r border-black/[0.12] transition hover:bg-black hover:text-white disabled:cursor-not-allowed disabled:opacity-30"
                             aria-label="Disminuir cantidad"
@@ -140,10 +144,7 @@ export default function ReservationCartDrawer({
                             type="button"
                             disabled={item.quantity >= item.stock}
                             onClick={() =>
-                              cart.updateQuantity(
-                                item.cartKey,
-                                item.quantity + 1
-                              )
+                              cart.updateQuantity(item.cartKey, item.quantity + 1)
                             }
                             className="flex h-9 items-center justify-center border-l border-black/[0.12] transition hover:bg-black hover:text-white disabled:cursor-not-allowed disabled:opacity-30"
                             aria-label="Aumentar cantidad"
@@ -156,7 +157,6 @@ export default function ReservationCartDrawer({
                           <p className="text-[9px] uppercase tracking-[0.08em] text-black/38">
                             Subtotal
                           </p>
-
                           <p className="mt-1 text-[14px] font-medium">
                             {formatCurrency(item.unitPrice * item.quantity)}
                           </p>
@@ -176,7 +176,6 @@ export default function ReservationCartDrawer({
               <p className="text-[9px] uppercase tracking-[0.14em] text-black/40">
                 Total · {cart.summary.totalItems} unidad(es)
               </p>
-
               <p className="mt-2 text-[30px] font-medium tracking-[-0.055em]">
                 {formatCurrency(cart.summary.total)}
               </p>

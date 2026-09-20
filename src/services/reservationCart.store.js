@@ -1,3 +1,4 @@
+import { showPremiumConfirm } from "../utils/premiumDialog";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 const LEGACY_STORAGE_KEY = "master-caps-reservation-cart-v1";
@@ -81,10 +82,7 @@ function normalizeItem(item, storeId) {
   const variantId = String(item?.variantId || "legacy");
 
   return {
-    cartKey:
-      `${cleanStoreId}__${productId}__${variantId}__${
-        isPromotion ? "promo" : "normal"
-      }`,
+    cartKey: `${cleanStoreId}__${productId}__${variantId}__normal`,
     storeId: cleanStoreId,
     productId,
     productName: String(item?.productName || "Producto"),
@@ -95,23 +93,14 @@ function normalizeItem(item, storeId) {
     quantity,
     stock,
     unitPrice: Math.max(safeNumber(item?.unitPrice), 0),
-
     regularUnitPrice: Math.max(
-      safeNumber(
-        item?.regularUnitPrice,
-        item?.unitPrice
-      ),
+      safeNumber(item?.regularUnitPrice, item?.unitPrice),
       0
     ),
+    // Se conserva únicamente para poder depurar carritos viejos.
     isPromotion,
-    promotionPrice: Math.max(
-      safeNumber(item?.promotionPrice),
-      0
-    ),
-    promotionNote: String(
-      item?.promotionNote || ""
-    ).trim(),
-
+    promotionPrice: Math.max(safeNumber(item?.promotionPrice), 0),
+    promotionNote: String(item?.promotionNote || "").trim(),
     coverUrl: String(item?.coverUrl || ""),
   };
 }
@@ -135,11 +124,21 @@ function readCart(storeId, sessionId) {
     );
     const parsed = raw ? JSON.parse(raw) : [];
 
-    return Array.isArray(parsed)
-      ? parsed
-          .map((item) => normalizeItem(item, storeId))
-          .filter((item) => item.productId)
-      : [];
+    if (!Array.isArray(parsed)) return [];
+
+    const normalized = parsed
+      .map((item) => normalizeItem(item, storeId))
+      .filter((item) => item.productId && !item.isPromotion);
+
+    // Migra silenciosamente carritos antiguos que aún tenían promociones.
+    if (normalized.length !== parsed.length) {
+      window.sessionStorage.setItem(
+        getCartStorageKey(storeId, sessionId),
+        JSON.stringify(normalized)
+      );
+    }
+
+    return normalized;
   } catch {
     return [];
   }
@@ -148,7 +147,9 @@ function readCart(storeId, sessionId) {
 function writeCart(storeId, sessionId, items) {
   if (typeof window === "undefined") return;
 
-  const normalized = items.map((item) => normalizeItem(item, storeId));
+  const normalized = items
+    .map((item) => normalizeItem(item, storeId))
+    .filter((item) => item.productId && !item.isPromotion);
   const key = getCartStorageKey(storeId, sessionId);
 
   window.sessionStorage.setItem(key, JSON.stringify(normalized));
@@ -191,10 +192,7 @@ export function useReservationCart(storeId = "master-caps") {
   });
 
   const [visitorId] = useState(() => getVisitorId());
-
-  const [items, setItems] = useState(() =>
-    readCart(cleanStoreId, sessionId)
-  );
+  const [items, setItems] = useState(() => readCart(cleanStoreId, sessionId));
 
   useEffect(() => {
     const sync = (event) => {
@@ -202,8 +200,7 @@ export function useReservationCart(storeId = "master-caps") {
 
       if (
         detail &&
-        (detail.storeId !== cleanStoreId ||
-          detail.sessionId !== sessionId)
+        (detail.storeId !== cleanStoreId || detail.sessionId !== sessionId)
       ) {
         return;
       }
@@ -221,9 +218,7 @@ export function useReservationCart(storeId = "master-caps") {
   const commit = useCallback(
     (updater) => {
       const current = readCart(cleanStoreId, sessionId);
-      const next =
-        typeof updater === "function" ? updater(current) : updater;
-
+      const next = typeof updater === "function" ? updater(current) : updater;
       writeCart(cleanStoreId, sessionId, next);
     },
     [cleanStoreId, sessionId]
@@ -236,6 +231,12 @@ export function useReservationCart(storeId = "master-caps") {
         cleanStoreId
       );
 
+      if (incoming.isPromotion) {
+        throw new Error(
+          "Los productos en promoción son de venta directa y no pueden apartarse. Consulta disponibilidad por WhatsApp."
+        );
+      }
+
       if (!incoming.productId || !incoming.variantId) {
         throw new Error("El producto o la variante no son válidos.");
       }
@@ -243,6 +244,10 @@ export function useReservationCart(storeId = "master-caps") {
       if (incoming.stock <= 0) {
         throw new Error("La talla seleccionada no tiene stock.");
       }
+
+      incoming.isPromotion = false;
+      incoming.promotionPrice = 0;
+      incoming.promotionNote = "";
 
       commit((current) => {
         const existing = current.find(
@@ -313,16 +318,22 @@ export function useReservationCart(storeId = "master-caps") {
     setItems([]);
   }, [cleanStoreId, sessionId]);
 
-  const startNewSession = useCallback(() => {
+  const startNewSession = useCallback(async () => {
     const currentItems = readCart(cleanStoreId, sessionId);
 
-    if (
-      currentItems.length > 0 &&
-      !window.confirm(
-        "¿Deseas iniciar un carrito nuevo? Se eliminarán los productos actuales."
-      )
-    ) {
-      return false;
+    if (currentItems.length > 0) {
+      const confirmed = await showPremiumConfirm({
+        title: "Iniciar un carrito nuevo",
+        message:
+          "Se eliminarán los productos que tienes actualmente en el carrito de apartados.",
+        confirmText: "Iniciar carrito nuevo",
+        cancelText: "Conservar carrito",
+        tone: "warning",
+      });
+
+      if (!confirmed) {
+        return false;
+      }
     }
 
     writeCart(cleanStoreId, sessionId, []);
@@ -342,8 +353,7 @@ export function useReservationCart(storeId = "master-caps") {
 
     const total = items.reduce(
       (sum, item) =>
-        sum +
-        Number(item.unitPrice || 0) * Number(item.quantity || 0),
+        sum + Number(item.unitPrice || 0) * Number(item.quantity || 0),
       0
     );
 

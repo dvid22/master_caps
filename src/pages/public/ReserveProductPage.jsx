@@ -1,3 +1,4 @@
+import { showPremiumAlert } from "../../utils/premiumDialog";
 import { useEffect, useMemo, useState } from "react";
 import {
   useLocation,
@@ -22,9 +23,8 @@ import {
 } from "lucide-react";
 
 import {
+  getEffectiveProductPromotion,
   getProductImages,
-  getProductPromotionStock,
-  getPromotionStockForVariant,
   isProductNew,
   normalizeProductVariants,
   subscribeProducts,
@@ -55,27 +55,34 @@ function safeText(value) {
   return String(value ?? "").trim();
 }
 
-function isPromotionProduct(product) {
-  return (
-    Boolean(product?.isPromotion) &&
-    Number(product?.promotionPrice || 0) > 0 &&
-    getProductPromotionStock(product) > 0
-  );
+function buildPromotionWhatsAppUrl({
+  product,
+  promotion,
+  selectedVariant,
+  quantity = 1,
+}) {
+  const lines = [
+    "Hola Master Caps  Quiero comprar este producto de promoción.",
+    `Producto: ${safeText(product?.name) || "Producto"}`,
+    safeText(selectedVariant?.size)
+      ? `Talla: ${safeText(selectedVariant.size)}`
+      : "",
+    Number(quantity || 1) > 1
+      ? `Cantidad: ${Math.max(Number(quantity || 1), 1)}`
+      : "",
+    `Precio: ${formatCurrency(promotion?.price || product?.salePrice || 0)}`,
+    "¿Está disponible?",
+  ].filter(Boolean);
+
+  return `https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(
+    lines.join("\n")
+  )}`;
 }
 
-function getNormalStockForVariant(
-  product,
-  variant
-) {
-  return Math.max(
-    Number(variant?.stock || 0) -
-      getPromotionStockForVariant(
-        product,
-        variant
-      ),
-    0
-  );
+function getNormalStockForVariant(variant) {
+  return Math.max(Number(variant?.stock || 0), 0);
 }
+
 
 export default function ReserveProductPage() {
   const {
@@ -88,28 +95,17 @@ export default function ReserveProductPage() {
 
   const cart = useReservationCart(storeId);
 
-  const catalogUrl = `/catalogo/${storeId}${location.search || ""}`;
   const catalogNavigationState =
     location.state?.catalogNavigation || null;
-
-  const isPromotionRoute = useMemo(
-    () =>
-      new URLSearchParams(
-        location.search
-      ).get("especial") ===
-      "promotions",
-    [location.search]
-  );
-
-  const [purchaseMode, setPurchaseMode] =
-    useState(
-      isPromotionRoute
-        ? "promotion"
-        : "normal"
-    );
+  const catalogSearch =
+    catalogNavigationState?.catalogSearch ||
+    location.search ||
+    "";
+  const catalogUrl = `/catalogo/${storeId}${catalogSearch}`;
 
   const [products, setProducts] =
     useState([]);
+  const promotionSettings = null;
 
   const [
     reservationSettings,
@@ -163,7 +159,7 @@ export default function ReserveProductPage() {
         () => {
           setLoading(false);
 
-          alert(
+          showPremiumAlert(
             "No se pudo cargar el producto en tiempo real."
           );
         },
@@ -214,53 +210,33 @@ export default function ReserveProductPage() {
     [product]
   );
 
-  const promotionActive = useMemo(
+  const promotion = useMemo(
     () =>
       product
-        ? isPromotionProduct(product)
-        : false,
-    [product]
+        ? getEffectiveProductPromotion(
+            product,
+            promotionSettings
+          )
+        : {
+            active: false,
+            percentage: 0,
+            regularPrice: 0,
+            price: 0,
+            note: "",
+            source: "none",
+          },
+    [product, promotionSettings]
   );
 
-  useEffect(() => {
-    if (!product) {
-      return;
-    }
+  const promotionActive = promotion.active;
 
-    if (
-      isPromotionRoute &&
-      isPromotionProduct(product)
-    ) {
-      setPurchaseMode("promotion");
-      return;
-    }
+  const isPromotionPurchase = promotionActive;
 
-    setPurchaseMode("normal");
-  }, [
-    product,
-    isPromotionRoute,
-  ]);
-
-  const isPromotionPurchase =
-    purchaseMode === "promotion" &&
-    promotionActive;
-
-  const effectiveUnitPrice = useMemo(
-    () =>
-      product
-        ? isPromotionPurchase
-          ? Number(
-              product.promotionPrice || 0
-            )
-          : Number(
-              product.salePrice || 0
-            )
-        : 0,
-    [
-      product,
-      isPromotionPurchase,
-    ]
-  );
+  const effectiveUnitPrice = product
+    ? promotionActive
+      ? promotion.price
+      : Number(product.salePrice || 0)
+    : 0;
 
   const variants = useMemo(
     () =>
@@ -270,36 +246,14 @@ export default function ReserveProductPage() {
     [product]
   );
 
-  const availableVariants =
-    useMemo(
-      () =>
-        variants.filter(
-          (variant) => {
-            if (
-              isPromotionPurchase
-            ) {
-              return (
-                getPromotionStockForVariant(
-                  product,
-                  variant
-                ) > 0
-              );
-            }
-
-            return (
-              getNormalStockForVariant(
-                product,
-                variant
-              ) > 0
-            );
-          }
-        ),
-      [
-        variants,
-        product,
-        isPromotionPurchase,
-      ]
-    );
+  const availableVariants = useMemo(
+    () =>
+      variants.filter(
+        (variant) =>
+          getNormalStockForVariant(variant) > 0
+      ),
+    [variants]
+  );
 
   const images = useMemo(() => {
     if (!product) {
@@ -308,13 +262,10 @@ export default function ReserveProductPage() {
 
     const normalizedImages =
       getProductImages(product).filter(
-        (image) =>
-          Boolean(image?.url)
+        (image) => Boolean(image?.url)
       );
 
-    if (
-      normalizedImages.length > 0
-    ) {
+    if (normalizedImages.length > 0) {
       return normalizedImages;
     }
 
@@ -338,52 +289,31 @@ export default function ReserveProductPage() {
   }, [productId]);
 
   useEffect(() => {
-    if (!product) {
-      return;
-    }
+    if (!product) return;
 
-    setSelectedVariantId(
-      (current) => {
-        const currentVariant =
-          variants.find(
-            (variant) =>
-              variant.id === current
-          );
+    setSelectedVariantId((current) => {
+      const currentVariant = variants.find(
+        (variant) => variant.id === current
+      );
 
-        if (currentVariant) {
-          const currentAvailable =
-            isPromotionPurchase
-              ? getPromotionStockForVariant(
-                  product,
-                  currentVariant
-                )
-              : getNormalStockForVariant(
-                  product,
-                  currentVariant
-                );
-
-          if (currentAvailable > 0) {
-            return current;
-          }
-        }
-
-        return (
-          availableVariants[0]?.id ||
-          variants[0]?.id ||
-          ""
-        );
+      if (
+        currentVariant &&
+        getNormalStockForVariant(currentVariant) > 0
+      ) {
+        return current;
       }
-    );
-  }, [
-    product,
-    variants,
-    availableVariants,
-    isPromotionPurchase,
-  ]);
+
+      return (
+        availableVariants[0]?.id ||
+        variants[0]?.id ||
+        ""
+      );
+    });
+  }, [product, variants, availableVariants]);
 
   useEffect(() => {
     const preloadUrls = images
-      .slice(0, 3)
+      .slice(0, 2)
       .map((image) => image?.url)
       .filter(Boolean);
 
@@ -398,31 +328,17 @@ export default function ReserveProductPage() {
     () =>
       variants.find(
         (variant) =>
-          variant.id ===
-          selectedVariantId
+          variant.id === selectedVariantId
       ) ||
       availableVariants[0] ||
       variants[0] ||
       null,
-    [
-      variants,
-      selectedVariantId,
-      availableVariants,
-    ]
+    [variants, selectedVariantId, availableVariants]
   );
 
-  const availableStock =
-    selectedVariant
-      ? isPromotionPurchase
-        ? getPromotionStockForVariant(
-            product,
-            selectedVariant
-          )
-        : getNormalStockForVariant(
-            product,
-            selectedVariant
-          )
-      : 0;
+  const availableStock = selectedVariant
+    ? getNormalStockForVariant(selectedVariant)
+    : 0;
 
   const isAvailable =
     availableStock > 0;
@@ -498,15 +414,7 @@ export default function ReserveProductPage() {
 
   function selectVariant(variant) {
     const variantAvailable =
-      isPromotionPurchase
-        ? getPromotionStockForVariant(
-            product,
-            variant
-          )
-        : getNormalStockForVariant(
-            product,
-            variant
-          );
+      getNormalStockForVariant(variant);
 
     if (variantAvailable <= 0) {
       return;
@@ -601,19 +509,26 @@ export default function ReserveProductPage() {
     openDrawer = true,
   } = {}) {
     if (!product) {
-      alert(
+      showPremiumAlert(
         "No se encontró el producto."
       );
       return false;
     }
 
+    if (promotionActive) {
+      showPremiumAlert(
+        "Los productos en promoción son de venta directa y no pueden apartarse. Consulta disponibilidad por WhatsApp."
+      );
+      return false;
+    }
+
     if (!selectedVariant) {
-      alert("Selecciona una talla.");
+      showPremiumAlert("Selecciona una talla.");
       return false;
     }
 
     if (!isAvailable) {
-      alert(
+      showPremiumAlert(
         "La talla seleccionada no está disponible."
       );
       return false;
@@ -636,20 +551,9 @@ export default function ReserveProductPage() {
         regularUnitPrice: Number(
           product.salePrice || 0
         ),
-        isPromotion:
-          isPromotionPurchase,
-        promotionPrice:
-          isPromotionPurchase
-            ? Number(
-                product.promotionPrice || 0
-              )
-            : 0,
-        promotionNote:
-          isPromotionPurchase
-            ? safeText(
-                product.promotionNote
-              )
-            : "",
+        isPromotion: false,
+        promotionPrice: 0,
+        promotionNote: "",
         coverUrl:
           images[0]?.url || "",
       });
@@ -668,7 +572,7 @@ export default function ReserveProductPage() {
 
       return true;
     } catch (error) {
-      alert(
+      showPremiumAlert(
         error?.message ||
           "No se pudo agregar el producto al carrito."
       );
@@ -761,7 +665,9 @@ export default function ReserveProductPage() {
 
       <main className="min-h-screen bg-white text-black">
         <div className="bg-black px-4 py-2 text-center text-[10px] font-medium uppercase tracking-[0.18em] text-white sm:text-[11px]">
-          Envíos a todo Colombia · Aparta tus productos favoritos
+          {promotionActive
+            ? `Promoción -${promotion.percentage}% · venta directa · sujeta a disponibilidad`
+            : "Envíos a todo Colombia · Aparta tus productos favoritos"}
         </div>
 
         <header className="sticky top-0 z-40 border-b border-black/[0.08] bg-white/95 backdrop-blur-xl">
@@ -859,7 +765,7 @@ export default function ReserveProductPage() {
                     )}
 
                     {isPromotionPurchase && (
-                      <span className="inline-flex items-center gap-1 bg-amber-400 px-2.5 py-1 text-[8px] font-medium uppercase tracking-[0.1em] text-black shadow-sm">
+                      <span className="inline-flex items-center gap-1 bg-red-600 px-2.5 py-1 text-[8px] font-medium uppercase tracking-[0.1em] text-white shadow-sm">
                         <BadgePercent size={9} />
                         Promo
                       </span>
@@ -934,7 +840,7 @@ export default function ReserveProductPage() {
                         )}
 
                         {isPromotionPurchase && (
-                          <span className="inline-flex items-center gap-1 bg-amber-400 px-2.5 py-1.5 text-[8px] font-medium uppercase tracking-[0.12em] text-black">
+                          <span className="inline-flex items-center gap-1 bg-red-600 px-2.5 py-1.5 text-[8px] font-medium uppercase tracking-[0.12em] text-white">
                             <BadgePercent size={9} />
                             Promo
                           </span>
@@ -974,7 +880,7 @@ export default function ReserveProductPage() {
                     )}
 
                     {isPromotionPurchase && (
-                      <span className="inline-flex items-center gap-1 rounded-full bg-amber-400 px-2.5 py-1 text-[8px] font-medium uppercase tracking-[0.1em] text-black">
+                      <span className="inline-flex items-center gap-1 rounded-full bg-red-600 px-2.5 py-1 text-[8px] font-medium uppercase tracking-[0.1em] text-white">
                         <BadgePercent size={9} />
                         Promoción
                       </span>
@@ -993,40 +899,6 @@ export default function ReserveProductPage() {
                   {product.name}
                 </h1>
 
-                {promotionActive && (
-                  <div className="mt-5 grid grid-cols-2 gap-2 rounded-[16px] bg-black/[0.025] p-1.5">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setPurchaseMode("normal");
-                        setQuantity("1");
-                      }}
-                      className={`min-h-11 rounded-[12px] px-3 text-[9px] font-medium uppercase tracking-[0.08em] transition ${
-                        !isPromotionPurchase
-                          ? "bg-black text-white"
-                          : "bg-white text-black/55"
-                      }`}
-                    >
-                      Compra normal
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setPurchaseMode("promotion");
-                        setQuantity("1");
-                      }}
-                      className={`min-h-11 rounded-[12px] px-3 text-[9px] font-medium uppercase tracking-[0.08em] transition ${
-                        isPromotionPurchase
-                          ? "bg-amber-400 text-black"
-                          : "bg-white text-black/55"
-                      }`}
-                    >
-                      Promoción · {getProductPromotionStock(product)} u.
-                    </button>
-                  </div>
-                )}
-
                 {isPromotionPurchase ? (
                   <div className="mt-5">
                     <div className="flex flex-wrap items-baseline gap-3">
@@ -1041,28 +913,12 @@ export default function ReserveProductPage() {
                           product.salePrice
                         )}
                       </p>
+
+                      <span className="rounded-full bg-red-600 px-2.5 py-1 text-[9px] font-medium text-white">
+                        -{promotion.percentage}%
+                      </span>
                     </div>
 
-                    {product.promotionNote && (
-                      <div className="mt-3 rounded-[16px] border border-amber-100 bg-amber-50/70 px-3.5 py-3">
-                        <div className="flex items-start gap-2">
-                          <BadgePercent
-                            size={13}
-                            className="mt-0.5 shrink-0 text-amber-700"
-                          />
-
-                          <div>
-                            <p className="text-[8px] font-medium uppercase tracking-[0.1em] text-amber-700">
-                              Observación de promoción
-                            </p>
-
-                            <p className="mt-1 text-[10px] leading-5 text-black/60">
-                              {product.promotionNote}
-                            </p>
-                          </div>
-                        </div>
-                      </div>
-                    )}
                   </div>
                 ) : (
                   <p className="mt-5 text-[29px] font-medium tracking-[-0.045em]">
@@ -1090,15 +946,7 @@ export default function ReserveProductPage() {
                     {variants.map(
                       (variant) => {
                         const stock =
-                          isPromotionPurchase
-                            ? getPromotionStockForVariant(
-                                product,
-                                variant
-                              )
-                            : getNormalStockForVariant(
-                                product,
-                                variant
-                              );
+                          getNormalStockForVariant(variant);
 
                         const active =
                           selectedVariant?.id ===
@@ -1132,9 +980,7 @@ export default function ReserveProductPage() {
                               <span className={`mt-0.5 block text-[7px] ${
                                 active
                                   ? "text-white/65"
-                                  : isPromotionPurchase
-                                    ? "text-amber-700"
-                                    : "text-black/38"
+                                  : "text-black/38"
                               }`}>
                                 {stock} u.
                               </span>
@@ -1168,13 +1014,10 @@ export default function ReserveProductPage() {
 
                     <p className={`text-[10px] ${
                       isPromotionPurchase
-                        ? "text-amber-700"
+                        ? "text-red-600"
                         : "text-black/45"
                     }`}>
-                      {isPromotionPurchase
-                        ? "Stock promo"
-                        : "Stock normal"}
-                      : {availableStock}
+                      Stock disponible: {availableStock}
                     </p>
                   </div>
 
@@ -1238,7 +1081,7 @@ export default function ReserveProductPage() {
                     </p>
 
                     {isPromotionPurchase && (
-                      <p className="mt-1 text-[8px] uppercase tracking-[0.08em] text-amber-700">
+                      <p className="mt-1 text-[8px] uppercase tracking-[0.08em] text-red-600">
                         Precio promocional aplicado
                       </p>
                     )}
@@ -1257,29 +1100,56 @@ export default function ReserveProductPage() {
                 )}
 
                 <div className="mt-5 space-y-2">
-                  <button
-                    type="button"
-                    onClick={() =>
-                      addSelectedToCart({
-                        openDrawer: true,
-                      })
-                    }
-                    disabled={!isAvailable}
-                    className="inline-flex h-14 w-full items-center justify-center gap-3 border border-black bg-white px-5 text-[10px] font-medium uppercase tracking-[0.18em] text-black transition hover:bg-black hover:text-white disabled:cursor-not-allowed disabled:opacity-35"
-                  >
-                    <Plus size={16} />
-                    Agregar al carrito
-                  </button>
+                  {promotionActive ? (
+                    <>
+                      <a
+                        href={buildPromotionWhatsAppUrl({
+                          product,
+                          promotion,
+                          selectedVariant,
+                          quantity: cleanQuantity,
+                        })}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className={`inline-flex h-14 w-full items-center justify-center gap-3 bg-red-600 px-5 text-[10px] font-medium uppercase tracking-[0.18em] text-white transition hover:bg-red-700 ${
+                          !isAvailable ? "pointer-events-none opacity-35" : ""
+                        }`}
+                      >
+                        <BadgePercent size={16} />
+                        Comprar por WhatsApp
+                      </a>
 
-                  <button
-                    type="button"
-                    onClick={reserveNow}
-                    disabled={!isAvailable}
-                    className="inline-flex h-14 w-full items-center justify-center gap-3 bg-black px-5 text-[10px] font-medium uppercase tracking-[0.18em] text-white transition hover:bg-red-600 disabled:cursor-not-allowed disabled:bg-black/20"
-                  >
-                    <ShoppingBag size={16} />
-                    Apartar ahora
-                  </button>
+                      <p className="px-2 text-center text-[9px] leading-4 text-black/45">
+                        Consulta disponibilidad y compra directamente por WhatsApp.
+                      </p>
+                    </>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          addSelectedToCart({
+                            openDrawer: true,
+                          })
+                        }
+                        disabled={!isAvailable}
+                        className="inline-flex h-14 w-full items-center justify-center gap-3 border border-black bg-white px-5 text-[10px] font-medium uppercase tracking-[0.18em] text-black transition hover:bg-black hover:text-white disabled:cursor-not-allowed disabled:opacity-35"
+                      >
+                        <Plus size={16} />
+                        Agregar al carrito
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={reserveNow}
+                        disabled={!isAvailable}
+                        className="inline-flex h-14 w-full items-center justify-center gap-3 bg-black px-5 text-[10px] font-medium uppercase tracking-[0.18em] text-white transition hover:bg-red-600 disabled:cursor-not-allowed disabled:bg-black/20"
+                      >
+                        <ShoppingBag size={16} />
+                        Apartar ahora
+                      </button>
+                    </>
+                  )}
                 </div>
 
                 <div className="mt-7 space-y-4 border-t border-black/[0.1] pt-6">
@@ -1289,13 +1159,19 @@ export default function ReserveProductPage() {
                     description="Consulta tiempos y condiciones con nuestro equipo."
                   />
 
-                  <BenefitRow
-                    icon={
-                      CalendarClock
-                    }
-                    title={`Apartado por ${reservationSettings.defaultReservationDays} día(s)`}
-                    description="Tus productos se conservarán durante el plazo configurado."
-                  />
+                  {promotionActive ? (
+                    <BenefitRow
+                      icon={BadgePercent}
+                      title="Promoción de venta directa"
+                      description="Las promociones no se apartan. Confirma disponibilidad y compra con nuestro equipo por WhatsApp o en tienda."
+                    />
+                  ) : (
+                    <BenefitRow
+                      icon={CalendarClock}
+                      title={`Apartado por ${reservationSettings.defaultReservationDays} día(s)`}
+                      description="Tus productos se conservarán durante el plazo configurado."
+                    />
+                  )}
 
                   <BenefitRow
                     icon={ShieldCheck}
@@ -1309,29 +1185,47 @@ export default function ReserveProductPage() {
         </section>
 
         <div className="fixed inset-x-0 bottom-0 z-30 border-t border-black/[0.1] bg-white p-3 lg:hidden">
-          <div className="grid grid-cols-2 gap-2">
-            <button
-              type="button"
-              onClick={() =>
-                addSelectedToCart({
-                  openDrawer: true,
-                })
-              }
-              disabled={!isAvailable}
-              className="h-12 border border-black bg-white text-[9px] font-medium uppercase tracking-[0.12em] disabled:opacity-35"
+          {promotionActive ? (
+            <a
+              href={buildPromotionWhatsAppUrl({
+                product,
+                promotion,
+                selectedVariant,
+                quantity: cleanQuantity,
+              })}
+              target="_blank"
+              rel="noopener noreferrer"
+              className={`flex h-12 w-full items-center justify-center bg-red-600 px-4 text-[9px] font-medium uppercase tracking-[0.12em] text-white ${
+                !isAvailable ? "pointer-events-none opacity-35" : ""
+              }`}
             >
-              Agregar
-            </button>
+              Comprar por WhatsApp
+            </a>
+          ) : (
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() =>
+                  addSelectedToCart({
+                    openDrawer: true,
+                  })
+                }
+                disabled={!isAvailable}
+                className="h-12 border border-black bg-white text-[9px] font-medium uppercase tracking-[0.12em] disabled:opacity-35"
+              >
+                Agregar
+              </button>
 
-            <button
-              type="button"
-              onClick={reserveNow}
-              disabled={!isAvailable}
-              className="h-12 bg-black text-[9px] font-medium uppercase tracking-[0.12em] text-white disabled:bg-black/20"
-            >
-              Apartar ahora
-            </button>
-          </div>
+              <button
+                type="button"
+                onClick={reserveNow}
+                disabled={!isAvailable}
+                className="h-12 bg-black text-[9px] font-medium uppercase tracking-[0.12em] text-white disabled:bg-black/20"
+              >
+                Apartar ahora
+              </button>
+            </div>
+          )}
         </div>
 
         <ReservationCartDrawer
@@ -1344,8 +1238,16 @@ export default function ReserveProductPage() {
         />
 
         <FixedWhatsAppButton
-          productName={
-            product.name
+          productName={product.name}
+          whatsappUrl={
+            promotionActive
+              ? buildPromotionWhatsAppUrl({
+                  product,
+                  promotion,
+                  selectedVariant,
+                  quantity: cleanQuantity,
+                })
+              : ""
           }
         />
       </main>
@@ -1398,14 +1300,17 @@ function CenteredState({
 
 function FixedWhatsAppButton({
   productName,
+  whatsappUrl = "",
 }) {
-  const whatsappUrl = `https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(
-    `Hola Master Caps, quiero información sobre ${productName}.`
-  )}`;
+  const finalWhatsappUrl =
+    whatsappUrl ||
+    `https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(
+      `Hola Master Caps, quiero información sobre ${productName}.`
+    )}`;
 
   return (
     <a
-      href={whatsappUrl}
+      href={finalWhatsappUrl}
       target="_blank"
       rel="noopener noreferrer"
       className="fixed bottom-[calc(82px+env(safe-area-inset-bottom))] right-4 z-50 flex h-14 w-14 items-center justify-center rounded-full bg-red-600 text-white shadow-[0_18px_45px_rgba(220,38,38,0.34)] ring-4 ring-white transition hover:-translate-y-1 hover:bg-red-700 lg:bottom-6 lg:right-6"
