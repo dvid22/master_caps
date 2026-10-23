@@ -48,6 +48,7 @@ import {
 } from "../../services/categories.service";
 import { formatCurrency } from "../../utils/money";
 import { getCurrentUserActor } from "../../services/auth.service";
+import { useAuth } from "../../context/AuthContext";
 import {
   getCustomerByDocument,
   normalizeCustomerDocument,
@@ -66,6 +67,16 @@ const emptyPaymentForm = {
   amount: "",
   paymentMethod: "efectivo",
   notes: "",
+};
+
+const emptyQuickReservationProduct = {
+  productName: "",
+  productCode: "",
+  size: "",
+  quantity: "1",
+  unitPrice: "",
+  costPrice: "",
+  note: "",
 };
 
 function parseMoneyInput(value) {
@@ -340,6 +351,9 @@ function buildGroups(groups, reservations) {
 }
 
 export default function ReservationsPage() {
+  const { role } = useAuth();
+  const isAdmin = role === "admin";
+
   const [reservations, setReservations] = useState([]);
   const [reservationGroups, setReservationGroups] = useState([]);
   const [products, setProducts] = useState([]);
@@ -798,6 +812,7 @@ export default function ReservationsPage() {
       {manualOpen && (
         <ManualReservationModal
           products={products}
+          isAdmin={isAdmin}
           categories={categories}
           promotionSettings={promotionSettings}
           defaultDays={settings.defaultReservationDays}
@@ -1197,6 +1212,7 @@ function getManualStockStatus(stock) {
 
 function ManualReservationModal({
   products,
+  isAdmin = false,
   categories,
   promotionSettings,
   defaultDays,
@@ -1313,6 +1329,40 @@ function ManualReservationModal({
   const [items, setItems] = useState(() =>
     (initialGroup?.lines || [])
       .map((line) => {
+        if (Boolean(line.isManual)) {
+          const manualLineId =
+            String(line.manualLineId || line.id || "").trim();
+
+          return {
+            key: `manual__${manualLineId}`,
+            isManual: true,
+            manualLineId,
+            productId: "",
+            productName:
+              line.productName || "Producto rápido",
+            productCode:
+              line.productCode || "",
+            product: null,
+            variantId: "",
+            size:
+              line.productSize ||
+              line.size ||
+              "Talla única",
+            variant: null,
+            quantity: Number(line.quantity || 1),
+            stock: 999999,
+            unitPrice: Number(line.unitPrice || 0),
+            costPrice: Number(line.costPrice || 0),
+            isPromotion: false,
+            promotionPrice: 0,
+            promotionNote: "",
+            manualNote:
+              line.manualNote ||
+              line.note ||
+              "",
+          };
+        }
+
         const product = products.find(
           (item) => item.id === line.productId
         );
@@ -1335,6 +1385,7 @@ function ManualReservationModal({
           key: `${product.id}__${variant.id}__${
             isPromotion ? "promo" : "normal"
           }`,
+          isManual: false,
           productId: product.id,
           productName:
             line.productName || product.name,
@@ -1361,6 +1412,11 @@ function ManualReservationModal({
               product.salePrice ||
               0
           ),
+          costPrice: Number(
+            line.costPrice ||
+              product.costPrice ||
+              0
+          ),
           isPromotion,
           promotionPrice: Number(
             line.promotionPrice || 0
@@ -1371,11 +1427,13 @@ function ManualReservationModal({
       })
       .filter(Boolean)
   );
+
   const [search, setSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [sizeFilter, setSizeFilter] = useState("all");
   const [stockFilter, setStockFilter] = useState("available");
   const [variantProduct, setVariantProduct] = useState(null);
+  const [quickProductOpen, setQuickProductOpen] = useState(false);
 
   const [scannerValue, setScannerValue] = useState("");
   const [scannerStatus, setScannerStatus] = useState(null);
@@ -1561,7 +1619,10 @@ function ManualReservationModal({
         variants.some((variant) => variant.size === sizeFilter);
 
       const matchesStock =
-        stockFilter === "all" || stockStatus.filter === stockFilter;
+        stockFilter === "all" ||
+        (stockFilter === "available" && stock > 0) ||
+        (stockFilter === "low" && stock > 0 && stock <= 3) ||
+        (stockFilter === "empty" && stock <= 0);
 
       return matchesSearch && matchesCategory && matchesSize && matchesStock;
     });
@@ -1905,10 +1966,100 @@ function ManualReservationModal({
     setVariantProduct(null);
   }
 
+  function addQuickReservationProduct(quickForm) {
+    const productName = String(
+      quickForm.productName || ""
+    ).trim();
+    const quantity = Math.max(
+      Math.trunc(Number(quickForm.quantity || 0)),
+      0
+    );
+    const unitPrice = parseMoneyInput(
+      quickForm.unitPrice
+    );
+    const costPrice = isAdmin
+      ? parseMoneyInput(quickForm.costPrice)
+      : 0;
+    const size =
+      String(quickForm.size || "").trim() ||
+      "Talla única";
+
+    if (!productName) {
+      showPremiumAlert(
+        "Escribe el nombre del producto."
+      );
+      return false;
+    }
+
+    if (quantity <= 0) {
+      showPremiumAlert(
+        "La cantidad debe ser mayor a cero."
+      );
+      return false;
+    }
+
+    if (unitPrice <= 0) {
+      showPremiumAlert(
+        "El precio de venta debe ser mayor a cero."
+      );
+      return false;
+    }
+
+    const manualLineId = `manual-${Date.now()}-${Math.random()
+      .toString(36)
+      .slice(2, 7)}`;
+
+    setItems((current) => [
+      ...current,
+      {
+        key: `manual__${manualLineId}`,
+        isManual: true,
+        manualLineId,
+        productId: "",
+        productName,
+        productCode:
+          String(
+            quickForm.productCode || ""
+          ).trim(),
+        product: null,
+        variantId: "",
+        size,
+        variant: null,
+        quantity,
+        stock: 999999,
+        unitPrice,
+        costPrice,
+        isPromotion: false,
+        promotionPrice: 0,
+        promotionNote: "",
+        manualNote:
+          String(quickForm.note || "").trim(),
+      },
+    ]);
+
+    setScannerStatus({
+      type: "success",
+      message: `${productName} agregado como producto rápido al apartado`,
+    });
+
+    setQuickProductOpen(false);
+    return true;
+  }
+
   function updateItemQuantity(key, nextQuantity) {
     setItems((current) =>
       current.map((item) => {
         if (item.key !== key) return item;
+
+        if (item.isManual) {
+          return {
+            ...item,
+            quantity: Math.max(
+              Math.trunc(Number(nextQuantity || 1)),
+              1
+            ),
+          };
+        }
 
         const safeQuantity = Math.min(
           Math.max(Number(nextQuantity || 1), 1),
@@ -1969,16 +2120,31 @@ function ManualReservationModal({
     }
 
     onSubmit({
-      items: items.map((item) => ({
-        productId: item.productId,
-        variantId: item.variantId,
-        size: item.size,
-        quantity: item.quantity,
-        isPromotion: Boolean(item.isPromotion),
-        pricingMode: item.isPromotion
-          ? "promotion"
-          : "normal",
-      })),
+      items: items.map((item) =>
+        item.isManual
+          ? {
+              isManual: true,
+              manualLineId: item.manualLineId,
+              productName: item.productName,
+              productCode: item.productCode || "",
+              size: item.size || "Talla única",
+              quantity: item.quantity,
+              unitPrice: item.unitPrice,
+              costPrice: item.costPrice || 0,
+              note: item.manualNote || "",
+              pricingMode: "manual",
+            }
+          : {
+              productId: item.productId,
+              variantId: item.variantId,
+              size: item.size,
+              quantity: item.quantity,
+              isPromotion: Boolean(item.isPromotion),
+              pricingMode: item.isPromotion
+                ? "promotion"
+                : "normal",
+            }
+      ),
       customerId: form.customerId,
       customerName: form.customerName,
       customerDocument: normalizeCustomerDocument(form.customerDocument),
@@ -2023,7 +2189,7 @@ function ManualReservationModal({
         >
           <section className="min-h-0 min-w-0 overflow-y-auto overscroll-contain rounded-[18px] border border-white bg-white/95 p-2.5 shadow-[0_20px_65px_rgba(0,0,0,0.055)] ring-1 ring-black/[0.045] sm:rounded-[22px] sm:p-3 lg:rounded-[24px] xl:p-4">
             <section className="mb-2.5 rounded-[16px] border border-red-100 bg-gradient-to-br from-red-50/80 to-white p-2.5 shadow-[0_8px_24px_rgba(220,38,38,0.045)] sm:rounded-[18px] sm:p-3">
-              <div className="grid gap-2 xl:grid-cols-[minmax(160px,0.72fr)_minmax(0,1.8fr)_auto] xl:items-center">
+              <div className="grid gap-2 xl:grid-cols-[minmax(160px,0.72fr)_minmax(0,1.8fr)_auto_auto] xl:items-center">
                 <div className="flex min-w-0 items-center gap-2.5">
                   <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-red-600 text-white shadow-md shadow-red-600/15">
                     <ScanLine size={17} />
@@ -2063,6 +2229,15 @@ function ManualReservationModal({
                 >
                   <Plus size={14} />
                   Agregar
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setQuickProductOpen(true)}
+                  className="inline-flex h-[clamp(36px,2.45vw,42px)] items-center justify-center gap-1.5 rounded-[clamp(10px,0.75vw,13px)] border border-black/[0.08] bg-white px-3 text-[clamp(8px,0.6vw,10px)] font-medium text-black/65 transition hover:border-red-200 hover:bg-red-50 hover:text-red-600"
+                >
+                  <Plus size={14} />
+                  Producto rápido
                 </button>
               </div>
 
@@ -2498,6 +2673,14 @@ function ManualReservationModal({
         </form>
       </section>
 
+      {quickProductOpen && (
+        <QuickReservationProductModal
+          isAdmin={isAdmin}
+          onClose={() => setQuickProductOpen(false)}
+          onAdd={addQuickReservationProduct}
+        />
+      )}
+
       {variantProduct && (
         <ManualVariantSelectorModal
           product={variantProduct}
@@ -2638,7 +2821,9 @@ function ManualCartItem({
   onUpdateQuantity,
   onRemove,
 }) {
-  const coverImage = getProductCoverImage(item.product);
+  const coverImage = item.isManual
+    ? { url: "" }
+    : getProductCoverImage(item.product);
   const subtotal =
     Number(item.unitPrice || 0) * Number(item.quantity || 0);
 
@@ -2665,9 +2850,18 @@ function ManualCartItem({
               </h3>
 
               <p className="mt-0.5 truncate text-[7px] text-black/45">
-                {item.productCode || "Sin código"} · Talla {item.size}
-                {item.isPromotion ? " · PROMO" : ""}
+                {item.isManual
+                  ? `Apartado rápido · Talla ${item.size}`
+                  : `${item.productCode || "Sin código"} · Talla ${item.size}${
+                      item.isPromotion ? " · PROMO" : ""
+                    }`}
               </p>
+
+              {item.isManual && (
+                <span className="mt-1 inline-flex rounded-full bg-black/[0.045] px-1.5 py-0.5 text-[6.5px] font-medium text-black/55">
+                  SIN INVENTARIO
+                </span>
+              )}
             </div>
 
             <button
@@ -2707,7 +2901,10 @@ function ManualCartItem({
                 onClick={() =>
                   onUpdateQuantity(item.key, item.quantity + 1)
                 }
-                disabled={item.quantity >= Number(item.stock || 0)}
+                disabled={
+                  !item.isManual &&
+                  item.quantity >= Number(item.stock || 0)
+                }
                 className="flex h-7 w-7 items-center justify-center rounded-lg border border-black/[0.08] disabled:opacity-35"
               >
                 <Plus size={12} />
@@ -2721,6 +2918,200 @@ function ManualCartItem({
         </div>
       </div>
     </article>
+  );
+}
+
+function QuickReservationProductModal({
+  isAdmin = false,
+  onClose,
+  onAdd,
+}) {
+  const [form, setForm] =
+    useState(emptyQuickReservationProduct);
+
+  function update(field, value) {
+    setForm((current) => ({
+      ...current,
+      [field]:
+        field === "unitPrice" ||
+        field === "costPrice"
+          ? formatMoneyInput(value)
+          : value,
+    }));
+  }
+
+  function submit(event) {
+    event.preventDefault();
+
+    const added = onAdd(form);
+
+    if (added) {
+      setForm(emptyQuickReservationProduct);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-[80] flex items-end justify-center bg-black/35 p-0 backdrop-blur-sm sm:items-center sm:p-4">
+      <section className="max-h-[92svh] w-full overflow-hidden rounded-t-[24px] bg-white shadow-2xl sm:max-w-[520px] sm:rounded-[24px]">
+        <div className="flex items-center justify-between border-b border-black/[0.06] px-4 py-3.5 sm:px-5">
+          <div>
+            <p className="text-[9px] font-medium uppercase tracking-[0.1em] text-red-600">
+              Apartado rápido
+            </p>
+            <h2 className="mt-1 text-[17px] font-medium tracking-[-0.03em]">
+              Producto sin inventario
+            </h2>
+            <p className="mt-1 text-[9px] text-black/42">
+              Quedará dentro del apartado, pero no modifica inventario ni catálogo.
+            </p>
+          </div>
+
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-black/[0.07] bg-white text-black/50 transition hover:bg-black/[0.025]"
+          >
+            <X size={17} />
+          </button>
+        </div>
+
+        <form
+          onSubmit={submit}
+          className="max-h-[calc(92svh-78px)] overflow-y-auto p-4 sm:p-5"
+        >
+          <div className="grid gap-3">
+            <label>
+              <span className="text-[10px] font-medium text-black/55">
+                Nombre del producto *
+              </span>
+              <input
+                value={form.productName}
+                onChange={(event) =>
+                  update("productName", event.target.value)
+                }
+                className="mt-1 h-10 w-full rounded-xl border border-black/[0.08] px-3 text-[11px] outline-none focus:border-red-600 focus:ring-4 focus:ring-red-600/10"
+                placeholder="Ej. Buzo oversize nuevo"
+                autoFocus
+              />
+            </label>
+
+            <div className="grid grid-cols-2 gap-2">
+              <label>
+                <span className="text-[10px] font-medium text-black/55">
+                  Código opcional
+                </span>
+                <input
+                  value={form.productCode}
+                  onChange={(event) =>
+                    update("productCode", event.target.value)
+                  }
+                  className="mt-1 h-10 w-full rounded-xl border border-black/[0.08] px-3 text-[11px] outline-none focus:border-red-600"
+                  placeholder="Sin código"
+                />
+              </label>
+
+              <label>
+                <span className="text-[10px] font-medium text-black/55">
+                  Talla
+                </span>
+                <input
+                  value={form.size}
+                  onChange={(event) =>
+                    update("size", event.target.value)
+                  }
+                  className="mt-1 h-10 w-full rounded-xl border border-black/[0.08] px-3 text-[11px] outline-none focus:border-red-600"
+                  placeholder="M, 32, única..."
+                />
+              </label>
+            </div>
+
+            <div
+              className={`grid gap-2 ${
+                isAdmin ? "grid-cols-3" : "grid-cols-2"
+              }`}
+            >
+              <label>
+                <span className="text-[10px] font-medium text-black/55">
+                  Cantidad *
+                </span>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  value={form.quantity}
+                  onChange={(event) =>
+                    update(
+                      "quantity",
+                      event.target.value.replace(/\D/g, "")
+                    )
+                  }
+                  className="mt-1 h-10 w-full rounded-xl border border-black/[0.08] px-3 text-[11px] outline-none focus:border-red-600"
+                />
+              </label>
+
+              <label>
+                <span className="text-[10px] font-medium text-black/55">
+                  Precio venta *
+                </span>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  value={form.unitPrice}
+                  onChange={(event) =>
+                    update("unitPrice", event.target.value)
+                  }
+                  className="mt-1 h-10 w-full rounded-xl border border-black/[0.08] px-3 text-[11px] outline-none focus:border-red-600"
+                  placeholder="$ 0"
+                />
+              </label>
+
+              {isAdmin && (
+                <label>
+                  <span className="text-[10px] font-medium text-black/55">
+                    Costo
+                  </span>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    value={form.costPrice}
+                    onChange={(event) =>
+                      update("costPrice", event.target.value)
+                    }
+                    className="mt-1 h-10 w-full rounded-xl border border-black/[0.08] px-3 text-[11px] outline-none focus:border-red-600"
+                    placeholder="$ 0"
+                  />
+                </label>
+              )}
+            </div>
+
+            <label>
+              <span className="text-[10px] font-medium text-black/55">
+                Nota opcional
+              </span>
+              <input
+                value={form.note}
+                onChange={(event) =>
+                  update("note", event.target.value)
+                }
+                className="mt-1 h-10 w-full rounded-xl border border-black/[0.08] px-3 text-[11px] outline-none focus:border-red-600"
+                placeholder="Ej. llegó hoy y aún no está cargado"
+              />
+            </label>
+          </div>
+
+          <div className="mt-4 rounded-xl bg-[#fafafa] px-3 py-2.5 text-[9px] leading-4 text-black/45 ring-1 ring-black/[0.05]">
+            El producto quedará registrado en el apartado y en la venta final. No crea automáticamente el producto ni reserva existencias.
+          </div>
+
+          <button
+            type="submit"
+            className="mt-4 inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-red-600 text-[11px] font-medium text-white shadow-lg shadow-red-600/15 transition hover:bg-red-700"
+          >
+            <Plus size={15} />
+            Agregar al apartado
+          </button>
+        </form>
+      </section>
+    </div>
   );
 }
 

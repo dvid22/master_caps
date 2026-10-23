@@ -330,10 +330,59 @@ function normalizeCartItems(items = []) {
   }
 
   return items.map((item, index) => {
-    const productId = safeString(item.productId);
-    const variantId = safeString(item.variantId);
+    const isManual =
+      Boolean(item?.isManual) ||
+      safeString(item?.pricingMode) === "manual";
+
     const size = normalizeSize(item.size || item.productSize);
     const quantity = Math.trunc(safeNumber(item.quantity, 1));
+
+    if (!Number.isInteger(quantity) || quantity <= 0) {
+      throw new Error(
+        `La cantidad de la línea ${index + 1} debe ser un entero mayor a cero.`
+      );
+    }
+
+    if (isManual) {
+      const productName = safeString(item.productName);
+
+      if (!productName) {
+        throw new Error(
+          `Escribe el nombre del producto rápido de la línea ${index + 1}.`
+        );
+      }
+
+      const unitPrice = Math.max(safeNumber(item.unitPrice), 0);
+
+      if (unitPrice <= 0) {
+        throw new Error(
+          `El precio de venta del producto rápido de la línea ${index + 1} debe ser mayor a cero.`
+        );
+      }
+
+      return {
+        isManual: true,
+        manualLineId:
+          safeString(item.manualLineId) ||
+          `manual-${Date.now()}-${index}-${Math.random()
+            .toString(36)
+            .slice(2, 7)}`,
+        productId: "",
+        variantId: "",
+        productName,
+        productCode: safeString(item.productCode),
+        size,
+        quantity,
+        unitPrice,
+        costPrice: Math.max(safeNumber(item.costPrice), 0),
+        note: safeString(item.note || item.manualNote),
+        isPromotion: false,
+        pricingMode: "manual",
+      };
+    }
+
+    const productId = safeString(item.productId);
+    const variantId = safeString(item.variantId);
 
     if (!productId) {
       throw new Error(`El producto de la línea ${index + 1} no es válido.`);
@@ -343,13 +392,8 @@ function normalizeCartItems(items = []) {
       throw new Error(`La talla de la línea ${index + 1} no es válida.`);
     }
 
-    if (!Number.isInteger(quantity) || quantity <= 0) {
-      throw new Error(
-        `La cantidad de la línea ${index + 1} debe ser un entero mayor a cero.`
-      );
-    }
-
     return {
+      isManual: false,
       productId,
       variantId,
       size,
@@ -637,8 +681,17 @@ export async function createReservationCart({
     const groupRef = doc(collection(db, "reservationGroups"));
     const groupNumber = createGroupNumber(groupRef);
 
-    const productRefs = normalizedItems.map((item) =>
-      doc(db, "products", item.productId)
+    const normalProductIds = [
+      ...new Set(
+        normalizedItems
+          .filter((item) => !item.isManual)
+          .map((item) => item.productId)
+          .filter(Boolean)
+      ),
+    ];
+
+    const productRefs = normalProductIds.map((productId) =>
+      doc(db, "products", productId)
     );
 
     const productSnapshots = [];
@@ -646,14 +699,45 @@ export async function createReservationCart({
       productSnapshots.push(await transaction.get(productRef));
     }
 
+    const productSnapshotsById = new Map(
+      productSnapshots.map((snapshot) => [snapshot.id, snapshot])
+    );
+
+    const productRefsById = new Map(
+      productRefs.map((ref) => [ref.id, ref])
+    );
+
     const productStates = new Map();
     const lines = [];
 
     for (let index = 0; index < normalizedItems.length; index += 1) {
       const requested = normalizedItems[index];
-      const productSnap = productSnapshots[index];
 
-      if (!productSnap.exists()) {
+      if (requested.isManual) {
+        const reservationRef = doc(collection(db, "reservations"));
+        const unitPrice = Math.max(safeNumber(requested.unitPrice), 0);
+        const costPrice = Math.max(safeNumber(requested.costPrice), 0);
+
+        lines.push({
+          reservationRef,
+          product: null,
+          variant: null,
+          requested,
+          unitPrice,
+          regularUnitPrice: unitPrice,
+          promotionActive: false,
+          promotionPrice: 0,
+          promotionNote: "",
+          costPrice,
+          subtotal: unitPrice * requested.quantity,
+        });
+
+        continue;
+      }
+
+      const productSnap = productSnapshotsById.get(requested.productId);
+
+      if (!productSnap?.exists()) {
         throw new Error(`El producto de la línea ${index + 1} ya no existe.`);
       }
 
@@ -672,7 +756,7 @@ export async function createReservationCart({
           normalizeVariants(product);
 
         state = {
-          productRef: productRefs[index],
+          productRef: productRefsById.get(requested.productId),
           product,
           variants,
           promotionVariants: [],
@@ -906,21 +990,50 @@ export async function createReservationCart({
     });
 
     lines.forEach((line, index) => {
+      const isManual = Boolean(line.requested.isManual);
+
       transaction.set(line.reservationRef, {
         storeId: cleanStoreId,
         reservationGroupId: groupRef.id,
         reservationGroupNumber: groupNumber,
         lineNumber: index + 1,
-        productId: line.requested.productId,
-        productName: line.product.name || "",
-        productCode: line.product.code || "",
-        productImageUrl: getProductCoverUrl(line.product),
-        categoryId: line.product.categoryId || "",
-        categoryName: line.product.categoryName || "",
-        variantId: line.variant.id,
-        productSize: line.variant.size,
-        size: line.variant.size,
-        variantBarcode: line.variant.barcode || "",
+
+        isManual,
+        manualLineId: isManual
+          ? line.requested.manualLineId
+          : "",
+
+        productId: isManual
+          ? ""
+          : line.requested.productId,
+        productName: isManual
+          ? line.requested.productName
+          : line.product.name || "",
+        productCode: isManual
+          ? line.requested.productCode || ""
+          : line.product.code || "",
+        productImageUrl: isManual
+          ? ""
+          : getProductCoverUrl(line.product),
+        categoryId: isManual
+          ? ""
+          : line.product.categoryId || "",
+        categoryName: isManual
+          ? "Apartado rápido"
+          : line.product.categoryName || "",
+        variantId: isManual
+          ? ""
+          : line.variant.id,
+        productSize: isManual
+          ? line.requested.size
+          : line.variant.size,
+        size: isManual
+          ? line.requested.size
+          : line.variant.size,
+        variantBarcode: isManual
+          ? ""
+          : line.variant.barcode || "",
+
         unitPrice: line.unitPrice,
         regularUnitPrice: line.regularUnitPrice,
         isPromotion: line.promotionActive,
@@ -930,6 +1043,10 @@ export async function createReservationCart({
         costPrice: line.costPrice,
         quantity: line.requested.quantity,
         subtotal: line.subtotal,
+        manualNote: isManual
+          ? line.requested.note || ""
+          : "",
+
         customerId: customer.customerId,
         customerName: finalCustomerName,
         customerDocument: customer.customerDocument,
@@ -1229,6 +1346,10 @@ export async function updateReservationGroup({
         );
       }
 
+      if (Boolean(line.isManual)) {
+        return;
+      }
+
       const state = states.get(
         safeString(line.productId)
       );
@@ -1348,8 +1469,21 @@ export async function updateReservationGroup({
     });
 
     const oldLinesByKey = new Map();
+    const oldManualLinesById = new Map();
 
     oldLines.forEach((line) => {
+      if (Boolean(line.isManual)) {
+        const manualKey =
+          safeString(line.manualLineId) ||
+          safeString(line.id);
+
+        if (manualKey) {
+          oldManualLinesById.set(manualKey, line);
+        }
+
+        return;
+      }
+
       const key = [
         safeString(line.productId),
         safeString(line.variantId) || "legacy-variant",
@@ -1370,6 +1504,45 @@ export async function updateReservationGroup({
       index += 1
     ) {
       const requested = normalizedItems[index];
+
+      if (requested.isManual) {
+        const previousLine =
+          oldManualLinesById.get(
+            safeString(requested.manualLineId)
+          ) || null;
+
+        const reservationRef =
+          previousLine?.ref ||
+          doc(collection(db, "reservations"));
+
+        const unitPrice = Math.max(
+          safeNumber(requested.unitPrice),
+          0
+        );
+        const costPrice = Math.max(
+          safeNumber(requested.costPrice),
+          0
+        );
+
+        resolvedLines.push({
+          reservationRef,
+          previousLine,
+          product: null,
+          variant: null,
+          requested,
+          unitPrice,
+          regularUnitPrice: unitPrice,
+          isPromotion: false,
+          promotionPrice: 0,
+          promotionNote: "",
+          costPrice,
+          subtotal:
+            unitPrice * requested.quantity,
+        });
+
+        continue;
+      }
+
       const state = states.get(requested.productId);
 
       if (!state) {
@@ -1652,6 +1825,8 @@ export async function updateReservationGroup({
     });
 
     resolvedLines.forEach((line, index) => {
+      const isManual = Boolean(line.requested.isManual);
+
       transaction.set(
         line.reservationRef,
         {
@@ -1660,22 +1835,43 @@ export async function updateReservationGroup({
           reservationGroupNumber:
             group.groupNumber || "",
           lineNumber: index + 1,
-          productId: line.requested.productId,
-          productName:
-            line.product.name || "",
-          productCode:
-            line.product.code || "",
-          productImageUrl:
-            getProductCoverUrl(line.product),
-          categoryId:
-            line.product.categoryId || "",
-          categoryName:
-            line.product.categoryName || "",
-          variantId: line.variant.id,
-          productSize: line.variant.size,
-          size: line.variant.size,
-          variantBarcode:
-            line.variant.barcode || "",
+
+          isManual,
+          manualLineId: isManual
+            ? line.requested.manualLineId
+            : "",
+
+          productId: isManual
+            ? ""
+            : line.requested.productId,
+          productName: isManual
+            ? line.requested.productName
+            : line.product.name || "",
+          productCode: isManual
+            ? line.requested.productCode || ""
+            : line.product.code || "",
+          productImageUrl: isManual
+            ? ""
+            : getProductCoverUrl(line.product),
+          categoryId: isManual
+            ? ""
+            : line.product.categoryId || "",
+          categoryName: isManual
+            ? "Apartado rápido"
+            : line.product.categoryName || "",
+          variantId: isManual
+            ? ""
+            : line.variant.id,
+          productSize: isManual
+            ? line.requested.size
+            : line.variant.size,
+          size: isManual
+            ? line.requested.size
+            : line.variant.size,
+          variantBarcode: isManual
+            ? ""
+            : line.variant.barcode || "",
+
           unitPrice: line.unitPrice,
           regularUnitPrice:
             line.regularUnitPrice,
@@ -1687,6 +1883,10 @@ export async function updateReservationGroup({
           costPrice: line.costPrice,
           quantity: line.requested.quantity,
           subtotal: line.subtotal,
+          manualNote: isManual
+            ? line.requested.note || ""
+            : "",
+
           customerId: customer.customerId,
           customerName:
             finalCustomerName,
@@ -1882,7 +2082,9 @@ export async function completeReservationGroupSale({
       return {
         lineId: `line-${index + 1}`,
         reservationId: snapshot.id,
-        inventoryTracked: true,
+        inventoryTracked: !Boolean(reservation.isManual),
+        isManual: Boolean(reservation.isManual),
+        manualLineId: safeString(reservation.manualLineId),
         productId: reservation.productId || "",
         productName: reservation.productName || "",
         productCode: reservation.productCode || "",
@@ -1938,6 +2140,7 @@ export async function completeReservationGroupSale({
               : 0
           ),
         promotionNote: safeString(reservation.promotionNote),
+        manualNote: safeString(reservation.manualNote),
         regularSubtotal:
           Math.max(
             safeNumber(
@@ -2458,6 +2661,11 @@ async function closeReservationGroup({
       if (!snapshot.exists() || snapshot.data().status !== "active") return;
 
       const reservation = snapshot.data();
+
+      if (Boolean(reservation.isManual)) {
+        return;
+      }
+
       const state = states.get(reservation.productId);
 
       if (!state) return;
