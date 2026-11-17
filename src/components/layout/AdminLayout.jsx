@@ -22,7 +22,10 @@ import {
 import { useAuth } from "../../context/AuthContext";
 import { STORE_ID } from "../../services/categories.service";
 import { logoutAdmin } from "../../services/auth.service";
-import { subscribeReservations } from "../../services/reservations.service";
+import {
+  countUnreadReservationGroups,
+  subscribeReservations,
+} from "../../services/reservations.service";
 
 const navItems = [
   {
@@ -143,11 +146,7 @@ export default function AdminLayout() {
 
   const visibleNavItems = navItems.filter((item) => item.roles.includes(role));
 
-  const unreadReservationsCount = reservations.filter((reservation) => {
-    return (
-      reservation.status === "active" && reservation.notificationRead !== true
-    );
-  }).length;
+  const unreadReservationsCount = countUnreadReservationGroups(reservations);
 
   useEffect(() => {
     const unsubscribeReservations = subscribeReservations(

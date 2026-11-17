@@ -2021,11 +2021,8 @@ export async function completeReservationGroupSale({
       throw new Error("Este apartado ya no está activo.");
     }
 
-    const expiresAtDate = group.expiresAt?.toDate?.();
-
-    if (expiresAtDate && expiresAtDate < new Date()) {
-      throw new Error("Este apartado ya venció.");
-    }
+    // Un apartado vencido sigue activo hasta que el admin decida liberarlo,
+    // así que todavía se puede vender.
 
     const cleanStoreId = safeString(group.storeId) || STORE_ID;
     const cleanCustomerDocument = normalizeCustomerDocument(
@@ -2900,4 +2897,30 @@ export async function expireOverdueReservations(storeId = STORE_ID) {
   }
 
   return overdue.length;
+}
+/*
+ * Un apartado del catálogo con varios productos crea una línea por producto,
+ * pero para el admin es una sola notificación (un cliente, un apartado).
+ * Cuenta apartados distintos sin leer, no líneas.
+ */
+export function countUnreadReservationGroups(reservations = []) {
+  const unreadGroupKeys = new Set();
+
+  reservations.forEach((reservation) => {
+    if (
+      reservation?.status !== "active" ||
+      reservation?.notificationRead === true
+    ) {
+      return;
+    }
+
+    unreadGroupKeys.add(
+      safeString(reservation.reservationGroupId) ||
+        safeString(reservation.reservationGroupNumber) ||
+        safeString(reservation.clientSessionId) ||
+        reservation.id
+    );
+  });
+
+  return unreadGroupKeys.size;
 }

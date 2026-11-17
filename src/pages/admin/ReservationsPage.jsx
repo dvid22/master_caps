@@ -25,8 +25,9 @@ import {
   addReservationGroupPayment,
   cancelReservationGroup,
   completeReservationGroupSale,
+  countUnreadReservationGroups,
   createManualReservation,
-  expireOverdueReservations,
+  expireReservationGroup,
   markReservationsAsRead,
   subscribeReservationGroups,
   subscribeReservations,
@@ -121,6 +122,37 @@ function getDaysLeft(value) {
   );
 }
 
+function isGroupOverdue(group) {
+  if (group?.status !== "active") return false;
+
+  const expiresAt = group.expiresAt?.toDate?.();
+  return Boolean(expiresAt) && expiresAt.getTime() < Date.now();
+}
+
+function getReservationOrigin(source) {
+  if (source === "manual") {
+    return {
+      label: "Manual",
+      detail: "Tienda física",
+      className: "bg-black text-white",
+    };
+  }
+
+  if (source === "catalog-cart" || source === "catalog-single") {
+    return {
+      label: "Catálogo",
+      detail: "Catálogo público",
+      className: "bg-sky-50 text-sky-700 ring-1 ring-sky-100",
+    };
+  }
+
+  return {
+    label: "Sin origen",
+    detail: "Registro antiguo",
+    className: "bg-black/[0.04] text-black/50",
+  };
+}
+
 function getStatusLabel(status) {
   return (
     {
@@ -154,7 +186,11 @@ function getDueText(group) {
   }
 
   if (daysLeft === null) return "Sin vencimiento";
-  if (daysLeft < 0) return `${Math.abs(daysLeft)} día(s) vencido`;
+  if (isGroupOverdue(group)) {
+    return daysLeft < 0
+      ? `Vencido hace ${Math.abs(daysLeft)} día(s)`
+      : "Vencido hoy";
+  }
   if (daysLeft === 0) return "Vence hoy";
   if (daysLeft === 1) return "1 día restante";
 
@@ -380,7 +416,6 @@ export default function ReservationsPage() {
 
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState(false);
-  const [checkingExpired, setCheckingExpired] = useState(false);
 
   const reservationsPerPage = 8;
 
@@ -437,28 +472,14 @@ export default function ReservationsPage() {
     [reservationGroups, reservations]
   );
 
-  useEffect(() => {
-    const hasOverdue = groups.some((group) => {
-      if (group.status !== "active") return false;
-      const expiresAt = group.expiresAt?.toDate?.();
-      return expiresAt && expiresAt < new Date();
-    });
-
-    if (!hasOverdue || checkingExpired) return;
-
-    async function autoExpire() {
-      try {
-        setCheckingExpired(true);
-        await expireOverdueReservations(STORE_ID);
-      } catch (error) {
-        console.error(error);
-      } finally {
-        setCheckingExpired(false);
-      }
-    }
-
-    autoExpire();
-  }, [groups, checkingExpired]);
+  /*
+   * Los apartados vencidos ya NO se liberan solos: quedan activos,
+   * parpadeando, hasta que el admin confirme si los libera o no.
+   */
+  const overdueGroupsCount = useMemo(
+    () => groups.filter(isGroupOverdue).length,
+    [groups]
+  );
 
   const unreadReservations = useMemo(
     () =>
@@ -467,6 +488,11 @@ export default function ReservationsPage() {
           reservation.status === "active" &&
           reservation.notificationRead !== true
       ),
+    [reservations]
+  );
+
+  const unreadGroupsCount = useMemo(
+    () => countUnreadReservationGroups(reservations),
     [reservations]
   );
 
@@ -564,18 +590,38 @@ export default function ReservationsPage() {
     }
   }
 
-  async function handleCheckExpired() {
+  function handleCheckExpired() {
+    if (overdueGroupsCount === 0) {
+      showPremiumAlert("No hay apartados vencidos.");
+      return;
+    }
+
+    setStatusFilter("all");
+    setDateFilter("overdue");
+  }
+
+  async function handleReleaseExpired(group) {
+    if (group.legacy) {
+      showPremiumAlert("Este apartado antiguo debe migrarse antes de liberarlo.");
+      return;
+    }
+
+    const confirmed = await showPremiumConfirm({
+      title: "Apartado vencido",
+      message: `${group.groupNumber} de ${group.customerName || "el cliente"} ya venció. ¿Deseas liberarlo? Los productos volverán al inventario y quedará marcado como vencido.`,
+      confirmText: "Sí, liberar",
+      cancelText: "No, conservarlo",
+      tone: "warning",
+    });
+
+    if (!confirmed) return;
+
     try {
       setProcessing(true);
-      const count = await expireOverdueReservations(STORE_ID);
-
-      showPremiumAlert(
-        count === 0
-          ? "No hay apartados vencidos."
-          : `${count} apartado(s) vencido(s) fueron liberados.`
-      );
-    } catch {
-      showPremiumAlert("No se pudieron revisar los apartados vencidos.");
+      await expireReservationGroup(group.id, getCurrentUserActor());
+      showPremiumAlert("Apartado vencido liberado. Los productos volvieron al inventario.");
+    } catch (error) {
+      showPremiumAlert(error.message || "No se pudo liberar el apartado.");
     } finally {
       setProcessing(false);
     }
@@ -620,7 +666,7 @@ export default function ReservationsPage() {
 
               {unreadReservations.length > 0 && (
                 <span className="rounded-full bg-red-600 px-3 py-1 text-[12px] font-medium text-white">
-                  {unreadReservations.length} nuevo(s)
+                  {unreadGroupsCount} nuevo(s)
                 </span>
               )}
             </div>
@@ -670,6 +716,11 @@ export default function ReservationsPage() {
             >
               <RefreshCcw size={16} />
               Vencidos
+              {overdueGroupsCount > 0 && (
+                <span className="inline-flex h-5 min-w-5 animate-pulse items-center justify-center rounded-full bg-red-600 px-1.5 text-[11px] font-semibold text-white">
+                  {overdueGroupsCount}
+                </span>
+              )}
             </button>
           </div>
         </header>
@@ -751,6 +802,7 @@ export default function ReservationsPage() {
                         setPaymentForm(emptyPaymentForm);
                       }}
                       onCancel={() => handleCancel(group)}
+                      onReleaseExpired={() => handleReleaseExpired(group)}
                       onView={() => setDetailGroup(group)}
                       onEdit={() => {
                         if (group.legacy) {
@@ -1008,6 +1060,7 @@ function ReservationGroupCard({
   onSell,
   onPayment,
   onCancel,
+  onReleaseExpired,
   onView,
   onEdit,
 }) {
@@ -1019,19 +1072,43 @@ function ReservationGroupCard({
   const paid = Number(group.amountPaid || 0);
   const balance = Math.max(Number(group.balanceDue ?? total - paid), 0);
   const isActive = group.status === "active";
-  const overdue =
-    isActive &&
-    getDaysLeft(group.expiresAt) !== null &&
-    getDaysLeft(group.expiresAt) < 0;
+  const overdue = isGroupOverdue(group);
+  const origin = getReservationOrigin(group.source);
   const lines = Array.isArray(group.lines) ? group.lines : [];
   const visibleLines = lines.slice(0, 3);
 
   return (
-    <article className="overflow-hidden rounded-[24px] bg-white shadow-[0_16px_46px_rgba(0,0,0,0.045)] ring-1 ring-black/[0.06] transition hover:-translate-y-0.5 hover:shadow-[0_24px_62px_rgba(0,0,0,0.075)]">
+    <article
+      className={`overflow-hidden rounded-[24px] bg-white transition hover:-translate-y-0.5 ${
+        overdue
+          ? "animate-overdue-blink ring-2 ring-red-500"
+          : "shadow-[0_16px_46px_rgba(0,0,0,0.045)] ring-1 ring-black/[0.06] hover:shadow-[0_24px_62px_rgba(0,0,0,0.075)]"
+      }`}
+    >
+      {overdue && (
+        <div className="flex items-center justify-between gap-2 bg-red-600 px-3.5 py-2 text-white">
+          <p className="flex items-center gap-1.5 text-[10px] font-medium">
+            <Clock size={13} />
+            Apartado vencido · ¿Liberarlo?
+          </p>
+          <button
+            type="button"
+            onClick={onReleaseExpired}
+            disabled={processing}
+            className="rounded-lg bg-white px-2.5 py-1 text-[9px] font-semibold text-red-600 disabled:opacity-50"
+          >
+            Revisar
+          </button>
+        </div>
+      )}
+
       <div className="p-3.5">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <p className="text-[10px] font-medium uppercase tracking-[0.08em] text-red-600">{group.groupNumber}</p>
+            <div className="flex flex-wrap items-center gap-1.5">
+              <p className="text-[10px] font-medium uppercase tracking-[0.08em] text-red-600">{group.groupNumber}</p>
+              <span title={origin.detail} className={`rounded-full px-2 py-0.5 text-[8px] font-semibold uppercase tracking-[0.06em] ${origin.className}`}>{origin.label}</span>
+            </div>
             <h3 className="mt-1 truncate text-[16px] font-medium tracking-[-0.025em]">{group.customerName || "Sin cliente"}</h3>
             <p className="mt-1 text-[10px] text-black/42">{group.totalItems || 0} prenda(s) · {group.totalLines || lines.length || 0} línea(s)</p>
           </div>
@@ -1091,11 +1168,11 @@ function ReservationGroupCard({
           <span className={`rounded-full px-2.5 py-1 text-[8px] font-medium ${overdue ? "bg-red-50 text-red-600" : "bg-amber-50 text-amber-700"}`}>{getDueText(group)}</span>
         </div>
         <div className="mt-3">
-          {isActive && !overdue ? (
+          {isActive ? (
             <div className="grid grid-cols-3 gap-2">
               <button type="button" onClick={onPayment} disabled={processing || balance <= 0} className="inline-flex h-10 items-center justify-center gap-1 rounded-xl border border-emerald-200 text-[10px] font-medium text-emerald-600 disabled:opacity-30"><HandCoins size={14}/>Abono</button>
               <button type="button" onClick={onSell} disabled={processing} className="inline-flex h-10 items-center justify-center gap-1 rounded-xl bg-red-600 text-[10px] font-medium text-white"><ShoppingBag size={14}/>Vender</button>
-              <button type="button" onClick={onCancel} disabled={processing} className="inline-flex h-10 items-center justify-center gap-1 rounded-xl border border-black/[0.08] text-[10px] font-medium"><Trash2 size={14}/>Liberar</button>
+              <button type="button" onClick={overdue ? onReleaseExpired : onCancel} disabled={processing} className="inline-flex h-10 items-center justify-center gap-1 rounded-xl border border-black/[0.08] text-[10px] font-medium"><Trash2 size={14}/>Liberar</button>
             </div>
           ) : group.status === "completed" ? (
             <div className="flex h-10 items-center justify-center gap-2 rounded-xl bg-emerald-50 text-[11px] font-medium text-emerald-600"><CheckCircle2 size={15}/>Venta registrada</div>
@@ -1121,7 +1198,7 @@ function ReservationGroupDetailModal({ group, onClose, onPayment, onSell }) {
   );
   const paid = Number(group.amountPaid || 0);
   const balance = Math.max(Number(group.balanceDue ?? total - paid), 0);
-  const canOperate = group.status === "active" && (getDaysLeft(group.expiresAt) === null || getDaysLeft(group.expiresAt) >= 0);
+  const canOperate = group.status === "active";
 
   return (
     <ModalShell title={`Detalle · ${group.groupNumber}`} subtitle={`${group.customerName || "Sin cliente"} · ${group.totalItems || 0} prenda(s)`} onClose={onClose} maxWidth="max-w-[860px]">
@@ -1146,7 +1223,7 @@ function ReservationGroupDetailModal({ group, onClose, onPayment, onSell }) {
           );
         })}
       </div>
-      <div className="mt-4 grid gap-3 rounded-[18px] bg-black/[0.025] p-3 sm:grid-cols-2"><InfoRow label="Documento" value={group.customerDocument || "Sin documento"}/><InfoRow label="Teléfono" value={group.customerPhone || "Sin teléfono"}/><InfoRow label="Vencimiento" value={`${formatDate(group.expiresAt)} · ${getDueText(group)}`}/><InfoRow label="Origen" value={group.source === "manual" ? "Tienda física" : "Catálogo público"}/></div>
+      <div className="mt-4 grid gap-3 rounded-[18px] bg-black/[0.025] p-3 sm:grid-cols-2"><InfoRow label="Documento" value={group.customerDocument || "Sin documento"}/><InfoRow label="Teléfono" value={group.customerPhone || "Sin teléfono"}/><InfoRow label="Vencimiento" value={`${formatDate(group.expiresAt)} · ${getDueText(group)}`}/><InfoRow label="Origen" value={getReservationOrigin(group.source).detail}/></div>
       {canOperate && <div className="mt-4 grid grid-cols-2 gap-2"><button type="button" onClick={onPayment} disabled={balance <= 0} className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-emerald-200 text-[11px] font-medium text-emerald-600 disabled:opacity-35"><HandCoins size={15}/>Registrar abono</button><button type="button" onClick={onSell} className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-red-600 text-[11px] font-medium text-white"><ShoppingBag size={15}/>Finalizar venta</button></div>}
     </ModalShell>
   );

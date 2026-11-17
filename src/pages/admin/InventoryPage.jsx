@@ -1636,7 +1636,8 @@ export default function InventoryPage() {
       newSubcategoryName: "",
       costPrice: normalizeMoneyInputValue(product.costPrice),
       salePrice: normalizeMoneyInputValue(product.salePrice),
-      isNew: Boolean(product.isNew),
+      // Si ya pasaron los 7 días, el formulario lo muestra como normal.
+      isNew: isProductNew(product),
       isPromotion: Boolean(product.isPromotion),
       promotionPercentage: formatPercentInput(
         product.promotionPercentage ||

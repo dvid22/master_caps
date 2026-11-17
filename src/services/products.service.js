@@ -640,12 +640,69 @@ export function normalizePromotionFields(product = {}) {
   };
 }
 
-export function getProductNewUntil() {
-  return null;
+const NEW_PRODUCT_WINDOW_MS = NEW_PRODUCT_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+
+function getTimeMillis(value) {
+  if (!value) return 0;
+  if (typeof value === "number") return value;
+  if (typeof value.toMillis === "function") return value.toMillis();
+  if (typeof value.seconds === "number") return value.seconds * 1000;
+
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? 0 : date.getTime();
 }
 
+/*
+ * Momento en que el producto se marcó como nuevo. Los productos antiguos
+ * sin newMarkedAt usan su fecha de creación.
+ */
+function getProductNewMarkedAt(product) {
+  return (
+    getTimeMillis(product?.newMarkedAt) ||
+    getTimeMillis(product?.createdAt)
+  );
+}
+
+export function getProductNewUntil(product) {
+  if (!product?.isNew) return null;
+
+  const markedAt = getProductNewMarkedAt(product);
+  if (!markedAt) return null;
+
+  return new Date(markedAt + NEW_PRODUCT_WINDOW_MS);
+}
+
+/*
+ * "Nuevo" dura NEW_PRODUCT_WINDOW_DAYS días; después el producto
+ * se muestra como normal en catálogo e inventario.
+ */
 export function isProductNew(product) {
-  return Boolean(product?.isNew);
+  if (!product?.isNew) return false;
+
+  const markedAt = getProductNewMarkedAt(product);
+
+  // Recién marcado y aún sin fecha sincronizada: se considera nuevo.
+  if (!markedAt) return true;
+
+  return Date.now() < markedAt + NEW_PRODUCT_WINDOW_MS;
+}
+
+function buildNewProductFields(productData, currentProduct = null) {
+  if (!productData || !("isNew" in productData)) return {};
+
+  if (!productData.isNew) {
+    return { isNew: false, newMarkedAt: null };
+  }
+
+  // Si ya era nuevo y sigue vigente, se conserva su fecha original.
+  if (currentProduct && isProductNew(currentProduct)) {
+    return {
+      isNew: true,
+      newMarkedAt: getProductNewMarkedAt(currentProduct),
+    };
+  }
+
+  return { isNew: true, newMarkedAt: Date.now() };
 }
 
 /* -------------------------------------------------------------------------- */
@@ -1830,6 +1887,7 @@ export async function createProduct(
 
       transaction.set(productRef, {
         ...productData,
+        ...buildNewProductFields(productData),
 
         storeId,
         code: finalCode,
@@ -2139,6 +2197,10 @@ export async function updateProduct(
 
       transaction.update(productRef, {
         ...productData,
+        ...buildNewProductFields(productData, {
+          id: productId,
+          ...transactionProduct,
+        }),
 
         storeId,
         code: newCode,
