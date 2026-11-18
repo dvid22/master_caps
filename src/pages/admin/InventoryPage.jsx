@@ -14,6 +14,7 @@ import {
   ExternalLink,
   Eye,
   GripVertical,
+  ImageDown,
   ImagePlus,
   Images,
   Package,
@@ -79,6 +80,7 @@ import {
   standardizeProductImages,
 } from "../../services/productImageProcessing.service";
 import ProductImage from "../../components/products/ProductImage";
+import ImageOptimizationPanel from "../../components/products/ImageOptimizationPanel";
 
 const createVariantId = () =>
   `variant-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
@@ -613,6 +615,7 @@ export default function InventoryPage() {
   const [labelProduct, setLabelProduct] = useState(null);
   const [batchSelectedProductIds, setBatchSelectedProductIds] = useState([]);
   const [batchPrintOpen, setBatchPrintOpen] = useState(false);
+  const [imageOptimizationOpen, setImageOptimizationOpen] = useState(false);
   const [batchPromotionOpen, setBatchPromotionOpen] = useState(false);
   const [batchPromotionPercentage, setBatchPromotionPercentage] = useState("20");
   const [batchPromotionNote, setBatchPromotionNote] = useState("");
@@ -2187,6 +2190,15 @@ export default function InventoryPage() {
                   <X size={15} />
                   Quitar promoción
                 </button>
+
+                <button
+                  type="button"
+                  onClick={() => setImageOptimizationOpen(true)}
+                  className="inline-flex h-11 items-center justify-center gap-2 rounded-2xl border border-black/[0.08] bg-white px-4 text-[12px] font-medium text-black transition hover:border-red-200 hover:bg-red-50 hover:text-red-600"
+                >
+                  <ImageDown size={16} strokeWidth={1.9} />
+                  Optimizar imágenes
+                </button>
               </>
             )}
 
@@ -2413,6 +2425,15 @@ export default function InventoryPage() {
             logoUrl: "/logo.png",
             showStoreName: false,
           }}
+        />
+      )}
+
+      {isAdmin && (
+        <ImageOptimizationPanel
+          open={imageOptimizationOpen}
+          onClose={() => setImageOptimizationOpen(false)}
+          products={products}
+          storeId={STORE_ID}
         />
       )}
 

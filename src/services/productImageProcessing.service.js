@@ -1451,3 +1451,52 @@ export async function createProductPlaceholder(file, { size = 24, quality = 0.55
     URL.revokeObjectURL(objectUrl);
   }
 }
+
+/*
+ * Recomprime una imagen YA estandarizada (Fase 2 de optimización).
+ * A diferencia de standardizeProductImage, no agrega márgenes ni recorta:
+ * conserva la proporción y solo reduce el lado mayor a `maxSide`.
+ */
+export async function recompressProductImage(
+  file,
+  {
+    maxSide = PRODUCT_IMAGE_OUTPUT.width,
+    quality = PRODUCT_IMAGE_OUTPUT.quality,
+    mimeType = PRODUCT_IMAGE_OUTPUT.mimeType,
+  } = {}
+) {
+  const sourceUrl = URL.createObjectURL(file);
+
+  try {
+    const image = await loadImage(sourceUrl);
+    const sourceWidth = image.naturalWidth || image.width;
+    const sourceHeight = image.naturalHeight || image.height;
+
+    const { width, height } =
+      Math.max(sourceWidth, sourceHeight) > maxSide
+        ? calculateContainSize(sourceWidth, sourceHeight, maxSide, maxSide)
+        : { width: sourceWidth, height: sourceHeight };
+
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+
+    const context = canvas.getContext("2d", { alpha: false });
+
+    if (!context) {
+      throw new Error("No se pudo crear la imagen optimizada.");
+    }
+
+    context.fillStyle = "#ffffff";
+    context.fillRect(0, 0, width, height);
+    context.imageSmoothingEnabled = true;
+    context.imageSmoothingQuality = "high";
+    context.drawImage(image, 0, 0, width, height);
+
+    const blob = await canvasToBlob(canvas, mimeType, quality);
+
+    return createOutputFile(blob, cleanFileName(file.name), "opt");
+  } finally {
+    URL.revokeObjectURL(sourceUrl);
+  }
+}

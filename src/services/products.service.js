@@ -1490,6 +1490,14 @@ function buildImagesPayload(images) {
   };
 }
 
+/**
+ * Expuesto para la optimización masiva de imágenes (Fase 2): arma los campos
+ * de imagen (images, cover*, imageUrl...) igual que al guardar un producto.
+ */
+export function buildProductImagesPayload(images) {
+  return buildImagesPayload(images);
+}
+
 /* -------------------------------------------------------------------------- */
 /*                            NORMALIZACIÓN DE PRODUCTOS                        */
 /* -------------------------------------------------------------------------- */
