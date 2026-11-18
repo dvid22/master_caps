@@ -22,6 +22,7 @@ import {
 import { useAuth } from "../../context/AuthContext";
 import { STORE_ID } from "../../services/categories.service";
 import { logoutAdmin } from "../../services/auth.service";
+import { startCatalogIndexMaintenance } from "../../services/catalogIndex.service";
 import {
   countUnreadReservationGroups,
   subscribeReservations,
@@ -139,6 +140,9 @@ function ReservationsBadge({ count, isActive = false, compact = false }) {
 export default function AdminLayout() {
   const navigate = useNavigate();
   const { profile, role } = useAuth();
+
+  // Mantiene al día el índice liviano del catálogo público (Fase 3).
+  useEffect(() => startCatalogIndexMaintenance(STORE_ID), []);
 
   const [mobileOpen, setMobileOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);

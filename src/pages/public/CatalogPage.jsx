@@ -1,4 +1,5 @@
 import { showPremiumAlert } from "../../utils/premiumDialog";
+import { subscribeCatalogProducts } from "../../services/catalogIndex.service";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   Link,
@@ -42,7 +43,6 @@ import {
   getProductImages,
   isProductNew,
   normalizeProductVariants,
-  subscribeProducts,
 } from "../../services/products.service";
 import { formatCurrency } from "../../utils/money";
 import { useReservationCart } from "../../services/reservationCart.store";
@@ -611,7 +611,7 @@ export default function CatalogPage() {
     }
 
     const unsubscribeProducts =
-      subscribeProducts(
+      subscribeCatalogProducts(
         (productsData) => {
           setProducts(productsData);
           productsReadyRef.current = true;

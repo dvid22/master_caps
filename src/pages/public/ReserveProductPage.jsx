@@ -1,4 +1,5 @@
 import { showPremiumAlert } from "../../utils/premiumDialog";
+import { subscribeCatalogProducts } from "../../services/catalogIndex.service";
 import { useEffect, useMemo, useState } from "react";
 import {
   useLocation,
@@ -27,7 +28,6 @@ import {
   getProductImages,
   isProductNew,
   normalizeProductVariants,
-  subscribeProducts,
 } from "../../services/products.service";
 import { useReservationCart } from "../../services/reservationCart.store";
 import ReservationCartDrawer from "../../components/catalog/ReservationCartDrawer";
@@ -161,7 +161,7 @@ export default function ReserveProductPage() {
     setLoading(true);
 
     const unsubscribeProducts =
-      subscribeProducts(
+      subscribeCatalogProducts(
         (productsData) => {
           setProducts(productsData);
           setLoading(false);

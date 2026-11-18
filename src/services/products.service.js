@@ -1523,6 +1523,14 @@ function normalizeProductDocument(product) {
   };
 }
 
+/**
+ * Normaliza un producto leído de cualquier fuente (Firestore o el índice del
+ * catálogo) igual que lo hace la suscripción en tiempo real.
+ */
+export function normalizeProductData(product) {
+  return normalizeProductDocument(product);
+}
+
 function mapProductsSnapshot(snapshot) {
   return snapshot.docs
     .map((docItem) =>
@@ -1557,6 +1565,27 @@ function mapProductsSnapshot(snapshot) {
  * misma ejecución de la aplicación.
  */
 const productsRealtimeRegistry = new Map();
+
+/**
+ * Oyentes del snapshot crudo de productos (lo usa el mantenimiento del
+ * índice del catálogo en el panel admin). No abren listeners propios.
+ */
+const productsSnapshotListeners = new Set();
+
+export function onProductsSnapshot(listener) {
+  productsSnapshotListeners.add(listener);
+  return () => productsSnapshotListeners.delete(listener);
+}
+
+function notifyProductsSnapshotListeners(storeId, snapshot) {
+  productsSnapshotListeners.forEach((listener) => {
+    try {
+      listener(storeId, snapshot);
+    } catch (error) {
+      console.error("Error en un oyente de snapshot de productos:", error);
+    }
+  });
+}
 
 function normalizeStoreId(storeId = STORE_ID) {
   const cleanStoreId = String(storeId || STORE_ID).trim();
@@ -1644,6 +1673,7 @@ function ensureProductsRealtimeListener(entry) {
       entry.lastError = null;
 
       notifyProductsSubscribers(entry);
+      notifyProductsSnapshotListeners(entry.storeId, snapshot);
     },
     (error) => {
       console.error(
