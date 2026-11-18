@@ -55,7 +55,6 @@ import {
 import ThermalReceipt from "../../components/sales/ThermalReceipt";
 import {
   isProductImagePreloaded,
-  preloadProductCoverImages,
   preloadProductImage,
 } from "../../services/product-image-cache.service";
 
@@ -463,12 +462,9 @@ export default function SalesHistoryPage() {
         setProducts(nextProducts);
         setProductsReady(true);
 
-        preloadProductCoverImages(
-          nextProducts,
-          (product) =>
-            getProductCoverImage(product)?.url ||
-            ""
-        );
+        // Antes se precargaba la imagen grande de TODOS los productos
+        // (≈1.500 descargas de 1-2 MB). Ahora cada línea carga solo su
+        // miniatura cuando se muestra.
       },
       (error) => {
         console.error("No se pudieron cargar los productos:", error);
@@ -1387,9 +1383,13 @@ function SaleDetail({
                         String(item.productId || "").trim()
                       ) || null;
 
-                    const currentCoverUrl = product
-                      ? getProductCoverImage(product)?.url || ""
-                      : "";
+                    const currentCover = product
+                      ? getProductCoverImage(product)
+                      : null;
+                    const currentCoverUrl =
+                      currentCover?.thumbnailUrl ||
+                      currentCover?.url ||
+                      "";
 
                     const historicalImageUrl =
                       productsReady
@@ -1403,12 +1403,15 @@ function SaleDetail({
                       historicalImageUrl;
 
                     const fallbackImageUrl =
-                      currentCoverUrl &&
-                      historicalImageUrl &&
-                      currentCoverUrl !==
-                        historicalImageUrl
-                        ? historicalImageUrl
-                        : "";
+                      currentCover?.url &&
+                      currentCover.url !== currentCoverUrl
+                        ? currentCover.url
+                        : currentCoverUrl &&
+                            historicalImageUrl &&
+                            currentCoverUrl !==
+                              historicalImageUrl
+                          ? historicalImageUrl
+                          : "";
 
                     return (
                       <ProductLine
@@ -2819,10 +2822,13 @@ function SaleEditModal({
                             ) > 0)
                       );
 
-                      const currentCoverUrl = product
-                        ? getProductCoverImage(product)?.url ||
-                          ""
-                        : "";
+                      const currentCover = product
+                        ? getProductCoverImage(product)
+                        : null;
+                      const currentCoverUrl =
+                        currentCover?.thumbnailUrl ||
+                        currentCover?.url ||
+                        "";
 
                       const historicalImageUrl =
                         String(
@@ -2834,12 +2840,15 @@ function SaleEditModal({
                         historicalImageUrl;
 
                       const fallbackImageUrl =
-                        currentCoverUrl &&
-                        historicalImageUrl &&
-                        currentCoverUrl !==
-                          historicalImageUrl
-                          ? historicalImageUrl
-                          : "";
+                        currentCover?.url &&
+                        currentCover.url !== currentCoverUrl
+                          ? currentCover.url
+                          : currentCoverUrl &&
+                              historicalImageUrl &&
+                              currentCoverUrl !==
+                                historicalImageUrl
+                            ? historicalImageUrl
+                            : "";
 
                       return (
                         <EditableLine

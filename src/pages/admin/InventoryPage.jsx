@@ -78,6 +78,7 @@ import {
   standardizeProductImage,
   standardizeProductImages,
 } from "../../services/productImageProcessing.service";
+import ProductImage from "../../components/products/ProductImage";
 
 const createVariantId = () =>
   `variant-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
@@ -351,13 +352,27 @@ async function createLocalEditableImageUrl(source, storagePath = "") {
   };
 }
 
-function canvasToImageBlob(canvas, mimeType = "image/webp", quality = 0.94) {
+function encodeCanvasBlob(canvas, mimeType, quality) {
   return new Promise((resolve, reject) => {
     canvas.toBlob((blob) => {
       if (blob) resolve(blob);
       else reject(new Error("No se pudo generar la imagen recortada."));
     }, mimeType, quality);
   });
+}
+
+/*
+ * Safari no codifica WebP y devuelve PNG pesado sin avisar.
+ * En ese caso se usa JPEG (el lienzo ya tiene fondo blanco).
+ */
+async function canvasToImageBlob(canvas, mimeType = "image/webp", quality = 0.86) {
+  const blob = await encodeCanvasBlob(canvas, mimeType, quality);
+
+  if (blob.type !== mimeType && blob.type !== "image/jpeg") {
+    return encodeCanvasBlob(canvas, "image/jpeg", quality);
+  }
+
+  return blob;
 }
 
 function getCroppedFileName(originalName = "producto") {
@@ -368,7 +383,7 @@ function getCroppedFileName(originalName = "producto") {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "") || "producto";
-  return `${cleanName}-recortada.webp`;
+  return `${cleanName}-recortada`;
 }
 
 async function createCroppedImageFile({
@@ -520,9 +535,16 @@ async function createCroppedImageFile({
       drawHeight
     );
   } else {
+    // Nunca más grande que 1200 px por lado (igual que la imagen estándar).
+    const maxSide = 1200;
+    const downscale = Math.min(
+      maxSide / Math.max(croppedCanvas.width, croppedCanvas.height),
+      1
+    );
+
     const flatCanvas = document.createElement("canvas");
-    flatCanvas.width = croppedCanvas.width;
-    flatCanvas.height = croppedCanvas.height;
+    flatCanvas.width = Math.max(Math.round(croppedCanvas.width * downscale), 1);
+    flatCanvas.height = Math.max(Math.round(croppedCanvas.height * downscale), 1);
 
     const flatContext = flatCanvas.getContext("2d", {
       alpha: false,
@@ -540,17 +562,26 @@ async function createCroppedImageFile({
       flatCanvas.width,
       flatCanvas.height
     );
-    flatContext.drawImage(croppedCanvas, 0, 0);
+    flatContext.imageSmoothingEnabled = true;
+    flatContext.imageSmoothingQuality = "high";
+    flatContext.drawImage(
+      croppedCanvas,
+      0,
+      0,
+      flatCanvas.width,
+      flatCanvas.height
+    );
     outputCanvas = flatCanvas;
   }
 
   const blob = await canvasToImageBlob(outputCanvas);
+  const extension = blob.type === "image/webp" ? "webp" : "jpg";
 
   return new File(
     [blob],
-    getCroppedFileName(fileName),
+    `${getCroppedFileName(fileName)}.${extension}`,
     {
-      type: "image/webp",
+      type: blob.type || "image/jpeg",
       lastModified: Date.now(),
     }
   );
@@ -2796,10 +2827,11 @@ function ProductCard({
       <div className="flex gap-3">
         <div className="relative flex h-[86px] w-[86px] shrink-0 items-center justify-center overflow-hidden rounded-[20px] bg-black/[0.025]">
           {coverImage.url ? (
-            <img
-              src={coverImage.thumbnailUrl || coverImage.url}
+            <ProductImage
+              image={coverImage}
               alt={product.name}
-              className="h-full w-full bg-white object-contain p-2"
+              className="h-full w-full"
+              imgClassName="h-full w-full bg-white object-contain p-2"
             />
           ) : (
             <Camera size={25} className="text-black/30" />
@@ -3119,8 +3151,10 @@ function ProductDetailModal({
                     }`}
                   >
                     <img
-                      src={image.url}
+                      src={image.thumbnailUrl || image.url}
                       alt={`${product.name} ${index + 1}`}
+                      loading="lazy"
+                      decoding="async"
                       className="h-full w-full bg-white object-contain p-2"
                     />
                   </button>

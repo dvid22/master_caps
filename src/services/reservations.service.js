@@ -274,17 +274,29 @@ function calculateTotalStock(variants = []) {
   );
 }
 
-function getProductCoverUrl(product = {}) {
+function getProductCoverRecord(product = {}) {
   if (Array.isArray(product.images) && product.images.length > 0) {
-    const cover =
+    return (
       product.images.find((image) => image?.type === "cover") ||
       product.images.find((image) => image?.isCover === true) ||
-      product.images[0];
-
-    return safeString(cover?.url);
+      product.images[0]
+    );
   }
 
-  return safeString(product.imageUrl);
+  return null;
+}
+
+function getProductCoverUrl(product = {}) {
+  const cover = getProductCoverRecord(product);
+  return cover ? safeString(cover.url) : safeString(product.imageUrl);
+}
+
+// Miniatura liviana para listas; vacía si el producto aún no tiene.
+function getProductCoverThumbnailUrl(product = {}) {
+  const cover = getProductCoverRecord(product);
+  return cover
+    ? safeString(cover.thumbnailUrl)
+    : safeString(product.coverThumbnailUrl);
 }
 
 function validateCustomer({
@@ -1015,6 +1027,9 @@ export async function createReservationCart({
         productImageUrl: isManual
           ? ""
           : getProductCoverUrl(line.product),
+        productThumbnailUrl: isManual
+          ? ""
+          : getProductCoverThumbnailUrl(line.product),
         categoryId: isManual
           ? ""
           : line.product.categoryId || "",
@@ -1853,6 +1868,9 @@ export async function updateReservationGroup({
           productImageUrl: isManual
             ? ""
             : getProductCoverUrl(line.product),
+          productThumbnailUrl: isManual
+            ? ""
+            : getProductCoverThumbnailUrl(line.product),
           categoryId: isManual
             ? ""
             : line.product.categoryId || "",

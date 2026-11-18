@@ -58,6 +58,7 @@ import {
   getVariantBarcodeAliases,
   normalizeScannerBarcode,
 } from "../../services/barcode.service";
+import ProductImage from "../../components/products/ProductImage";
 
 const emptySaleForm = {
   paymentMethod: "efectivo",
@@ -467,9 +468,34 @@ export default function ReservationsPage() {
     };
   }, []);
 
+  /*
+   * Los apartados antiguos solo guardaron la imagen grande. Si el producto
+   * ya tiene miniatura, se usa esa para no descargar 1-2 MB por línea.
+   */
+  const reservationsWithThumbnails = useMemo(() => {
+    if (products.length === 0) return reservations;
+
+    const thumbnailsByProductId = new Map(
+      products.map((product) => [
+        product.id,
+        getProductCoverImage(product).thumbnailUrl || "",
+      ])
+    );
+
+    return reservations.map((reservation) =>
+      reservation.productThumbnailUrl
+        ? reservation
+        : {
+            ...reservation,
+            productThumbnailUrl:
+              thumbnailsByProductId.get(reservation.productId) || "",
+          }
+    );
+  }, [reservations, products]);
+
   const groups = useMemo(
-    () => buildGroups(reservationGroups, reservations),
-    [reservationGroups, reservations]
+    () => buildGroups(reservationGroups, reservationsWithThumbnails),
+    [reservationGroups, reservationsWithThumbnails]
   );
 
   /*
@@ -1123,7 +1149,7 @@ function ReservationGroupCard({
             return (
               <div key={line.id} className="flex items-center gap-2.5 rounded-[16px] border border-black/[0.055] bg-white p-2">
                 <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-[13px] bg-black/[0.025]">
-                  {line.productImageUrl ? <img src={line.productImageUrl} alt={line.productName || "Producto"} className="h-full w-full bg-white object-contain p-1" /> : <Camera size={17} className="text-black/25" />}
+                  {line.productImageUrl ? <ProductImage image={{ url: line.productImageUrl, thumbnailUrl: line.productThumbnailUrl }} alt={line.productName || "Producto"} className="h-full w-full" imgClassName="h-full w-full bg-white object-contain p-1" /> : <Camera size={17} className="text-black/25" />}
                 </div>
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-[11px] font-medium">{line.productName || "Producto"}</p>
@@ -1216,7 +1242,7 @@ function ReservationGroupDetailModal({ group, onClose, onPayment, onSell }) {
           const subtotal = Number(line.subtotal ?? quantity * unitPrice);
           return (
             <article key={line.id} className="grid gap-3 rounded-[18px] border border-black/[0.06] bg-white p-3 sm:grid-cols-[70px_minmax(0,1fr)_auto] sm:items-center">
-              <div className="flex h-[70px] w-[70px] items-center justify-center overflow-hidden rounded-[16px] bg-black/[0.025]">{line.productImageUrl ? <img src={line.productImageUrl} alt={line.productName || "Producto"} className="h-full w-full bg-white object-contain p-1.5"/> : <Camera size={22} className="text-black/25"/>}</div>
+              <div className="flex h-[70px] w-[70px] items-center justify-center overflow-hidden rounded-[16px] bg-black/[0.025]">{line.productImageUrl ? <ProductImage image={{ url: line.productImageUrl, thumbnailUrl: line.productThumbnailUrl }} alt={line.productName || "Producto"} className="h-full w-full" imgClassName="h-full w-full bg-white object-contain p-1.5" /> : <Camera size={22} className="text-black/25"/>}</div>
               <div className="min-w-0"><p className="truncate text-[13px] font-medium">{line.productName || "Producto"}</p><p className="mt-1 text-[9px] text-black/42">Código: {line.productCode || "Sin código"} · Talla {line.productSize || line.size || "Talla única"}</p><div className="mt-2 flex flex-wrap gap-2"><span className="rounded-full bg-black/[0.035] px-2.5 py-1 text-[8px] text-black/55">{quantity} unidad(es)</span><span className="rounded-full bg-red-50 px-2.5 py-1 text-[8px] text-red-600">{formatCurrency(unitPrice)} c/u</span></div></div>
               <div className="text-left sm:text-right"><p className="text-[8px] text-black/38">Subtotal</p><p className="mt-1 text-[13px] font-medium">{formatCurrency(subtotal)}</p></div>
             </article>
@@ -2811,11 +2837,7 @@ function ManualProductCard({ product, promotionSettings, onAdd }) {
       >
         <div className="relative aspect-[1.12/1] overflow-hidden bg-black/[0.025]">
           {coverImage.url ? (
-            <img
-              src={coverImage.url}
-              alt={product.name}
-              className="h-full w-full object-cover transition duration-500 group-hover:scale-105"
-            />
+            <ProductImage image={coverImage} alt={product.name} className="h-full w-full" imgClassName="h-full w-full object-cover transition duration-500 group-hover:scale-105" />
           ) : (
             <div className="flex h-full w-full items-center justify-center">
               <Camera size={28} className="text-black/25" />
@@ -2909,11 +2931,7 @@ function ManualCartItem({
       <div className="flex gap-2">
         <div className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-black/[0.025]">
           {coverImage.url ? (
-            <img
-              src={coverImage.url}
-              alt={item.productName}
-              className="h-full w-full object-cover"
-            />
+            <ProductImage image={coverImage} alt={item.productName} className="h-full w-full" imgClassName="h-full w-full object-cover" />
           ) : (
             <Camera size={19} className="text-black/25" />
           )}
@@ -3232,11 +3250,7 @@ function ManualVariantSelectorModal({
           <div className="flex items-center gap-3 rounded-[16px] bg-black/[0.025] p-2.5 sm:p-3">
             <div className="flex h-16 w-16 items-center justify-center overflow-hidden rounded-2xl bg-white">
               {coverImage.url ? (
-                <img
-                  src={coverImage.url}
-                  alt={product.name}
-                  className="h-full w-full object-cover"
-                />
+                <ProductImage image={coverImage} alt={product.name} className="h-full w-full" imgClassName="h-full w-full object-cover" />
               ) : (
                 <Camera size={22} className="text-black/25" />
               )}

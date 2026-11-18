@@ -3171,6 +3171,7 @@ function SmartCatalogImage({
   src,
   fallbackSrc = "",
   hoverSrc = "",
+  placeholder = "",
   alt,
 }) {
   const containerRef = useRef(null);
@@ -3226,7 +3227,18 @@ function SmartCatalogImage({
       onPointerEnter={() => setHovered(true)}
     >
       {!loaded && !failed && (
-        <div className="absolute inset-0 animate-pulse bg-gradient-to-br from-black/[0.025] via-black/[0.045] to-black/[0.025] motion-reduce:animate-none" />
+        placeholder ? (
+          // Vista previa difuminada guardada en el producto: aparece al
+          // instante sin ninguna descarga extra.
+          <img
+            src={placeholder}
+            alt=""
+            aria-hidden="true"
+            className="absolute inset-0 h-full w-full scale-110 object-cover blur-md"
+          />
+        ) : (
+          <div className="absolute inset-0 animate-pulse bg-gradient-to-br from-black/[0.025] via-black/[0.045] to-black/[0.025] motion-reduce:animate-none" />
+        )
       )}
 
       {nearViewport && currentSrc && !failed ? (
@@ -3304,6 +3316,7 @@ function EditorialProductCard({
           <SmartCatalogImage
             src={coverImage.thumbnailUrl || coverImage.url}
             fallbackSrc={coverImage.url}
+            placeholder={coverImage.placeholder}
             hoverSrc={
               hoverImage?.thumbnailUrl || hoverImage?.url || ""
             }

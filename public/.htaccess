@@ -1,0 +1,35 @@
+# --- Master Caps: configuración para Hostinger (Apache) ---
+
+# Tipos MIME correctos para módulos JS y WebAssembly
+<IfModule mod_mime.c>
+  AddType application/javascript .js .mjs
+  AddType application/wasm .wasm
+</IfModule>
+
+# index.html nunca en caché (así siempre apunta a los JS nuevos tras desplegar)
+<IfModule mod_headers.c>
+  <FilesMatch "^index\.html$">
+    Header set Cache-Control "no-cache, no-store, must-revalidate"
+  </FilesMatch>
+  # Los archivos de /assets llevan hash en el nombre: se pueden cachear para siempre
+  <FilesMatch "\.(js|mjs|css|wasm)$">
+    Header set Cache-Control "public, max-age=31536000, immutable"
+  </FilesMatch>
+</IfModule>
+
+# Rutas de React Router (SPA)
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteBase /
+
+  # Si falta un archivo de /assets, devolver 404 real (no index.html)
+  RewriteRule ^assets/ - [L]
+
+  # Archivos y carpetas que existen se sirven tal cual
+  RewriteCond %{REQUEST_FILENAME} -f [OR]
+  RewriteCond %{REQUEST_FILENAME} -d
+  RewriteRule ^ - [L]
+
+  # Todo lo demás va a index.html
+  RewriteRule ^ index.html [L]
+</IfModule>

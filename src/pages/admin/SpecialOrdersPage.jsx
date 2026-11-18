@@ -48,6 +48,7 @@ import {
 
 import { getCurrentUserActor } from "../../services/auth.service";
 import { formatCurrency } from "../../utils/money";
+import ProductImage from "../../components/products/ProductImage";
 
 const PAGE_SIZE = 10;
 
@@ -913,6 +914,8 @@ function OrderImage({ order, size }) {
         <img
           src={order.imageUrl}
           alt={order.productName}
+          loading="lazy"
+          decoding="async"
           className="h-full w-full bg-white object-contain p-1"
         />
       ) : (
@@ -2170,11 +2173,7 @@ function ProductOption({ product, onSelect }) {
     >
       <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-black/[0.025]">
         {cover.url ? (
-          <img
-            src={cover.url}
-            alt={product.name}
-            className="h-full w-full bg-white object-contain p-1"
-          />
+          <ProductImage image={cover} alt={product.name} className="h-full w-full" imgClassName="h-full w-full bg-white object-contain p-1" />
         ) : (
           <Camera size={14} className="text-black/25" />
         )}
@@ -2208,11 +2207,7 @@ function SelectedProduct({
     <div className="flex items-center gap-3 rounded-[16px] border border-emerald-100 bg-emerald-50/60 p-3">
       <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-white">
         {cover.url ? (
-          <img
-            src={cover.url}
-            alt={name}
-            className="h-full w-full object-contain p-1"
-          />
+          <ProductImage image={cover} alt={name} className="h-full w-full" imgClassName="h-full w-full object-contain p-1" />
         ) : (
           <PackageSearch size={17} className="text-black/25" />
         )}

@@ -1093,12 +1093,18 @@ function normalizeImageRecord(image, index = 0) {
     thumbnailPath: String(
       image.thumbnailPath || image.thumbPath || ""
     ).trim(),
+    placeholder: getSafePlaceholder(image.placeholder),
     name: String(image.name || "").trim(),
     type: image.type === "cover" ? "cover" : "gallery",
     sortOrder: Number.isFinite(Number(image.sortOrder))
       ? Number(image.sortOrder)
       : index,
   };
+}
+
+function getSafePlaceholder(value) {
+  const placeholder = String(value || "").trim();
+  return placeholder.startsWith("data:image/") ? placeholder : "";
 }
 
 /**
@@ -1157,6 +1163,7 @@ export function getProductImages(product) {
       path: legacyPath,
       thumbnailUrl: String(product?.coverThumbnailUrl || "").trim(),
       thumbnailPath: String(product?.coverThumbnailPath || "").trim(),
+      placeholder: getSafePlaceholder(product?.coverPlaceholder),
       name: "",
       type: "cover",
       sortOrder: 0,
@@ -1175,6 +1182,7 @@ export function getProductCoverImage(product) {
       path: "",
       thumbnailUrl: "",
       thumbnailPath: "",
+      placeholder: "",
       name: "",
       type: "cover",
       sortOrder: 0,
@@ -1271,6 +1279,16 @@ async function uploadSingleProductImage(
 
   let thumbnailUrl = "";
   let thumbnailPath = "";
+  let placeholder = "";
+
+  try {
+    const { createProductPlaceholder } = await import(
+      "./productImageProcessing.service"
+    );
+    placeholder = await createProductPlaceholder(imageFile);
+  } catch {
+    // Sin vista previa: la tarjeta muestra el fondo animado de siempre.
+  }
 
   try {
     // Importación dinámica: evita que el catálogo público descargue el
@@ -1311,6 +1329,7 @@ async function uploadSingleProductImage(
     path: imagePath,
     thumbnailUrl,
     thumbnailPath,
+    placeholder,
     name: imageFile.name || fileName,
     type: imageType,
     sortOrder,
@@ -1421,6 +1440,7 @@ function buildImagesPayload(images) {
       coverImagePath: "",
       coverThumbnailUrl: "",
       coverThumbnailPath: "",
+      coverPlaceholder: "",
 
       /**
        * Campos antiguos conservados para que Inventario,
@@ -1460,6 +1480,7 @@ function buildImagesPayload(images) {
     coverImagePath: coverImage?.path || "",
     coverThumbnailUrl: coverImage?.thumbnailUrl || "",
     coverThumbnailPath: coverImage?.thumbnailPath || "",
+    coverPlaceholder: coverImage?.placeholder || "",
 
     /**
      * Compatibilidad con el código anterior.

@@ -55,6 +55,7 @@ import {
   getVariantBarcodeAliases,
   normalizeScannerBarcode,
 } from "../../services/barcode.service";
+import ProductImage from "../../components/products/ProductImage";
 
 const emptyCheckout = {
   customerId: "",
@@ -1756,11 +1757,7 @@ function ProductSaleCard({ product, promotionSettings, onAdd }) {
       >
         <div className="relative aspect-[1.18/1] overflow-hidden bg-black/[0.025]">
           {coverImage.url ? (
-            <img
-              src={coverImage.url}
-              alt={product.name}
-              className="h-full w-full bg-white object-contain p-1.5 transition duration-300 group-hover:scale-[1.025]"
-            />
+            <ProductImage image={coverImage} alt={product.name} className="h-full w-full" imgClassName="h-full w-full bg-white object-contain p-1.5 transition duration-300 group-hover:scale-[1.025]" />
           ) : (
             <div className="flex h-full w-full items-center justify-center">
               <Camera size={23} className="text-black/22" />
@@ -1972,11 +1969,7 @@ function CartItem({ item, onUpdateQuantity, onRemove }) {
       <div className="flex gap-3">
         <div className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-black/[0.025]">
           {coverImage.url ? (
-            <img
-              src={coverImage.url}
-              alt={item.product.name}
-              className="h-full w-full object-cover"
-            />
+            <ProductImage image={coverImage} alt={item.product.name} className="h-full w-full" imgClassName="h-full w-full object-cover" />
           ) : (
             <Camera size={19} className="text-black/25" />
           )}
@@ -2912,7 +2905,7 @@ function VariantSelectorModal({
           <div className="flex items-center gap-3 rounded-[20px] bg-black/[0.025] p-3">
             <div className="flex h-16 w-16 items-center justify-center overflow-hidden rounded-2xl bg-white">
               {coverImage.url ? (
-                <img src={coverImage.url} alt={product.name} className="h-full w-full object-cover" />
+                <ProductImage image={coverImage} alt={product.name} className="h-full w-full" imgClassName="h-full w-full object-cover" />
               ) : (
                 <Camera size={22} className="text-black/25" />
               )}

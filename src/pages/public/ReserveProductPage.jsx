@@ -564,8 +564,9 @@ export default function ReserveProductPage() {
         isPromotion: false,
         promotionPrice: 0,
         promotionNote: "",
+        // Miniatura: el carrito y el checkout la muestran en tamaño pequeño.
         coverUrl:
-          images[0]?.url || "",
+          images[0]?.thumbnailUrl || images[0]?.url || "",
       });
 
       setAddedMessage(
@@ -804,7 +805,7 @@ export default function ReserveProductPage() {
                         aria-label={`Ver imagen ${index + 1}`}
                       >
                         <img
-                          src={image.url}
+                          src={image.thumbnailUrl || image.url}
                           alt={`${product.name} ${index + 1}`}
                           loading={index < 4 ? "eager" : "lazy"}
                           decoding="async"

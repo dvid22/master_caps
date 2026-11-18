@@ -6,7 +6,8 @@ import {
 export const PRODUCT_IMAGE_OUTPUT = {
   width: 1200,
   height: 1200,
-  quality: 0.95,
+  // 0.82 es visualmente igual a 0.95 y pesa varias veces menos.
+  quality: 0.82,
   mimeType: "image/webp",
   extension: "webp",
 };
@@ -14,7 +15,7 @@ export const PRODUCT_IMAGE_OUTPUT = {
 export const PRODUCT_THUMBNAIL_OUTPUT = {
   width: 480,
   height: 480,
-  quality: 0.8,
+  quality: 0.74,
   mimeType: "image/webp",
   extension: "webp",
 };
@@ -107,7 +108,56 @@ function loadImage(source) {
   });
 }
 
-function canvasToBlob(canvas, mimeType, quality) {
+/*
+ * Safari no sabe codificar WebP desde canvas: ignora el formato pedido y
+ * devuelve un PNG sin compresión (2 MB por foto). Si el navegador no entrega
+ * el formato pedido, se vuelve a codificar como JPEG, que todos soportan.
+ * Los lienzos de salida tienen fondo blanco, así que JPEG no pierde nada.
+ */
+const JPEG_FALLBACK_MIME_TYPE = "image/jpeg";
+
+async function canvasToBlob(canvas, mimeType, quality) {
+  const blob = await encodeCanvas(canvas, mimeType, quality);
+
+  if (
+    mimeType !== "image/png" &&
+    blob.type !== mimeType &&
+    blob.type !== JPEG_FALLBACK_MIME_TYPE
+  ) {
+    return encodeCanvas(canvas, JPEG_FALLBACK_MIME_TYPE, quality);
+  }
+
+  return blob;
+}
+
+function getExtensionForMimeType(mimeType) {
+  return (
+    {
+      "image/webp": "webp",
+      "image/jpeg": "jpg",
+      "image/png": "png",
+    }[mimeType] || "jpg"
+  );
+}
+
+/*
+ * Crea el archivo final usando el tipo REAL del blob (no el solicitado),
+ * para que Storage guarde el Content-Type y la extensión correctos.
+ */
+function createOutputFile(blob, baseName, suffix) {
+  const type = blob.type || JPEG_FALLBACK_MIME_TYPE;
+
+  return new File(
+    [blob],
+    `${baseName}-${suffix}.${getExtensionForMimeType(type)}`,
+    {
+      type,
+      lastModified: Date.now(),
+    }
+  );
+}
+
+function encodeCanvas(canvas, mimeType, quality) {
   return new Promise((resolve, reject) => {
     canvas.toBlob(
       (blob) => {
@@ -1151,14 +1201,7 @@ export async function createProductThumbnail(
     keepPaddingRatio,
   });
 
-  return new File(
-    [blob],
-    `${cleanFileName(file.name)}-thumb.${PRODUCT_THUMBNAIL_OUTPUT.extension}`,
-    {
-      type: mimeType,
-      lastModified: Date.now(),
-    }
-  );
+  return createOutputFile(blob, cleanFileName(file.name), "thumb");
 }
 
 export async function standardizeProductImage(
@@ -1211,14 +1254,7 @@ export async function standardizeProductImage(
       engine: "keep-background",
     });
 
-    return new File(
-      [originalBlob],
-      `${cleanFileName(file.name)}-master-caps.${PRODUCT_IMAGE_OUTPUT.extension}`,
-      {
-        type: mimeType,
-        lastModified: Date.now(),
-      }
-    );
+    return createOutputFile(originalBlob, cleanFileName(file.name), "master-caps");
   }
 
   onProgress?.({
@@ -1243,14 +1279,7 @@ export async function standardizeProductImage(
       engine: "green-screen",
     });
 
-    return new File(
-      [greenResult.blob],
-      `${cleanFileName(file.name)}-master-caps.${PRODUCT_IMAGE_OUTPUT.extension}`,
-      {
-        type: mimeType,
-        lastModified: Date.now(),
-      }
-    );
+    return createOutputFile(greenResult.blob, cleanFileName(file.name), "master-caps");
   }
 
   const inferenceFile = await resizeForInference(file);
@@ -1321,14 +1350,7 @@ export async function standardizeProductImage(
     engine: "imgly-background-removal",
   });
 
-  return new File(
-    [finalBlob],
-    `${cleanFileName(file.name)}-master-caps.${PRODUCT_IMAGE_OUTPUT.extension}`,
-    {
-      type: mimeType,
-      lastModified: Date.now(),
-    }
-  );
+  return createOutputFile(finalBlob, cleanFileName(file.name), "master-caps");
 }
 
 export async function standardizeProductImages(
@@ -1392,3 +1414,40 @@ export async function standardizeProductImages(
 // Se carga únicamente cuando el usuario solicita quitar el fondo de una imagen.
 // Esto evita consumo de red/CPU en el catálogo público y en equipos modestos.
 
+/*
+ * Vista previa diminuta (LQIP): imagen de 24 px en base64 (~0,6 KB) que se
+ * guarda dentro del producto. Se muestra difuminada al instante, sin hacer
+ * ninguna descarga extra, mientras llega la imagen real.
+ */
+export async function createProductPlaceholder(file, { size = 24, quality = 0.55 } = {}) {
+  const objectUrl = URL.createObjectURL(file);
+
+  try {
+    const image = await loadImage(objectUrl);
+    const ratio = Math.min(
+      size / (image.naturalWidth || size),
+      size / (image.naturalHeight || size)
+    );
+    const width = Math.max(Math.round((image.naturalWidth || size) * ratio), 1);
+    const height = Math.max(Math.round((image.naturalHeight || size) * ratio), 1);
+
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+
+    const context = canvas.getContext("2d", { alpha: false });
+    if (!context) return "";
+
+    context.fillStyle = "#ffffff";
+    context.fillRect(0, 0, width, height);
+    context.drawImage(image, 0, 0, width, height);
+
+    // JPEG: soportado en todos los navegadores y más pequeño a este tamaño.
+    const dataUrl = canvas.toDataURL("image/jpeg", quality);
+    return dataUrl.length <= 2000 ? dataUrl : "";
+  } catch {
+    return "";
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}

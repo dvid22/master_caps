@@ -25,6 +25,10 @@ import {
   normalizeCustomerDocument,
   normalizeCustomerPhone,
 } from "./customers.service";
+import {
+  compressImageFile,
+  IMMUTABLE_CACHE_CONTROL,
+} from "../utils/imageCompression";
 
 export const SPECIAL_ORDER_COLLECTION = "specialOrders";
 
@@ -228,7 +232,9 @@ function isOwnedSpecialOrderImagePath(path, storeId, orderId) {
 }
 
 async function uploadSpecialOrderImage({ file, storeId, orderId }) {
-  const validFile = validateImageFile(file);
+  // Las fotos del celular pesan 3-8 MB; se reducen a ~1200 px antes de subir.
+  const compressedFile = file ? await compressImageFile(file) : file;
+  const validFile = validateImageFile(compressedFile);
 
   if (!validFile) {
     return {
@@ -250,6 +256,7 @@ async function uploadSpecialOrderImage({ file, storeId, orderId }) {
 
   await uploadBytes(imageRef, validFile, {
     contentType: validFile.type,
+    cacheControl: IMMUTABLE_CACHE_CONTROL,
     customMetadata: {
       storeId: safeString(storeId),
       specialOrderId: safeString(orderId),
